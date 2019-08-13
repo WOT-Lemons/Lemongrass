@@ -12,6 +12,8 @@ https://www.race-monitor.com/Home/API
 
 We need a Race ID to get information for. Head to https://www.race-monitor.com/Live/Race while your race is live to get this easily from the URL. 
 
+![Image of Race ID in URL bar](https://i.imgur.com/1FQNvSb.png)
+
 3. Run the tool
 
 Requirements.txt coming maybe someday.
