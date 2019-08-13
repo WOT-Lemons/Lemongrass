@@ -29,11 +29,15 @@ def callRaceMonitor(endpoint, payload):
     api_endpoint = endpoint
     api_url = api_base_url + api_endpoint
     r = requests.post(api_url, data = payload)
-    if r.status_code != 200:
-        logging.error('{} - Possible rate limiting, waiting 60 seconds...'.format(r.status_code))
+    if r.status_code == 200:
+        return json.loads(r.text)
+    elif r.status_code == 429:
+        logging.error('{} - Too many requests, waiting 60 seconds...'.format(r.status_code))
         time.sleep(60)
         r = requests.post(api_url, data = payload)
-    return json.loads(r.text)
+    else:
+        logging.error('Error {}'.format(r.status_code))
+    return
 
 def printRankings(sorted_competitors):
     underline = "-" * 80
@@ -65,7 +69,7 @@ if os.path.exists('./.token'):
         logging.debug("Tokenfile opened and read")
 else:
     logging.error("Didn't open ./.token")
-    sys.exit("ERROR: Didn't open ./.token")
+    sys.exit()
 
 while True:
     try: 
@@ -130,12 +134,12 @@ for session_id in session_ids_for_race:
             if session_id == last_session_id:
                 competitor_details = competitor
 
-print("\nTeam: {:<6} Car Number: {:<4} Transponder: {}".format(competitor_details['FirstName'], competitor_details['Number'], competitor_details['Transponder']))
+print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(competitor_details['FirstName'], competitor_details['Number'], competitor_details['Transponder']))
 print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
 print(underline)
 
 filename = "{}-{}-{}".format(competitor_details['FirstName'], race_id, last_session_id)
-print("Saving lap times to {}.csv".format(filename))
+logging.info('Saving lap times to {}.csv'.format(filename))
 print(underline)
 lap_csv_fh = open('./%s.csv' % filename, 'w')
 csvwriter = csv.writer(lap_csv_fh)
