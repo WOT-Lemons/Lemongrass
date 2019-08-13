@@ -154,9 +154,7 @@ lap_csv_fh.close()
 #printLapTimes(competitor_lap_times)
 
 lap_time_df = pd.io.json.json_normalize(competitor_lap_times)
-
 print(lap_time_df.to_string(index=False))
-
 
 """
 def writeToSheets
