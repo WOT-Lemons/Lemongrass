@@ -18,6 +18,11 @@ We need a Race ID to get information for. Head to https://www.race-monitor.com/L
 
 Requirements.txt coming maybe someday.
 
+Usage:
+```
+./lemongrass.py RACE_ID CAR_NUMBER
+```
+
 ```
 23:46 $ ./lemongrass.py 87529 252
 --------------------------------------------------------------------------------
