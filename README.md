@@ -19,7 +19,7 @@ We need a Race ID to get information for. Head to https://www.race-monitor.com/L
 Requirements.txt coming maybe someday.
 
 ```
-23:22 $ ./lemongrass.py 87529 252
+23:46 $ ./lemongrass.py 87529 252
 --------------------------------------------------------------------------------
 Pos. #    First Name                       Laps Competitor ID   Transponder ID
 --------------------------------------------------------------------------------
@@ -125,7 +125,6 @@ Pos. #    First Name                       Laps Competitor ID   Transponder ID
 100  102  The hazzards                          49990620        3-29
                                                 49990621
 --------------------------------------------------------------------------------
-
 Team: WOT LEMONS Car Number: 252  Transponder: 1-14
 Best Position:	84
 Final Position:	61
@@ -134,7 +133,7 @@ Best Lap:	236
 Best Lap Time:	00:01:37.692
 Total Time:	14:02:36.820
 --------------------------------------------------------------------------------
-Saving lap times to WOT LEMONS-87529-6771052.csv
+2019-08-12 23:47:01,993 - INFO - Saving lap times to WOT LEMONS-87529-6771052.csv
 --------------------------------------------------------------------------------
  Lap       LapTime Position  FlagStatus     TotalTime
    1  00:02:15.654       83           1  00:13:29.650
