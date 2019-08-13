@@ -10,12 +10,16 @@ import sys
 import requests
 import json
 import pickle
-import logging
 import time
+import signal
+import csv
+import pandas as pd
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from oauth2client.client import flow_from_clientsecrets
+
+pd.set_option("display.max_rows", 1024)
 
 underline = "-" * 80
 
@@ -53,7 +57,6 @@ def printLapTimes(competitor_lap_times):
 
     return
 
-
 creds = None
 
 #parser = argparse.ArgumentParser(description='Process some integers.')
@@ -72,33 +75,19 @@ if os.path.exists('./.token'):
 else:
     eprint("ERROR: Didn't open ./.token")
     sys.exit("ERROR: Didn't open ./.token")
-"""
-questions = [
-    {
-        'type': 'list',
-        'name': 'Main Menu',
-        'message': 'What would you like to do?',
-        'choices': [
-            'Enter a Race ID',
-            'Enter a Competitor ID'
-        ]
-    },
-]
-
-answers = prompt(questions)
-print_json(answers)  # use the answers as input for your app
-"""
 
 while True:
     try: 
         race_id = sys.argv[1]
         break
     except IndexError:
+        payload = { 'apiToken': token}
+        current_races = callRaceMonitor('/v2/Account/CurrentRaces', payload)
+        print(current_races['Races'])
         race_id = input("Race ID: ")
         break
-
-try: race_id
-except NameError: x = None
+    try: race_id
+    except NameError: x = None
 
 eprint("INFO: Getting details for {}".format(race_id))
 payload = { 'apiToken': token, 'raceID': race_id}
@@ -150,26 +139,33 @@ for session_id in session_ids_for_race:
             if session_id == last_session_id:
                 competitor_details = competitor
 
+print(underline)
 print("\nTeam: {:<32} Transponder: {:<4}".format(competitor_details['FirstName'], competitor_details['Transponder']))
-print("Best Position:\t{}\nFinal Position:\t{}\nTotal Laps:\t{}\nBest Lap:\t{}\nBest Lap Time:\t{}\nTotal Time:\t{}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
-
+print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
 print(underline)
 
-printLapTimes(competitor_lap_times)
-    
-def testConnection():
-    print("\tSETUP: Testing connection and authorization...")
-    r = requests.post('https://api.race-monitor.com/v2/Account/AllRaces', data = {'apiToken': token})
-    AllRaces = json.loads(r.text)
-    if AllRaces['Successful'] != 'true':
-        print()
-    else:
-        print(r.status_code)
-        sys.exit("\tERROR: Endpoint 'v2/Account/AllRaces' returned the above error.")
-    return r.status_code
+filename = "{}-{}-{}".format(competitor_details['FirstName'], race_id, last_session_id)
+print("Saving lap times to {}.csv".format(filename))
+lap_csv_fh = open('./%s.csv' % filename, 'w')
+csvwriter = csv.writer(lap_csv_fh)
+
+count = 0
+for lap in competitor_lap_times:
+      if count == 0:
+             header = lap.keys()
+             csvwriter.writerow(header)
+             count += 1
+
+      csvwriter.writerow(lap.values())
+
+lap_csv_fh.close()
+
+#printLapTimes(competitor_lap_times)
+
+print(pd.io.json.json_normalize(competitor_lap_times))
 
 
-    """
+"""
 def writeToSheets
 
 ##TODO
