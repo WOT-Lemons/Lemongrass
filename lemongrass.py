@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function, unicode_literals
-from PyInquirer import prompt
+from PyInquirer import prompt, print_json
 from pprint import pprint
 from eprint import eprint
 import os
@@ -11,17 +11,48 @@ import requests
 import json
 import pickle
 import logging
+import time
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from oauth2client.client import flow_from_clientsecrets
+
+underline = "-" * 80
 
 def callRaceMonitor(endpoint, payload):
     api_base_url = 'https://api.race-monitor.com'
     api_endpoint = endpoint
     api_url = api_base_url + api_endpoint
     r = requests.post(api_url, data = payload)
+    if r.status_code != 200:
+        print('{} - Possible rate limiting, waiting 60 seconds...'.format(r.status_code))
+        time.sleep(60)
+        r = requests.post(api_url, data = payload)
     return json.loads(r.text)
+
+def printRankings(sorted_competitors):
+    list_of_names = []
+
+    for competitor in sorted_competitors:
+        for item in competitor:
+            if item == "FirstName":
+                list_of_names.append(competitor[item])
+
+    print(f'{"Pos.": <4} {"Laps": <4} {"First Name":<32} {"Competitor ID":<15} {"Transponder ID":<6}')
+    underline = "-" * 80
+    print(underline)
+
+    for competitor in sorted_competitors:
+        #print(competitor['Position'], competitor['Laps'], competitor['FirstName'], competitor['ID'], competitor['Transponder'])
+        print(f"{competitor['Position']: <4} {competitor['Laps']: <4} {competitor['FirstName']:<32} {competitor['ID']:<15} {competitor['Transponder']:<6}")
+        
+    print(underline)
+    return
+
+def printLapTimes(competitor_lap_times):
+
+    return
+
 
 creds = None
 
@@ -41,6 +72,22 @@ if os.path.exists('./.token'):
 else:
     eprint("ERROR: Didn't open ./.token")
     sys.exit("ERROR: Didn't open ./.token")
+"""
+questions = [
+    {
+        'type': 'list',
+        'name': 'Main Menu',
+        'message': 'What would you like to do?',
+        'choices': [
+            'Enter a Race ID',
+            'Enter a Competitor ID'
+        ]
+    },
+]
+
+answers = prompt(questions)
+print_json(answers)  # use the answers as input for your app
+"""
 
 while True:
     try: 
@@ -60,31 +107,58 @@ race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
 series_id = race_details['Race']['SeriesID']
 race_type_id = race_details['Race']['RaceTypeID']
 
+eprint("INFO: Getting sessions for {}".format(race_id))
 payload = { 'apiToken': token, 'raceID': race_id}
 sessions_for_race = callRaceMonitor('/v2/Results/SessionsForRace', payload)
 
-print(sessions_for_race)
+session_ids_for_race = []
 
-print("\t\tSession ID: {}".format(sessions_for_race['Sessions'][0]['ID']))
-r = requests.post('https://api.race-monitor.com/v2/Results/SessionDetails', data = {'apiToken': token, 'sessionID': sessions_for_race['Sessions'][0]['ID']})
-SessionDetails = json.loads(r.text)
-for i in SessionDetails['Session']['SortedCompetitors']:
-    if i['FirstName'] == 'WOT LEMONS':
-        #print(i)
-        competitor_id = i['ID']
-        print("\t\tCompetitor ID: {}".format(competitor_id))
-print("\tINFO: Retrieving /v2/Results/CompetitorDetails for {}".format(competitor_id))
-r = requests.post('https://api.race-monitor.com/v2/Results/CompetitorDetails', data = {'apiToken': token, 'competitorID': competitor_id})
-CompetitorDetails = json.loads(r.text)
-print(CompetitorDetails)
+for i in sessions_for_race['Sessions']:
+    session_ids_for_race.append(i['ID'])
 
+eprint("INFO: Race {} has {} sessions, {}".format(race_id, len(session_ids_for_race), session_ids_for_race))
+
+last_session_id = sessions_for_race['Sessions'][-1]['ID']
+eprint("INFO: Getting rankings from last session, {}.".format(sessions_for_race['Sessions'][-1]['ID']))
+payload = { 'apiToken': token, 'sessionID': last_session_id}
+last_session_details = callRaceMonitor('/v2/Results/SessionDetails', payload)
+
+col_width = max(len(word) for row in last_session_details['Session']['SortedCompetitors'] for word in row) + 2
+sorted_competitors = last_session_details['Session']['SortedCompetitors']
+
+printRankings(sorted_competitors)
+
+while True:
+    try: 
+        transponder_id = sys.argv[2]
+        break
+    except IndexError:
+        transponder_id = input("Transponder ID: ")
+        break
+
+competitor_details = []
+competitor_lap_times = []
+
+for session_id in session_ids_for_race:
+    eprint("INFO: Getting session details for {} including lap times.".format(session_id))
+    payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': True}
+    lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
+
+    for competitor in lap_times['Session']['SortedCompetitors']:
+        if competitor['Transponder'] == transponder_id:
+            competitor_lap_times = competitor_lap_times + competitor['LapTimes']
+            if session_id == last_session_id:
+                competitor_details = competitor
+
+print("\nTeam: {:<32} Transponder: {:<4}".format(competitor_details['FirstName'], competitor_details['Transponder']))
+print("Best Position:\t{}\nFinal Position:\t{}\nTotal Laps:\t{}\nBest Lap:\t{}\nBest Lap Time:\t{}\nTotal Time:\t{}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
+
+print(underline)
+
+printLapTimes(competitor_lap_times)
     
-    #print("\tINFO: {}".format(data['Sessions']['ID']))
-
-
-
 def testConnection():
-    #print("\tSETUP: Testing connection and authorization...")
+    print("\tSETUP: Testing connection and authorization...")
     r = requests.post('https://api.race-monitor.com/v2/Account/AllRaces', data = {'apiToken': token})
     AllRaces = json.loads(r.text)
     if AllRaces['Successful'] != 'true':
@@ -93,6 +167,7 @@ def testConnection():
         print(r.status_code)
         sys.exit("\tERROR: Endpoint 'v2/Account/AllRaces' returned the above error.")
     return r.status_code
+
 
     """
 def writeToSheets
