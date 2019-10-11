@@ -1,8 +1,50 @@
 # Lemongrass
-Lemon is a CLI App for managing 24 Hours of Lemons Laps via API.
-This exists because there's no great way of getting lap times for anything useful. 
+This repo is where I keep the tools I use to work on my 24 Hours of Lemons team.
 
-# How to use
+# Telem
+
+# How to Use
+1. Set up an influxDB instance.
+![Image of InfluxDB starting in log](images/influx.png)
+
+```
+> create user tom_admin with password 'THIS_IS_A_SECRET_TWAT' WITH ALL PRIVILEGES
+> SHOW USERS
+user		admin
+----		-----
+tom_admin	true
+
+> CREATE USER car_252 WITH PASSWORD 'HEY_I_SAID_NO_PEEKING'
+> SHOW USERS
+user		admin
+----		-----
+tom_admin	true
+car_252		false
+
+> show databases
+name: databases
+name
+----
+_internal
+stats_252
+
+> grant write on stats_252 to car_252
+```
+
+2. Plug in a USB OBD Scanner and point telem at that instance.
+```
+client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', 'HEY_I_SAID_NO_PEEKING', 'stats_252')
+```
+
+3. Git goin
+
+
+
+
+
+# Laps
+
+# How to Use
 1. Get a Race Monitor API token
 https://www.race-monitor.com/Home/API
 
@@ -10,7 +52,7 @@ https://www.race-monitor.com/Home/API
 
 3. Get your race ID
 
-We need a Race ID to get information for. Head to https://www.race-monitor.com/Live/Race while your race is live to get this easily from the URL. 
+We need a Race ID to get information for. Head to https://www.race-monitor.com/Live/Race while your race is live to get this easily from the URL.
 
 ![Image of Race ID in URL bar](https://i.imgur.com/1FQNvSb.png)
 
