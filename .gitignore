@@ -4,3 +4,5 @@
 *.pyc
 token.pickle
 *.csv
+personal/
+personal/*
