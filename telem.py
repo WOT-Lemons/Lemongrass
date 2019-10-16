@@ -10,8 +10,6 @@ from time import sleep
 import obd
 import datetime
 
-client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', 'o083@3!04Q7sC7l1A%owKD4w9', 'stats_252')
-
 def new_value(r):
     ts = datetime.datetime.now()
     measurement = str(r.command).split(":")[1]
@@ -89,6 +87,6 @@ obd.logger.setLevel(obd.logging.INFO)
 
 while True:
     sleep(0.05)
-#except Exception as e: 
+#except Exception as e:
 #    print(e)
 #    connection.close()
