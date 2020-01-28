@@ -10,16 +10,13 @@ from time import sleep
 import obd
 import datetime
 
+client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', 'oA6&Li*#1le3aRE@99uxf^JCm', 'stats_252')
 
 def new_value(r):
-    #print(r)
     ts = datetime.datetime.now()
     measurement = str(r.command).split(":")[1]
     measurement = measurement.replace(" ", "-")
-    #print measurement
     try:
-        if r.value.magnitude is None:
-            r.value.magnitude = 0
         json_body = [
         {
             "measurement": measurement,
@@ -28,24 +25,26 @@ def new_value(r):
                 "value": r.value.magnitude
             }
         }]
+        client.write_points(json_body)
+    except TypeError:
+        print("Caught TypeError in new_value")
+        main()
     except AttributeError:
-        if r.value[1] is None:
-            r.value[1] = 0
-        json_body = [
-        {
-            "measurement": measurement,
-            "time": ts,
-            "fields": {
-                "value": r.value[1]
-            }
-        }]
-    client.write_points(json_body)
-
+        print("Caught AttributeError in new_value")
+        main()
 
 def new_fuel_status(r):
+    try:
+        if not r.value[1]:
+            raise TypeError
+    except TypeError:
+        print("Caught TypeError in new_fuel_status")
+        main()
+    
     ts = datetime.datetime.now()
     measurement = str(r.command).split(":")[1]
     measurement = measurement.replace(" ", "-")
+    
     if "Open loop due to insufficient engine temperature" in r.value:
         fuel_status = 0
     elif "Closed loop, using oxygen sensor feedback to determine fuel mix" in r.value:
@@ -58,6 +57,7 @@ def new_fuel_status(r):
         fuel_status = 4
     if fuel_status is None:
         fuel_status = 255
+
     json_body = [
     {
         "measurement": measurement,
@@ -68,47 +68,41 @@ def new_fuel_status(r):
     }]
     client.write_points(json_body)
 
-#obd.logger.setLevel(obd.logging.INFO)
+def main():
 
-connection = obd.Async()
-supported_commands = connection.supported_commands
-watch_commands = {}
+    connection = obd.Async()
+    status = connection.status()
+    while "Car Connected" not in status:
+        print("No car connected, sleeping...")
+        connection = obd.Async()
+        status = connection.status()
+        
+    print(connection.status())
+    supported_commands = connection.supported_commands
+    watch_commands = {}
 
-for command in supported_commands:
-    if "DTC" not in command.name:
-        if "MIDS" not in command.name:
-            if "PIDS" not in command.name:
-                if "O2_SENSORS" not in command.name:
-                    if command.name != "STATUS":
-                        if "ELM" not in command.name:
-                            if "OBD" not in command.name:
-                                if "FUEL_STATUS" in command.name:
-                                    print(command.name, " supported, watching...")
-                                    connection.watch(command, callback=new_fuel_status)
-                                else:
-                                    print(command.name, " supported, watching...")
-                                    connection.watch(command, callback=new_value)
+    for command in supported_commands:
+        if "DTC" not in command.name:
+            if "MIDS" not in command.name:
+                if "PIDS" not in command.name:
+                    if "O2_SENSORS" not in command.name:
+                        if command.name != "STATUS":
+                            if "ELM" not in command.name:
+                                if "OBD" not in command.name:
+                                    if "FUEL_STATUS" in command.name:
+                                        print(command.name, " supported, watching...")
+                                        connection.watch(command, callback=new_fuel_status)
+                                    else:
+                                        print(command.name, " supported, watching...")
+                                        connection.watch(command, callback=new_value)
 
-connection.start()
+    connection.start()
+    print(connection.status())
 
-#obd.logger.setLevel(obd.logging.INFO)
+    #obd.logger.setLevel(obd.logging.INFO)
 
-while True:
-    sleep(0.05)
+    while True:
+        sleep(0.05)
     
-    ts = datetime.datetime.now()
-    measurement = "heartbeat"
-
-    json_body = [
-        {
-            "measurement": measurement,
-            "time": ts,
-            "fields": {
-                "value": 1
-            }
-        }]
-
-    client.write_points(json_body)
-#except Exception as e:
-#    print(e)
-#    connection.close()
+if __name__== "__main__":
+  main()
