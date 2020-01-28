@@ -97,12 +97,11 @@ def main():
                                         connection.watch(command, callback=new_value)
 
     connection.start()
-    print(connection.status())
+
+    while True:
+        sleep(0.5)
 
     #obd.logger.setLevel(obd.logging.INFO)
 
-    while True:
-        sleep(0.05)
-    
 if __name__== "__main__":
   main()
