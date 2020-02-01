@@ -6,3 +6,4 @@ token.pickle
 *.csv
 personal/
 personal/*
+.DS_Store
