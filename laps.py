@@ -14,17 +14,30 @@ import signal
 import csv
 import pandas as pd
 import logging
+import argparse
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from oauth2client.client import flow_from_clientsecrets
 
+new_competitor = True
 underline = "-" * 80
+
+parser = argparse.ArgumentParser(description='Interact with lap data')
+parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
+parser.add_argument('car_number', metavar='car_number', nargs=1, type=int, action='store')
+parser.add_argument('--monitor', dest='monitor_mode', action='store_true', help='Update when new data receieved')
+parser.add_argument('--network', dest='network_mode', action='store_true', help='Forward lap data to network dest')
+parser.add_argument("-v", "--verbose", help="Set debug logging", action="store_true")
+parser.set_defaults(monitor_mode=False, network_mode=False)
+args = parser.parse_args()
 
 def main():
 
-    # Set logging level - https://docs.python.org/3/howto/logging.html#logging-basic-tutorial
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    if args.verbose:
+        print(args)
+        # Set logging level - https://docs.python.org/3/howto/logging.html#logging-basic-tutorial
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
     # Pandas default max rows truncating lap times. I don't expect a team to do more than 1024 laps.
     pd.set_option("display.max_rows", 1024)
@@ -53,7 +66,7 @@ def main():
             break
         try: race_id
         except NameError: race_id = None
-    
+   
     """
     # Originally race_details was needed for series_id and race_type_id. 
     # This code may be useful in the future so it's staying. 
@@ -74,7 +87,7 @@ def main():
 
     # Get only session IDs in session_ids_for_race
     for i in sessions_for_race['Sessions']:
-        session_ids_for_race.append(i['ID'])
+        session_ids_for_race.append(['ID'])
 
     logging.debug("Race {} has {} sessions, {}".format(race_id, len(session_ids_for_race), session_ids_for_race))
 
@@ -85,7 +98,12 @@ def main():
 
     sorted_competitors = last_session_details['Session']['SortedCompetitors']
 
-    printRankings(sorted_competitors)
+    list_of_names = printRankings(sorted_competitors)
+    
+    while('' in list_of_names):
+        list_of_names.remove('')
+
+    #print(list_of_names)
 
     # Get car number from second argument or user input. 
     while True:
@@ -108,24 +126,35 @@ def main():
         lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
 
         # For a specific competitor, extract lap times from all recieved sessions and concatenate into one list
+        lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
         for competitor in lap_times['Session']['SortedCompetitors']:
             if competitor['Number'] == car_number:
                 competitor_lap_times = competitor_lap_times + competitor['LapTimes']
                 if session_id == last_session_id:
                     competitor_details = competitor
 
-    # Print competitor detail block
-    print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(competitor_details['FirstName'], competitor_details['Number'], competitor_details['Transponder']))
-    print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
-    print(underline)
+    #Make name 
+    competitor_details['Name'] = competitor_details['FirstName'] + competitor_details['LastName']
+
+    if args.monitor_mode == True:
+        #Enter monitoring loop
+        competitor_last_session = session_ids_for_race[-1]
+        competitor_last_lap = competitor_lap_times[-1]
+        monitorRoutine(car_number, competitor_last_session, competitor_last_lap)
+    else:
+        # Print competitor detail block
+        print(underline)
+        print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(competitor_details['Name'], competitor_details['Number'], competitor_details['Transponder']))
+        print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
+        print(underline)
+        
+        # Create pandas dataframe and print without index to remove row numbers
+        lap_time_df = pd.io.json.json_normalize(competitor_lap_times)
+        print(lap_time_df.to_string(index=False))
 
     # Create filename and call function to write to CSV
-    filename = "{}-{}-{}".format(competitor_details['FirstName'], race_id, last_session_id)
+    filename = "{}-{}-{}".format(competitor_details['Name'], race_id, last_session_id)
     writeCSV(filename, competitor_lap_times)
-
-    # Create pandas dataframe and print without index to remove row numbers
-    lap_time_df = pd.io.json.json_normalize(competitor_lap_times)
-    print(lap_time_df.to_string(index=False))
 
     return 0
 
@@ -162,8 +191,12 @@ def printRankings(sorted_competitors):
     list_of_names = []
 
     for competitor in sorted_competitors:
+        #print(competitor)
         for item in competitor:
-            if item == "FirstName":
+          #print(item)
+            if item == "FirstName" and item != '':
+                list_of_names.append(competitor[item])
+            elif item == "LastName" and item != '':
                 list_of_names.append(competitor[item])
 
     print(f'{"Pos.": <4} {"#":<4} {"First Name": <32} {"Laps": <4} {"Competitor ID":<15} {"Transponder ID":<6}')
@@ -171,11 +204,15 @@ def printRankings(sorted_competitors):
     print(underline)
 
     for competitor in sorted_competitors:
+        if competitor['FirstName'] == '':
+            competitor['Name'] = competitor['LastName']
+        else:
+            competitor['Name'] = competitor['FirstName']
         #print(competitor['Position'], competitor['Laps'], competitor['FirstName'], competitor['ID'], competitor['Transponder'])
-        print(f"{competitor['Position']: <4} {competitor['Number']:<4} {competitor['FirstName']:<32} {competitor['Laps']: <4} {competitor['ID']:<15} {competitor['Transponder']:<6}")
+        print(f"{competitor['Position']: <4} {competitor['Number']:<4} {competitor['Name']:<32} {competitor['Laps']: <4} {competitor['ID']:<15} {competitor['Transponder']:<6}")
         
     print(underline)
-    return
+    return list_of_names
 
 def writeCSV(filename, competitor_lap_times):
     """
@@ -200,44 +237,58 @@ def writeCSV(filename, competitor_lap_times):
     lap_csv_fh.close()
     return
 
+def monitorRoutine(car_number, session_id, last_lap):
+    """
+    Function name: monitorRoutine
+    Arguments: car_number, last_lap_time
+    Description: Destination routine for monitor mode.
+                 Holds about the time of a lap and then checks
+                 to see if there's a new one. If there is none, 
+                 hold until there is and then print a lap line. Repeat
+    """
+    logging.info('Starting monitor mode...')
+    print(underline)
+
+    print("Monitoring car {}\nLast lap time: {}".format(car_number, last_lap))
+    last_lap_time = last_lap['LapTime']
+    #Convert HH:MM:SS.MS
+    h, m, s = last_lap_time.split(':')
+    last_lap_seconds = int(h) * 3600 + int(m) * 60 + float(s)
+    sleep_interval = last_lap_seconds + 15
+    logging.debug("Last lap: {}\nLast lap: {} seconds\nSleep Time: {} seconds".format(last_lap_time, last_lap_seconds, sleep_interval))
+
+    while True:
+        time.sleep(sleep_interval)
+        current_competitor_lap_times = refreshCompetitor(session_id)
+        current_last_lap = current_competitor_lap_times[-1]
+        print(last_lap_time,current_last_lap)
+    
+    return
+
+def refreshCompetitor(car_number, session_id, payload):
+    """
+    Function name: refreshCompetitor
+    Arguments: car_number, last_lap_time
+    Description: If this is a new competitor, get all laps from all sessions. 
+                 If not, check only for the last lap from the last session. 
+    """
+
+    competitor_lap_times = []
+    competitor_details = []
+    
+    logging.debug("Getting session details for {} including lap times.".format(session_id))
+    payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': True}
+    lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
+
+    lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
+    for competitor in lap_times['Session']['SortedCompetitors']:
+        if competitor['Number'] == car_number:
+            competitor_lap_times = competitor_lap_times + competitor['LapTimes']
+    
+    return competitor_lap_times
+
 if __name__ == '__main__':
     main()
 
-"""
-def writeToSheets
-creds = None
 
 
-##TODO
-# If modifying these scopes, delete the file token.pickle.
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-SPREADSHEET_ID = '1qWZ3U5el_bRqxSP4du04A_ZiO5S93m7OsFrsU3oRBLE'
-RANGE_NAME = 'Sheet1'
-
-if os.path.exists('token.pickle'):
-    with open('token.pickle', 'rb') as token:
-        creds = pickle.load(token)
-# If there are no (valid) credentials available, let the user log in.
-if not creds or not creds.valid:
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
-        flow = InstalledAppFlow.from_client_secrets_file(
-            'credentials.json', SCOPES)
-        creds = flow.run_local_server(port=0)
-    # Save the credentials for the next run
-    with open('token.pickle', 'wb') as token:
-        pickle.dump(creds, token)
-
-service = build('sheets', 'v4', credentials=creds)
-
-# Call the Sheets API
-sheet = service.spreadsheets()
-result = sheet.values().get(spreadsheetId=SPREADSHEET_ID,range=RANGE_NAME).execute()
-values = result.get('values', [])
-
-if not values:
-    print('No data found.')
-
-
-"""
