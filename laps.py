@@ -4,10 +4,11 @@
 from __future__ import print_function, unicode_literals
 from PyInquirer import prompt, print_json
 from pprint import pprint
-from operator import itemgetteri
+from operator import itemgetter
 from influxdb import InfluxDBClient
 import os
 import sys
+import subprocess
 import requests
 import json
 import pickle
@@ -56,15 +57,16 @@ def main():
         sys.exit()
 
     # Load influx password
-    if network_mode:
-        if os.path.exists('~/.influxcred'):
-            f = open('~/.influxcred', 'r')
+    if args.network_mode:
+        os.stat('.influxcred')
+        if os.path.exists('.influxcred'):
+            f = open('.influxcred', 'r')
             influx_pass = f.readline().rstrip()
             if influx_pass != "":
                 logging.debug("Influx password opened and read")
-                client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'laps_252')
+                influx = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'laps_252')
         else:
-            logging("Didn't open .influxcred")
+            logging.error("Didn't open ~/.influxcred")
             sys.exit()
     
     # Get race_id from first argument or prompt user for it. 
@@ -82,6 +84,16 @@ def main():
         try: race_id
         except NameError: race_id = None
 
+    # Check if race is live
+    payload = { 'apiToken': token, 'RaceID': race_id}
+    response = callRaceMonitor('/v2/Race/IsLive', payload)
+
+    if response['Successful']:
+        if response['IsLive'] is not True:
+            return
+        else:
+            logging.info("Race {} is currently live.".format(race_id))
+
     payload = { 'apiToken': token, 'raceID': race_id}
     race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
 
@@ -94,9 +106,13 @@ def main():
         race_track = race_details['Race']['Track']
         print(underline)
         print("{}\tStarted: {:>}\n{}\t\t\tEnds: {:>}".format(race_name, start_date, race_track, end_date))
+        print(underline)
 
     payload = { 'apiToken': token, 'raceID': race_id}
     last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
+
+    print("GetSession: ", last_session_details['Successful'])
+
     competitors = last_session_details['Session']['Competitors']
 
     # Sort competitors
@@ -105,6 +121,9 @@ def main():
     for competitor in competitors:
         list_of_competitors.append(competitors[competitor])
 
+    #for racer in list_of_competitors:
+    #    print(racer)
+
     for competitor in list_of_competitors:
         for key, value in competitor.items():
             try: 
@@ -112,28 +131,22 @@ def main():
                     competitor[key] = int(value) 
             except ValueError: value = None 
 
-    #print(list_of_competitors)
-
     # Remove competitors (LOSERS)  with no position
+    list_of_competitors = [racer for racer in list_of_competitors if racer['Number'] != '']
+    #print(list_of_competitors)
+    """
     for i in range(len(list_of_competitors)): 
+        print(list_of_competitors[i])
         if list_of_competitors[i]['Position'] == '': 
-            del list_of_competitors[i] 
+            print("Dirty data")
+            list_of_competitors.remove(list_of_competitors[i]) 
             break
+    """
 
     sorted_competitors = sorted(list_of_competitors, key=lambda k: int(itemgetter('Position')(k))) 
 
     printRankings(sorted_competitors)
    
-    # Check if race is live
-    payload = { 'apiToken': token, 'RaceID': race_id}
-    response = callRaceMonitor('/v2/Race/IsLive', payload)
-
-    if response['Successful']:
-        if response['IsLive'] is not True:
-            return
-        else:
-            logging.info("Race {} is currently live.".format(race_id))
- 
     # Get car number from second argument or user input. 
     while True:
         try: 
@@ -179,9 +192,8 @@ def main():
         print(underline)
 
         # If we're going to be starting network mode, check for presence of existing data.
-        if network_mode:
-            results = client.query('SELECT LAST(total_laps) FROM laps_252 BY *')
-            print(results.raw)
+        if args.network_mode:
+            network_status = pushInflux(racer_id, laps, influx, start_epoc)
 
         # Create filename and call function to write to CSV
         filename = "{}-{}".format(competitor_details['Name'], race_id)
@@ -206,6 +218,7 @@ def callRaceMonitor(endpoint, payload):
         logging.error('{} - Too many requests, waiting 60 seconds...'.format(r.status_code))
         time.sleep(60)
         r = requests.post(api_url, data = payload)
+        return json.loads(r.text)
     else:
         logging.error('Error {}'.format(r.status_code))
     return
@@ -285,11 +298,6 @@ def monitorRoutine(car_number, laps, race_id, racer_id, token):
     lap_time_df = pd.io.json.json_normalize(laps)
     print(lap_time_df.to_string(index=False))
 
-    #last_lap = laps[-1]['LapTime']
-    #last_lap_time = last_lap
-    #Convert HH:MM:SS.MS1
-    #h, m, s = last_lap_time.split(':')
-    #last_lap_seconds = int(h) * 3600 + int(m) * 60 + float(s)
     #logging.debug("\nLast lap: {}\nLast lap: {} seconds\nSleep Time: {} seconds".format(last_lap_time, last_lap_seconds, sleep_interval))
 
     while True:
@@ -327,13 +335,46 @@ def refreshCompetitor(race_id, racer_id, token):
     response = []
     return laps
 
-#def pushInflux(racer_id, laps, client, start_epoc):
+def pushInflux(racer_id, laps, influx, start_epoc):
     """
     Function name: pushInflux
-    Arguments: 
+    Arguments: laps
     Description: This function takes data and pushes it into influx.
+                 Accepts a list of lap dicts and attempts to match
+                 existing data. If there's new data, add it. 
     """
+    output = subprocess.check_output(['dig', '@8.8.8.8', '+short', 'TXT', 'driver.wotlemons.com']) 
+    dirty_driver = output.decode("utf-8")
+    current_driver = dirty_driver.replace('"', '')
+    logging.info("Current driver set: {}".format(current_driver))
 
+    logging.info("Writing laps to influx...")
+    for lap in laps:
+        #Convert HH:MM:SS.MS1
+        h, m, s = lap['TotalTime'].split(':')
+        lap_seconds = int(h) * 3600 + int(m) * 60 + float(s)
+        time_lap_completed_seconds = start_epoc + lap_seconds
+        lap_timestamp = str(time_lap_completed_seconds).replace(".", '')
+        print(lap_timestamp)
+        json_body = [
+        {
+            "measurement": lap,
+            "time": lap_timestamp,
+            "tags": {
+                "driver": current_driver,
+                "flag_status": lap['FlagStatus'],
+            },
+            "fields": {
+                "lap_no": lap['Lap'],
+                "lap_time": lap['LapTime'],
+                "position": lap['Position'],
+            }
+        }]
+        influx.write_points(json_body, protocol='json', time_precision='ms')
+    print(underline)
+    #query_data = influx.query('SELECT LAST(total_laps) FROM laps_252 BY *')
+    #print(query_data.raw)
+    
 #    return
 
 if __name__ == '__main__':
