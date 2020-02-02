@@ -55,6 +55,18 @@ def main():
         logging.error("Didn't open ./.token")
         sys.exit()
 
+    # Load influx password
+    if network_mode:
+        if os.path.exists('~/.influxcred'):
+            f = open('~/.influxcred', 'r')
+            influx_pass = f.readline().rstrip()
+            if influx_pass != "":
+                logging.debug("Influx password opened and read")
+                client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'laps_252')
+        else:
+            logging("Didn't open .influxcred")
+            sys.exit()
+    
     # Get race_id from first argument or prompt user for it. 
     # May add table of current races in the future to browse from the app.
     while True:
@@ -138,22 +150,6 @@ def main():
     competitor_details = []
     competitor_lap_times = []
 
-    """
-    # Send request for all session_ids from a race, including lap times
-    for session_id in session_ids_for_race:
-        logging.debug("Getting session details for {} including lap times.".format(session_id))
-        payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': True}
-        lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
-
-        # For a specific competitor, extract lap times from all recieved sessions and concatenate into one list
-        lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
-        for competitor in lap_times['Session']['SortedCompetitors']:
-            if competitor['Number'] == car_number:
-                competitor_lap_times = competitor_lap_times + competitor['LapTimes']
-                if session_id == last_session_id:
-                    competitor_details = competitor
-    """
-
     # Get lap times from live racer
     logging.debug("Getting lap times for {} from race {}.".format(racer_id, race_id))
     payload = { 'apiToken': token, 'RacerID': racer_id, 'RaceID': race_id}
@@ -181,6 +177,11 @@ def main():
         lap_time_df = pd.io.json.json_normalize(laps)
         print(lap_time_df.to_string(index=False))
         print(underline)
+
+        # If we're going to be starting network mode, check for presence of existing data.
+        if network_mode:
+            results = client.query('SELECT LAST(total_laps) FROM laps_252 BY *')
+            print(results.raw)
 
         # Create filename and call function to write to CSV
         filename = "{}-{}".format(competitor_details['Name'], race_id)
@@ -326,7 +327,14 @@ def refreshCompetitor(race_id, racer_id, token):
     response = []
     return laps
 
-def pushInflux(laps, start_epoc)
+#def pushInflux(racer_id, laps, client, start_epoc):
+    """
+    Function name: pushInflux
+    Arguments: 
+    Description: This function takes data and pushes it into influx.
+    """
+
+#    return
 
 if __name__ == '__main__':
     main()
@@ -374,3 +382,18 @@ if __name__ == '__main__':
     last_session_id = sessions_for_race['Sessions'][-1]['ID']
     logging.debug("Getting rankings from last session, {}.".format(sessions_for_race['Sessions'][-1]['ID']))
     """    
+    """
+    # Send request for all session_ids from a race, including lap times
+    for session_id in session_ids_for_race:
+        logging.debug("Getting session details for {} including lap times.".format(session_id))
+        payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': True}
+        lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
+
+        # For a specific competitor, extract lap times from all recieved sessions and concatenate into one list
+        lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
+        for competitor in lap_times['Session']['SortedCompetitors']:
+            if competitor['Number'] == car_number:
+                competitor_lap_times = competitor_lap_times + competitor['LapTimes']
+                if session_id == last_session_id:
+                    competitor_details = competitor
+    """
