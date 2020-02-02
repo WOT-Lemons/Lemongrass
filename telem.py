@@ -10,7 +10,14 @@ from time import sleep
 import obd
 import datetime
 
-client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', 'oA6&Li*#1le3aRE@99uxf^JCm', 'stats_252')
+# Load tokenfile
+if os.path.exists('./.influxcred'):
+    f = open('.influxcred', 'r')
+    influx_pass = f.readline().rstrip()
+        if influx_pass != "":
+            logging.debug("Influx cred opened and read")
+
+client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'stats_252')
 
 def new_value(r):
     ts = datetime.datetime.now()

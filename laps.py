@@ -4,7 +4,8 @@
 from __future__ import print_function, unicode_literals
 from PyInquirer import prompt, print_json
 from pprint import pprint
-from operator import itemgetter
+from operator import itemgetteri
+from influxdb import InfluxDBClient
 import os
 import sys
 import requests
@@ -68,7 +69,20 @@ def main():
             break
         try: race_id
         except NameError: race_id = None
-   
+
+    payload = { 'apiToken': token, 'raceID': race_id}
+    race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
+
+    if race_details['Successful'] == True:
+        race_name = race_details['Race']['Name']
+        start_epoc = race_details['Race']['StartDateEpoc']
+        start_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_epoc))
+        end_epoc = race_details['Race']['EndDateEpoc']
+        end_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_epoc))
+        race_track = race_details['Race']['Track']
+        print(underline)
+        print("{}\tStarted: {:>}\n{}\t\t\tEnds: {:>}".format(race_name, start_date, race_track, end_date))
+
     payload = { 'apiToken': token, 'raceID': race_id}
     last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
     competitors = last_session_details['Session']['Competitors']
@@ -166,6 +180,7 @@ def main():
         # Create pandas dataframe and print without index to remove row numbers
         lap_time_df = pd.io.json.json_normalize(laps)
         print(lap_time_df.to_string(index=False))
+        print(underline)
 
         # Create filename and call function to write to CSV
         filename = "{}-{}".format(competitor_details['Name'], race_id)
@@ -310,6 +325,8 @@ def refreshCompetitor(race_id, racer_id, token):
     logging.debug("Current lap is {} with time {}.".format(laps[-1]['Lap'], laps[-1]['LapTime']))
     response = []
     return laps
+
+def pushInflux(laps, start_epoc)
 
 if __name__ == '__main__':
     main()

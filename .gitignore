@@ -7,3 +7,4 @@ token.pickle
 personal/
 personal/*
 .DS_Store
+.influxcred
