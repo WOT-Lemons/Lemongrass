@@ -11,11 +11,14 @@ import obd
 import datetime
 
 # Load tokenfile
-if os.path.exists('./.influxcred'):
-    f = open('.influxcred', 'r')
+if os.path.exists('/home/pi/.influxcred'):
+    print("Opening secret...")
+    f = open('/home/pi/.influxcred', 'r')
     influx_pass = f.readline().rstrip()
-        if influx_pass != "":
-            logging.debug("Influx cred opened and read")
+    #if influx_pass != "":
+        #logging.debug("Influx cred opened and read")
+    #else:
+        #logging.debug("Failed to open ~/.influxcred")
 
 client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'stats_252')
 
