@@ -4,6 +4,7 @@
 from __future__ import print_function, unicode_literals
 from PyInquirer import prompt, print_json
 from pprint import pprint
+from operator import itemgetter
 import os
 import sys
 import requests
@@ -15,13 +16,12 @@ import csv
 import pandas as pd
 import logging
 import argparse
-from googleapiclient.discovery import build
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from oauth2client.client import flow_from_clientsecrets
 
 new_competitor = True
 underline = "-" * 80
+race_id = ''
+racer_id = ''
+car_number = ''
 
 parser = argparse.ArgumentParser(description='Interact with lap data')
 parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
@@ -38,7 +38,9 @@ def main():
         print(args)
         # Set logging level - https://docs.python.org/3/howto/logging.html#logging-basic-tutorial
         logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-
+    else:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
     # Pandas default max rows truncating lap times. I don't expect a team to do more than 1024 laps.
     pd.set_option("display.max_rows", 1024)
 
@@ -67,44 +69,45 @@ def main():
         try: race_id
         except NameError: race_id = None
    
-    """
-    # Originally race_details was needed for series_id and race_type_id. 
-    # This code may be useful in the future so it's staying. 
-
-    logging.debug("Getting details for {}".format(race_id))
     payload = { 'apiToken': token, 'raceID': race_id}
-    race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
+    last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
+    competitors = last_session_details['Session']['Competitors']
 
-    series_id = race_details['Race']['SeriesID']
-    race_type_id = race_details['Race']['RaceTypeID']
-    """
+    # Sort competitors
+    list_of_competitors = []
 
-    logging.debug("Getting sessions for {}".format(race_id))
-    payload = { 'apiToken': token, 'raceID': race_id}
-    sessions_for_race = callRaceMonitor('/v2/Results/SessionsForRace', payload)
+    for competitor in competitors:
+        list_of_competitors.append(competitors[competitor])
 
-    session_ids_for_race = []
+    for competitor in list_of_competitors:
+        for key, value in competitor.items():
+            try: 
+                if key == 'Position':
+                    competitor[key] = int(value) 
+            except ValueError: value = None 
 
-    # Get only session IDs in session_ids_for_race
-    for i in sessions_for_race['Sessions']:
-        session_ids_for_race.append(['ID'])
+    #print(list_of_competitors)
 
-    logging.debug("Race {} has {} sessions, {}".format(race_id, len(session_ids_for_race), session_ids_for_race))
+    # Remove competitors (LOSERS)  with no position
+    for i in range(len(list_of_competitors)): 
+        if list_of_competitors[i]['Position'] == '': 
+            del list_of_competitors[i] 
+            break
 
-    last_session_id = sessions_for_race['Sessions'][-1]['ID']
-    logging.debug("Getting rankings from last session, {}.".format(sessions_for_race['Sessions'][-1]['ID']))
-    payload = { 'apiToken': token, 'sessionID': last_session_id}
-    last_session_details = callRaceMonitor('/v2/Results/SessionDetails', payload)
+    sorted_competitors = sorted(list_of_competitors, key=lambda k: int(itemgetter('Position')(k))) 
 
-    sorted_competitors = last_session_details['Session']['SortedCompetitors']
+    printRankings(sorted_competitors)
+   
+    # Check if race is live
+    payload = { 'apiToken': token, 'RaceID': race_id}
+    response = callRaceMonitor('/v2/Race/IsLive', payload)
 
-    list_of_names = printRankings(sorted_competitors)
-    
-    while('' in list_of_names):
-        list_of_names.remove('')
-
-    #print(list_of_names)
-
+    if response['Successful']:
+        if response['IsLive'] is not True:
+            return
+        else:
+            logging.info("Race {} is currently live.".format(race_id))
+ 
     # Get car number from second argument or user input. 
     while True:
         try: 
@@ -116,9 +119,12 @@ def main():
         try: car_number
         except NameError: car_number = None
 
+    racer_id = car_number
+
     competitor_details = []
     competitor_lap_times = []
 
+    """
     # Send request for all session_ids from a race, including lap times
     for session_id in session_ids_for_race:
         logging.debug("Getting session details for {} including lap times.".format(session_id))
@@ -132,29 +138,38 @@ def main():
                 competitor_lap_times = competitor_lap_times + competitor['LapTimes']
                 if session_id == last_session_id:
                     competitor_details = competitor
+    """
+
+    # Get lap times from live racer
+    logging.debug("Getting lap times for {} from race {}.".format(racer_id, race_id))
+    payload = { 'apiToken': token, 'RacerID': racer_id, 'RaceID': race_id}
+    response = callRaceMonitor('/v2/Live/GetRacer', payload)
+
+    if response['Successful'] == True:
+        laps = response['Details']['Laps']
+        competitor_details = response['Details']['Competitor']
 
     #Make name 
     competitor_details['Name'] = competitor_details['FirstName'] + competitor_details['LastName']
 
+    print(underline)
+    # Print competitor detail block
+    print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(competitor_details['Name'], competitor_details['Number'], competitor_details['Transponder']))
+    print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
+    print(underline)
+
     if args.monitor_mode == True:
         #Enter monitoring loop
-        competitor_last_session = session_ids_for_race[-1]
-        competitor_last_lap = competitor_lap_times[-1]
-        monitorRoutine(car_number, competitor_last_session, competitor_last_lap)
-    else:
-        # Print competitor detail block
-        print(underline)
-        print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(competitor_details['Name'], competitor_details['Number'], competitor_details['Transponder']))
-        print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
-        print(underline)
-        
+        competitor_last_lap = laps[-1]['LapTime']
+        monitorRoutine(car_number, laps, race_id, racer_id, token)
+    else:  
         # Create pandas dataframe and print without index to remove row numbers
-        lap_time_df = pd.io.json.json_normalize(competitor_lap_times)
+        lap_time_df = pd.io.json.json_normalize(laps)
         print(lap_time_df.to_string(index=False))
 
-    # Create filename and call function to write to CSV
-    filename = "{}-{}-{}".format(competitor_details['Name'], race_id, last_session_id)
-    writeCSV(filename, competitor_lap_times)
+        # Create filename and call function to write to CSV
+        filename = "{}-{}".format(competitor_details['Name'], race_id)
+        writeCSV(filename, laps)
 
     return 0
 
@@ -209,7 +224,7 @@ def printRankings(sorted_competitors):
         else:
             competitor['Name'] = competitor['FirstName']
         #print(competitor['Position'], competitor['Laps'], competitor['FirstName'], competitor['ID'], competitor['Transponder'])
-        print(f"{competitor['Position']: <4} {competitor['Number']:<4} {competitor['Name']:<32} {competitor['Laps']: <4} {competitor['ID']:<15} {competitor['Transponder']:<6}")
+        print(f"{competitor['Position']: <4} {competitor['Number']:<4} {competitor['Name']:<32} {competitor['Laps']: <4} {competitor['RacerID']:<15} {competitor['Transponder']:<6}")
         
     print(underline)
     return list_of_names
@@ -237,7 +252,7 @@ def writeCSV(filename, competitor_lap_times):
     lap_csv_fh.close()
     return
 
-def monitorRoutine(car_number, session_id, last_lap):
+def monitorRoutine(car_number, laps, race_id, racer_id, token):
     """
     Function name: monitorRoutine
     Arguments: car_number, last_lap_time
@@ -246,26 +261,32 @@ def monitorRoutine(car_number, session_id, last_lap):
                  to see if there's a new one. If there is none, 
                  hold until there is and then print a lap line. Repeat
     """
-    logging.info('Starting monitor mode...')
+
+    logging.info("Monitoring car {}...".format(car_number))
     print(underline)
 
-    print("Monitoring car {}\nLast lap time: {}".format(car_number, last_lap))
-    last_lap_time = last_lap['LapTime']
-    #Convert HH:MM:SS.MS
-    h, m, s = last_lap_time.split(':')
-    last_lap_seconds = int(h) * 3600 + int(m) * 60 + float(s)
-    sleep_interval = last_lap_seconds + 15
-    logging.debug("Last lap: {}\nLast lap: {} seconds\nSleep Time: {} seconds".format(last_lap_time, last_lap_seconds, sleep_interval))
+    # Create pandas dataframe and print without index to remove row numbers
+    lap_time_df = pd.io.json.json_normalize(laps)
+    print(lap_time_df.to_string(index=False))
+
+    #last_lap = laps[-1]['LapTime']
+    #last_lap_time = last_lap
+    #Convert HH:MM:SS.MS1
+    #h, m, s = last_lap_time.split(':')
+    #last_lap_seconds = int(h) * 3600 + int(m) * 60 + float(s)
+    #logging.debug("\nLast lap: {}\nLast lap: {} seconds\nSleep Time: {} seconds".format(last_lap_time, last_lap_seconds, sleep_interval))
 
     while True:
-        time.sleep(sleep_interval)
-        current_competitor_lap_times = refreshCompetitor(session_id)
-        current_last_lap = current_competitor_lap_times[-1]
-        print(last_lap_time,current_last_lap)
+        time.sleep(30)
+        current_competitor_lap_times = refreshCompetitor(race_id, racer_id, token)
+        if current_competitor_lap_times[-1]['Lap'] == laps[-1]['Lap']:
+            pass
+        else:
+            print(current_competitor_lap_times[-1])
     
     return
 
-def refreshCompetitor(car_number, session_id, payload):
+def refreshCompetitor(race_id, racer_id, token):
     """
     Function name: refreshCompetitor
     Arguments: car_number, last_lap_time
@@ -273,22 +294,66 @@ def refreshCompetitor(car_number, session_id, payload):
                  If not, check only for the last lap from the last session. 
     """
 
-    competitor_lap_times = []
+    laps = []
     competitor_details = []
-    
-    logging.debug("Getting session details for {} including lap times.".format(session_id))
-    payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': True}
-    lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
 
-    lap_times = callRaceMonitor('/v2/Results/SessionDetails', payload)
-    for competitor in lap_times['Session']['SortedCompetitors']:
-        if competitor['Number'] == car_number:
-            competitor_lap_times = competitor_lap_times + competitor['LapTimes']
+    logging.debug("Refreshing lap times for car {}.".format(racer_id))
+    payload = { 'apiToken': token, 'RaceID': race_id, 'RacerID': racer_id}
+    response = callRaceMonitor('/v2/Live/GetRacer', payload)
+
+    #try:
+    if response['Successful'] == True:
+        laps = response['Details']['Laps']
+        competitor_details = response['Details']['Competitor']
+    #except TypeError: return 
     
-    return competitor_lap_times
+    logging.debug("Current lap is {} with time {}.".format(laps[-1]['Lap'], laps[-1]['LapTime']))
+    response = []
+    return laps
 
 if __name__ == '__main__':
     main()
 
 
+    """
+    # Originally race_details was needed for series_id and race_type_id. 
+    # This code may be useful in the future so it's staying. 
+    
+    # Every time I work on this lap the structure of the data changes as the 
+    # race monitor guys continue work on their platform. They've begun working
+    # more towards a live model so this results focused code may be useful after
+    # the race but is currently contrary to hooking this up to influx.
 
+    logging.debug("Getting details for {}".format(race_id))
+    payload = { 'apiToken': token, 'raceID': race_id}
+    race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
+
+    series_id = race_details['Race']['SeriesID']
+    race_type_id = race_details['Race']['RaceTypeID']
+
+    logging.debug("Getting sessions for {}".format(race_id))
+    payload = { 'apiToken': token, 'raceID': race_id}
+    sessions_for_race = callRaceMonitor('/v2/Results/SessionsForRace', payload)
+
+    payload = { 'apiToken': token, 'raceID': race_id}
+    race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
+
+    payload = { 'apiToken': token, 'raceID': race_id}
+    get_session = callRaceMonitor('/v2/Live/GetSession', payload)
+    
+    print(sessions_for_race)
+    print(race_details)
+    print(get_session)
+    return
+
+    session_ids_for_race = []
+
+    # Get only session IDs in session_ids_for_race
+    #for i in sessions_for_race['Sessions']:
+        #session_ids_for_race.append(['ID'])
+
+    logging.debug("Race {} has {} sessions, {}".format(race_id, len(session_ids_for_race), session_ids_for_race))
+
+    last_session_id = sessions_for_race['Sessions'][-1]['ID']
+    logging.debug("Getting rankings from last session, {}.".format(sessions_for_race['Sessions'][-1]['ID']))
+    """    
