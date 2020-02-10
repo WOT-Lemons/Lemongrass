@@ -24,6 +24,7 @@ underline = "-" * 80
 race_id = ''
 racer_id = ''
 car_number = ''
+race_live = True
 
 parser = argparse.ArgumentParser(description='Interact with lap data')
 parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
@@ -90,7 +91,11 @@ def main():
 
     if response['Successful']:
         if response['IsLive'] is not True:
-            return
+            logging.info("Race {} is not live. Monitor and network modes disabled.".format(race_id))
+            if args.monitor_mode == True or args.network_mode == True:
+                 return
+            else:
+                oldRace(race_id, token)
         else:
             logging.info("Race {} is currently live.".format(race_id))
 
@@ -111,7 +116,7 @@ def main():
     payload = { 'apiToken': token, 'raceID': race_id}
     last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
 
-    print("GetSession: ", last_session_details['Successful'])
+    #print("GetSession: ", last_session_details['Successful'])
 
     competitors = last_session_details['Session']['Competitors']
 
@@ -200,6 +205,35 @@ def main():
         writeCSV(filename, laps)
 
     return 0
+
+def oldRace(race_id, token):
+    """
+    Function name: oldRace
+    Arguments: race_id, token
+    Description: Called if a race ID is not live. 
+    """
+
+    logging.debug("Getting details for {}".format(race_id))
+    payload = { 'apiToken': token, 'raceID': race_id}
+    race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
+
+    series_id = race_details['Race']['SeriesID']
+    race_type_id = race_details['Race']['RaceTypeID']
+
+    logging.debug("Getting sessions for {}".format(race_id))
+    payload = { 'apiToken': token, 'raceID': race_id}
+    sessions_for_race = callRaceMonitor('/v2/Results/SessionsForRace', payload)
+
+    payload = { 'apiToken': token, 'raceID': race_id}
+    race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
+
+    payload = { 'apiToken': token, 'raceID': race_id}
+    get_session = callRaceMonitor('/v2/Live/GetSession', payload)
+    
+    print(sessions_for_race)
+    print(race_details)
+    print(get_session)
+    return
 
 def callRaceMonitor(endpoint, payload):
     """
