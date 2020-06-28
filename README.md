@@ -62,11 +62,11 @@ Requirements.txt coming maybe someday.
 
 Usage:
 ```
-./lemongrass.py RACE_ID CAR_NUMBER
+./laps.py RACE_ID CAR_NUMBER
 ```
 
 ```
-23:46 $ ./lemongrass.py 87529 252
+23:46 $ ./laps.py 87529 252
 --------------------------------------------------------------------------------
 Pos. #    First Name                       Laps Competitor ID   Transponder ID
 --------------------------------------------------------------------------------
