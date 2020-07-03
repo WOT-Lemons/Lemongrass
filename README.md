@@ -36,7 +36,7 @@ stats_252
 client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', 'HEY_I_SAID_NO_PEEKING', 'stats_252')
 ```
 
-3. Git goin. [~~A feed from an ECUSim 2000 is available here.~~](https://stats.wotlemons.com/d/Heg64fsZk/ecusim-telemetry?orgId=1&refresh=5s&from=1580083825550&to=1580084125550)
+3. Git goin. [~~A feed from an ECUSim 2000 is available here.~~ user:guest password:guest](https://stats.wotlemons.com/d/Heg64fsZk/ecusim-telemetry?orgId=1&refresh=5s&from=1580083825550&to=1580084125550)
 
 
 
