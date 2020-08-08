@@ -1,4 +1,4 @@
-#!/usr/local/bin/python3
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function, unicode_literals
@@ -59,9 +59,9 @@ def main():
 
     # Load influx password
     if args.network_mode:
-        os.stat('.influxcred')
-        if os.path.exists('.influxcred'):
-            f = open('.influxcred', 'r')
+        os.stat('/home/pi/.influxcred')
+        if os.path.exists('/home/pi/.influxcred'):
+            f = open('/home/pi/.influxcred', 'r')
             influx_pass = f.readline().rstrip()
             if influx_pass != "":
                 logging.debug("Influx password opened and read")
@@ -189,6 +189,9 @@ def main():
     if args.monitor_mode == True:
         #Enter monitoring loop
         competitor_last_lap = laps[-1]['LapTime']
+        #if args.network_mode == True:
+            #monitorRoutine(car_number, laps, race_id, racer_id, token, influx=influx, start_epoc=start_epoc)
+        #else:
         monitorRoutine(car_number, laps, race_id, racer_id, token)
     else:  
         # Create pandas dataframe and print without index to remove row numbers
@@ -337,11 +340,16 @@ def monitorRoutine(car_number, laps, race_id, racer_id, token):
     while True:
         time.sleep(30)
         current_competitor_lap_times = refreshCompetitor(race_id, racer_id, token)
-        if current_competitor_lap_times[-1]['Lap'] == laps[-1]['Lap']:
-            pass
-        else:
-            print(current_competitor_lap_times[-1])
-    
+        #if current_competitor_lap_times[-1] == laps[-1]:
+        #    pass
+        #else:
+        if current_competitor_lap_times not in laps:
+            current_competitor_lap_time_df = pd.io.json.json_normalize(current_competitor_lap_times[-1])
+            print(current_competitor_lap_time_df.to_string(index=False, header=False))
+            #print(current_competitor_lap_times[-1])
+            laps.append(current_competitor_lap_times)
+            if args.network_mode == True:
+                pushInflux(racer_id, current_competitor_lap_times, influx, start_epoc)
     return
 
 def refreshCompetitor(race_id, racer_id, token):
