@@ -15,7 +15,7 @@ import pickle
 import time
 import signal
 import csv
-import pandas as pd
+import pandas 
 import logging
 import argparse
 
@@ -29,7 +29,7 @@ race_live = True
 parser = argparse.ArgumentParser(description='Interact with lap data')
 parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
 parser.add_argument('car_number', metavar='car_number', nargs=1, type=int, action='store')
-parser.add_argument('--monitor', dest='monitor_mode', action='store_true', help='Update when new data receieved')
+parser.add_argument('--monitor', dest='monitor_mode', action='store_true', help='Upandasate when new data receieved')
 parser.add_argument('--network', dest='network_mode', action='store_true', help='Forward lap data to network dest')
 parser.add_argument("-v", "--verbose", help="Set debug logging", action="store_true")
 parser.set_defaults(monitor_mode=False, network_mode=False)
@@ -45,7 +45,7 @@ def main():
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
     # Pandas default max rows truncating lap times. I don't expect a team to do more than 1024 laps.
-    pd.set_option("display.max_rows", 1024)
+    pandas.set_option("display.max_rows", 1024)
 
     # Load tokenfile
     if os.path.exists('./.token'):
@@ -59,9 +59,9 @@ def main():
 
     # Load influx password
     if args.network_mode:
-        os.stat('/home/pi/.influxcred')
-        if os.path.exists('/home/pi/.influxcred'):
-            f = open('/home/pi/.influxcred', 'r')
+        os.stat('/home/tom/.influxcred')
+        if os.path.exists('/home/tom/.influxcred'):
+            f = open('/home/tom/.influxcred', 'r')
             influx_pass = f.readline().rstrip()
             if influx_pass != "":
                 logging.debug("Influx password opened and read")
@@ -116,6 +116,7 @@ def main():
     payload = { 'apiToken': token, 'raceID': race_id}
     last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
 
+    print(last_session_details)
     #print("GetSession: ", last_session_details['Successful'])
 
     competitors = last_session_details['Session']['Competitors']
@@ -195,7 +196,7 @@ def main():
         monitorRoutine(car_number, laps, race_id, racer_id, token)
     else:  
         # Create pandas dataframe and print without index to remove row numbers
-        lap_time_df = pd.io.json.json_normalize(laps)
+        lap_time_df = pandas.json_normalize(laps)
         print(lap_time_df.to_string(index=False))
         print(underline)
 
@@ -216,9 +217,9 @@ def oldRace(race_id, token):
     Description: Called if a race ID is not live. 
     """
 
-    logging.debug("Getting details for {}".format(race_id))
+    logging.debug("Getting sessions for race for {}".format(race_id))
     payload = { 'apiToken': token, 'raceID': race_id}
-    race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
+    race_details = callRaceMonitor('/v2/Results/SessionsForRace', payload)
 
     series_id = race_details['Race']['SeriesID']
     race_type_id = race_details['Race']['RaceTypeID']
@@ -332,7 +333,7 @@ def monitorRoutine(car_number, laps, race_id, racer_id, token):
     print(underline)
 
     # Create pandas dataframe and print without index to remove row numbers
-    lap_time_df = pd.io.json.json_normalize(laps)
+    lap_time_df = pandas.json_normalize(laps)
     print(lap_time_df.to_string(index=False))
 
     #logging.debug("\nLast lap: {}\nLast lap: {} seconds\nSleep Time: {} seconds".format(last_lap_time, last_lap_seconds, sleep_interval))
@@ -344,7 +345,7 @@ def monitorRoutine(car_number, laps, race_id, racer_id, token):
         #    pass
         #else:
         if current_competitor_lap_times not in laps:
-            current_competitor_lap_time_df = pd.io.json.json_normalize(current_competitor_lap_times[-1])
+            current_competitor_lap_time_df = pandas.json_normalize(current_competitor_lap_times[-1])
             print(current_competitor_lap_time_df.to_string(index=False, header=False))
             #print(current_competitor_lap_times[-1])
             laps.append(current_competitor_lap_times)
