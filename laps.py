@@ -29,7 +29,7 @@ race_live = True
 parser = argparse.ArgumentParser(description='Interact with lap data')
 parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
 parser.add_argument('car_number', metavar='car_number', nargs=1, type=int, action='store')
-parser.add_argument('--monitor', dest='monitor_mode', action='store_true', help='Update when new data receieved')
+parser.add_argument('--monitor', dest='monitor_mode', action='store_true', help='Update when new data received')
 parser.add_argument('--network', dest='network_mode', action='store_true', help='Forward lap data to network dest')
 parser.add_argument("-v", "--verbose", help="Set debug logging", action="store_true")
 parser.set_defaults(monitor_mode=False, network_mode=False)
