@@ -29,7 +29,7 @@ race_live = True
 parser = argparse.ArgumentParser(description='Interact with lap data')
 parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
 parser.add_argument('car_number', metavar='car_number', nargs=1, type=int, action='store')
-parser.add_argument('--monitor', dest='monitor_mode', action='store_true', help='Upandasate when new data receieved')
+parser.add_argument('--monitor', dest='monitor_mode', action='store_true', help='Update when new data receieved')
 parser.add_argument('--network', dest='network_mode', action='store_true', help='Forward lap data to network dest')
 parser.add_argument("-v", "--verbose", help="Set debug logging", action="store_true")
 parser.set_defaults(monitor_mode=False, network_mode=False)
@@ -221,6 +221,8 @@ def oldRace(race_id, token):
     payload = { 'apiToken': token, 'raceID': race_id}
     race_details = callRaceMonitor('/v2/Results/SessionsForRace', payload)
 
+    print(race_details)
+    '''
     series_id = race_details['Race']['SeriesID']
     race_type_id = race_details['Race']['RaceTypeID']
 
@@ -237,6 +239,7 @@ def oldRace(race_id, token):
     print(sessions_for_race)
     print(race_details)
     print(get_session)
+    '''
     return
 
 def callRaceMonitor(endpoint, payload):
