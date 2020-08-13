@@ -25,7 +25,6 @@ race_id = ''
 racer_id = ''
 car_number = ''
 race_live = True
-sorted_competitors = False
 
 parser = argparse.ArgumentParser(description='Interact with lap data')
 parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
@@ -109,47 +108,30 @@ def main():
         if response['IsLive'] is not True:
             race_live = False
             logging.info("Race {} is not live. Monitor and network modes disabled.".format(race_id))
-            logging.debug("Results will return sorted competitors, setting sorted_competitors = True")
-            sorted_competitors = True
+            oldRace(race_id, token)
             if args.monitor_mode == True or args.network_mode == True:
                  return
-            else:
-                logging.debug("Getting sessions for race for {}".format(race_id))
-                payload = { 'apiToken': token, 'raceID': race_id}
-                race_details = callRaceMonitor('/v2/Results/SessionsForRace', payload)
-
-                session_ids_for_race = []
-                competitor_lap_times = []
-                complete_sessions = []
-
-                #Get only session IDs in session_ids_for_race
-                for i in race_details['Sessions']:
-                    session_ids_for_race.append(i['ID'])
-
-                logging.debug("Race {} has {} sessions, {}".format(race_id, len(session_ids_for_race), session_ids_for_race))
-
-                # Send request for all session_ids from a race, including lap times
-                for session_id in session_ids_for_race:
-                    logging.debug("Getting session details for {} including lap times.".format(session_id))
-                    #payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': True}
-                    payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': False}
-                    session_details = callRaceMonitor('/v2/Results/SessionDetails', payload)
-                    #if session_id is session_ids_for_race[-1]:
-                        #last_session_details = session_details['Session'])
         else:
             logging.info("Race {} is currently live.".format(race_id))
-            payload = { 'apiToken': token, 'raceID': race_id}
-            last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
+            liveRace(race_id, token, args.network_mode, args.monitor_mode)
 
-    # Sort competitors
-    #list_of_competitors = []
+    return 0
 
-    #pprint(session_details['Session']['SortedCompetitors'])
+def liveRace(race_id, token, network_mode, monitor_mode):
+    """
+    Function name: liveRace
+    Arguments: race_id, token
+    Description: Called if a race ID is live. 
+    """
+    payload = { 'apiToken': token, 'raceID': race_id}
+    last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
+    
+    list_of_competitors = []
 
-    #for competitor in session_details['Session']['SortedCompetitors']:
-    #    list_of_competitors.append(session_details['Session']['SortedCompetitors'][competitor])
+    for competitor in competitors:
+        list_of_competitors.append(competitors[competitor])
 
-    for competitor in session_details['Session']['SortedCompetitors']:
+    for competitor in list_of_competitors:
         for key, value in competitor.items():
             try: 
                 if key == 'Position':
@@ -157,107 +139,70 @@ def main():
             except ValueError: value = None 
 
     # Remove competitors (LOSERS)  with no position
-    #list_of_competitors = [racer for racer in list_of_competitors if racer['Number'] != '']
-    #print(type(session_details['Session']['SortedCompetitors']))
-    sorted_competitors = session_details['Session']['SortedCompetitors'].copy()
+    list_of_competitors = [racer for racer in list_of_competitors if racer['Number'] != '']
+    #print(list_of_competitors)
+        
+    for i in range(len(list_of_competitors)): 
+        print(list_of_competitors[i])
+        if list_of_competitors[i]['Position'] == '': 
+            print("Dirty data")
+            list_of_competitors.remove(list_of_competitors[i]) 
+            break
+        
+
+    sorted_competitors = sorted(list_of_competitors, key=lambda k: int(itemgetter('Position')(k))) 
+
     printRankings(sorted_competitors, race_live)
+
+    if session['ID']== session_ids_for_race[-1]:
+        competitors = session
+        
+    # Get car number from second argument or user input. 
+    while True:
+        try: 
+            car_number = sys.argv[2]
+            break
+        except IndexError:
+            car_number = input("Car Number: ")
+            break
+        try: car_number
+        except NameError: car_number = None
+
+    racer_id = car_number
+
+    competitor_details = []
+    competitor_lap_times = []
+
+    # Get lap times from live racer
+    logging.debug("Getting lap times for {} from race {}.".format(racer_id, race_id))
+    payload = { 'apiToken': token, 'RacerID': racer_id, 'RaceID': race_id}
+    response = callRaceMonitor('/v2/Live/GetRacer', payload)
+
+    if response['Successful'] == True:
+        laps = response['Details']['Laps']
+        competitor_details = response['Details']['Competitor']
+
+    #Make name 
+    competitor_details['Name'] = competitor_details['FirstName'] + competitor_details['LastName']
+
+    print(underline)
+    # Print competitor detail block
+    print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(competitor_details['Name'], competitor_details['Number'], competitor_details['Transponder']))
+    print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
+    print(underline)
     
-    if not sorted_competitors:
-        #TODO - Sort competitors
-        '''    
-        list_of_competitors = []
+    # Create pandas dataframe and print without index to remove row numbers
+    lap_time_df = pandas.json_normalize(laps)
+    print(lap_time_df.to_string(index=False))
+    print(underline)
+    
+    # If we're going to be starting network mode, check for presence of existing data.
+    if args.network_mode:
+        network_status = pushInflux(racer_id, laps, influx, start_epoc)
 
-        for competitor in competitors:
-            list_of_competitors.append(competitors[competitor])
-
-        #for racer in list_of_competitors:
-        #    print(racer)
-
-        for competitor in list_of_competitors:
-            for key, value in competitor.items():
-                try: 
-                    if key == 'Position':
-                        competitor[key] = int(value) 
-                except ValueError: value = None 
-
-        # Remove competitors (LOSERS)  with no position
-        list_of_competitors = [racer for racer in list_of_competitors if racer['Number'] != '']
-        #print(list_of_competitors)
-            
-        for i in range(len(list_of_competitors)): 
-            print(list_of_competitors[i])
-            if list_of_competitors[i]['Position'] == '': 
-                print("Dirty data")
-                list_of_competitors.remove(list_of_competitors[i]) 
-                break
-            
-
-        sorted_competitors = sorted(list_of_competitors, key=lambda k: int(itemgetter('Position')(k))) 
-
-        printRankings(sorted_competitors, race_live)
-
-        for session in session_details:
-        #pprint(session)
-        
-
-        if session['ID']== session_ids_for_race[-1]:
-            print(session)
-        #print(last_session_details)
-        #print("GetSession: ", last_session_details['Successful'])
-
-        #last_session_details = session_details['Session'][-1]
-            competitors = session
-        '''
-
-    if race_live:
-        # Get car number from second argument or user input. 
-        while True:
-            try: 
-                car_number = sys.argv[2]
-                break
-            except IndexError:
-                car_number = input("Car Number: ")
-                break
-            try: car_number
-            except NameError: car_number = None
-
-        racer_id = car_number
-
-        competitor_details = []
-        competitor_lap_times = []
-
-        # Get lap times from live racer
-        logging.debug("Getting lap times for {} from race {}.".format(racer_id, race_id))
-        payload = { 'apiToken': token, 'RacerID': racer_id, 'RaceID': race_id}
-        response = callRaceMonitor('/v2/Live/GetRacer', payload)
-
-        if response['Successful'] == True:
-            laps = response['Details']['Laps']
-            competitor_details = response['Details']['Competitor']
-
-        #Make name 
-        competitor_details['Name'] = competitor_details['FirstName'] + competitor_details['LastName']
-
-        print(underline)
-        # Print competitor detail block
-        print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(competitor_details['Name'], competitor_details['Number'], competitor_details['Transponder']))
-        print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
-        print(underline)
-        
-        # Create pandas dataframe and print without index to remove row numbers
-        lap_time_df = pandas.json_normalize(laps)
-        print(lap_time_df.to_string(index=False))
-        print(underline)
-
-        # If we're going to be starting network mode, check for presence of existing data.
-        if args.network_mode:
-            network_status = pushInflux(racer_id, laps, influx, start_epoc)
-
-        # Create filename and call function to write to CSV
-        filename = "{}-{}".format(competitor_details['Name'], race_id)
-        writeCSV(filename, laps)
-    else:
-        pass
+    # Create filename and call function to write to CSV
+    filename = "{}-{}".format(competitor_details['Name'], race_id)
+    writeCSV(filename, laps)
 
     if args.monitor_mode == True:
         #Enter monitoring loop
@@ -266,8 +211,8 @@ def main():
             #monitorRoutine(car_number, laps, race_id, racer_id, token, influx=influx, start_epoc=start_epoc)
         #else:
         monitorRoutine(car_number, laps, race_id, racer_id, token)
-
-    return 0
+    
+    return
 
 def oldRace(race_id, token):
     """
@@ -295,59 +240,19 @@ def oldRace(race_id, token):
         #payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': True}
         payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': False}
         session_details = callRaceMonitor('/v2/Results/SessionDetails', payload)
-        if session_id is session_ids_for_race[-1]:
-          pprint(session_details['Session'])
-
-        #competitor_lap_times = [ car_number for session_details['Session']['SortedCompetitors']['Number'] in session_details['Session']['SortedCompetitors'] ]
-        #pprint(competitor_lap_times)
-        #print(lap_times['Session']['SortedCompetitors'][37])
-        #printRankings(session_details['Session']['SortedCompetitors'], race_live)
-        for position in session_details['Session']['SortedCompetitors']:
-            #print(competitor['Number'])
-            #pprint(position['Position']['Number'][car_number])
-            
-            #if position['Number'] == car_number:
-            #print(position['FirstName'], position['Number'])
-            '''
-                competitor_lap_times = competitor_lap_times + competitor['LapTimes']
-                #pprint(competitor_lap_times)
-                #Make name 
-                #competitor_details['Name'] = competitor_details['FirstName'] + competitor_details['LastName']
-                print(underline)
-                # Print competitor detail block
-                print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(competitor['FirstName'], competitor['Number'], competitor['Transponder']))
-                print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor['BestPosition'],competitor['Position'], competitor['Laps'], competitor['BestLap'], competitor['BestLapTime'], competitor['TotalTime']))
-                print(underline)
-            '''
-
-    last_session_details = session_details['Session'][-1]
-    return last_session_details
-
-    #session_id = race_details['Sessions']['ID']
-    #payload = { 'apiToken': token, 'sessionID': session_id}
-    #session_details = callRaceMonitor('v2/Results/SessionDetails', payload)
-    #payload = { 'apiToken': token, 'raceID': race_id}
-    #grouped_sessions_for_race = callRaceMonitor('/v2/Results/GroupedSessionsForRace', payload)
-    #pprint(grouped_sessions_for_race)
-    '''
-    series_id = race_details['Race']['SeriesID']
-    race_type_id = race_details['Race']['RaceTypeID']
-
-    logging.debug("Getting sessions for {}".format(race_id))
-    payload = { 'apiToken': token, 'raceID': race_id}
-    sessions_for_race = callRaceMonitor('/v2/Results/SessionsForRace', payload)
-
-    payload = { 'apiToken': token, 'raceID': race_id}
-    race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
-
-    payload = { 'apiToken': token, 'raceID': race_id}
-    get_session = callRaceMonitor('/v2/Live/GetSession', payload)
     
-    print(sessions_for_race)
-    print(race_details)
-    print(get_session)
+    # Remove competitors (LOSERS)  with no position
+    for competitor in session_details['Session']['SortedCompetitors']:
+        for key, value in competitor.items():
+            try: 
+                if key == 'Position':
+                    competitor[key] = int(value) 
+            except ValueError: value = None 
+   
+    sorted_competitors = session_details['Session']['SortedCompetitors'].copy()
+    race_live = False
+    printRankings(sorted_competitors, race_live)
     return
-    '''
 
 def callRaceMonitor(endpoint, payload):
     """
