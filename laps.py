@@ -338,6 +338,7 @@ def callRaceMonitor(endpoint, payload):
         return json.loads(r.text)
     else:
         logging.error('Error {}'.format(r.status_code))
+        return json.loads(r.text)
     return
 
 def printRankings(sorted_competitors, race_live):
