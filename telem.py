@@ -9,21 +9,35 @@ import time
 from time import sleep
 import obd
 import datetime
+import socket
+import logging
+import logging.handlers
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger('telem')
+
+syslogHandler = logging.handlers.SysLogHandler(address=('localhost', 6514), facility='user', socktype=socket.SOCK_DGRAM)
+#stdoutHandler = logging.StreamHandler(sys.stdout) 
+
+logger.addHandler(syslogHandler)
+#logger.addHandler(stdoutHandler)
+
 
 # Load tokenfile
 if os.path.exists('/home/pi/.influxcred'):
-    print("Opening secret...")
-    f = open('/home/pi/.influxcred', 'r')
-    influx_pass = f.readline().rstrip()
-    #if influx_pass != "":
-        #logging.debug("Influx cred opened and read")
-    #else:
-        #logging.debug("Failed to open ~/.influxcred")
+  #logger.debug("Opening secret...")
+  f = open('/home/pi/.influxcred', 'r')
+  influx_pass = f.readline().rstrip()
+  if influx_pass != "":
+    logger.debug("Influx cred opened and read")
+  else:
+    logger.debug("Failed to open ~/.influxcred")
 
 client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'stats_252')
 
 def new_value(r):
-    ts = datetime.datetime.now()
+    client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'stats_252')
+    ts = datetime.datetime.utcnow()
     measurement = str(r.command).split(":")[1]
     measurement = measurement.replace(" ", "-")
     try:
@@ -37,22 +51,22 @@ def new_value(r):
         }]
         client.write_points(json_body)
     except TypeError:
-        print("Caught TypeError in new_value")
+        logger.debug("Caught TypeError in new_value")
         main()
     except AttributeError:
-        print("Caught AttributeError in new_value")
+        logger.debug("Caught AttributeError in new_value")
         main()
 
 def new_fuel_status(r):
     try:
-        if not r.value[1]:
+        if not r.value[0]:
             raise TypeError
     except TypeError:
-        print("Caught TypeError in new_fuel_status")
+        logger.debug("Caught TypeError in new_fuel_status")
         main()
     
-    ts = datetime.datetime.now()
-    measurement = str(r.command).split(":")[1]
+    ts = datetime.datetime.utcnow()
+    measurement = str(r.command).split(":")[0]
     measurement = measurement.replace(" ", "-")
     
     if "Open loop due to insufficient engine temperature" in r.value:
@@ -76,18 +90,23 @@ def new_fuel_status(r):
                 "value": fuel_status
             }
     }]
+
     client.write_points(json_body)
 
-def main():
 
+def main():
+    
+    obd.logger.setLevel(obd.logging.DEBUG)
     connection = obd.Async()
     status = connection.status()
     while "Car Connected" not in status:
-        print("No car connected, sleeping...")
+        connection.close()
+        logger.debug("No car connected, sleeping...")
+        sleep(1)
         connection = obd.Async()
         status = connection.status()
         
-    print(connection.status())
+    logger.debug(connection.status())
     supported_commands = connection.supported_commands
     watch_commands = {}
 
@@ -100,10 +119,9 @@ def main():
                             if "ELM" not in command.name:
                                 if "OBD" not in command.name:
                                     if "FUEL_STATUS" in command.name:
-                                        print(command.name, " supported, watching...")
+                                        #logger.info(command.name, " supported, watching...")
                                         connection.watch(command, callback=new_fuel_status)
                                     else:
-                                        print(command.name, " supported, watching...")
                                         connection.watch(command, callback=new_value)
 
     connection.start()
@@ -111,7 +129,6 @@ def main():
     while True:
         sleep(0.5)
 
-    #obd.logger.setLevel(obd.logging.INFO)
 
 if __name__== "__main__":
   main()
