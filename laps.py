@@ -258,7 +258,9 @@ def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
         payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': True}
         #payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': False}
         session_details = callRaceMonitor('/v2/Results/SessionDetails', payload)
-        sorted_competitors = session_details['Session']['SortedCompetitors'].copy()
+        try:
+            sorted_competitors = session_details['Session']['SortedCompetitors'].copy()
+        except TypeError: logging.error('session_details for {} empty: {}'.format(session_id, session_details))
 
         for competitor in sorted_competitors:
             #print(competitor['Number'])
@@ -269,6 +271,7 @@ def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
         
     if competitor_missing:
         logging.info('Car {} not found'.format(car_number))
+        print(underline)
         return 1
                 
     #lap_times = session_details['Session']['SortedCompetitors']
@@ -331,11 +334,10 @@ def callRaceMonitor(endpoint, payload):
     if r.status_code == 200:
         return json.loads(r.text)
     elif r.status_code == 429:
-        logging.error('{} - Too many requests, waiting 10 seconds...'.format(r.status_code))
-        time.sleep(10)
+        logging.error('{} - Too many requests, waiting 20 seconds...'.format(r.status_code))
+        time.sleep(20)
         r = callRaceMonitor(api_endpoint, payload)
         #r = requests.post(api_url, data = payload)
-        return json.loads(r.text)
     else:
         logging.error('Error {}'.format(r.status_code))
         return json.loads(r.text)
@@ -488,36 +490,30 @@ def pushInflux(racer_id, laps, influx, start_epoc, race_id):
     
     for lap in laps:
         current_driver = "Driver252"
-        '''
-        if int(lap['Lap']) <= 72:
-            current_driver = "Matt-Rotondo"
-        elif int(lap['Lap']) > 72 and int(lap['Lap']) <= 150:
-            current_driver = "Brian-Robideaux"
-        elif int(lap['Lap']) > 150 and int(lap['Lap']) <= 210:
-            current_driver = "Blair-Lichtenstein"
-        elif int(lap['Lap']) > 210 and int(lap['Lap']) <= 264:
-            current_driver = "Harrison-Co"
-        elif int(lap['Lap']) > 264 and int(lap['Lap']) <= 331:
-            current_driver = "Tom-McNulty"
-        elif int(lap['Lap']) > 331 and int(lap['Lap']) <= 361:
-            current_driver = "Brian-Robideaux"
-        elif int(lap['Lap']) > 361 and int(lap['Lap']) <= 398:
-            current_driver = "Blair-Lichtenstein"
-        elif int(lap['Lap']) > 398:
-            current_driver = "Harrison-Co"
-         '''
 
         # Convert HH:MM:SS.MS1 to get time lap completed
-        h, m, s = lap['TotalTime'].split(':')
-        s, ms = s.split('.')
+        try:
+            h, m, s = lap['TotalTime'].split(':')
+        except ValueError: h, m = 0
+        
+        try:
+            s, ms = s.split('.')
+        except ValueError: s, ms = 0
+        
         lap_finish_time_milliseconds = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
         #lap_seconds = int(h) * 3600 + int(m) * 60 + float(s)
         time_lap_completed_milliseconds = start_epoc + lap_finish_time_milliseconds
         lap_timestamp = str(time_lap_completed_milliseconds).replace(".", '')
         
         # Convert lap time to number of nanoseconds
-        h, m, s = lap['LapTime'].split(':')
-        s, ms = s.split('.')
+        try:
+            h, m, s = lap['LapTime'].split(':')
+        except ValueError: h, m = 0
+        
+        try:
+            s, ms = s.split('.')
+        except ValueError: s, ms = 0
+
         lap_time_in_milliseconds = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
         
         #print(lap_timestamp)
