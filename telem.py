@@ -58,6 +58,7 @@ def new_value(r):
         main()
 
 def new_fuel_status(r):
+    logger.debug(r.value)
     try:
         if not r.value[0]:
             raise TypeError
@@ -76,6 +77,7 @@ def new_fuel_status(r):
     elif "Open loop due to engine load OR fuel cut due to deceleration" in r.value:
         fuel_status = 2
     elif "Open loop due to system failure" in r.value:
+        print("Caught open loop due to system failure")
         fuel_status = 3
     elif "Closed loop, using at least one oxygen sensor but there is a fault in the feedback system" in r.value:
         fuel_status = 4
