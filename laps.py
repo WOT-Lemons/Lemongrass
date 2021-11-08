@@ -4,8 +4,10 @@
 # Laps.py
 # Interact with the RaceMonitor lap timing system
 # TODO:
-#   When in live race mode timestamps are tagging with an offset different than the historical view. 
-#   If this time offset can be adjusted it would be preferable to store the data in live view format over the weekend.
+#  When in live race mode timestamps are tagging with an offset different than the historical view. 
+#  If this time offset can be adjusted it would be preferable to store the data in live view format over the weekend.
+# TODO:
+#  Handle requests with 0 laps as race not lives
 
 from __future__ import print_function, unicode_literals
 from PyInquirer import prompt, print_json
@@ -33,6 +35,7 @@ car_number = ''
 selected_class = ''
 upper_class = ''
 race_live = True
+write_success = ''
 
 parser = argparse.ArgumentParser(description='Interact with lap data')
 parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
@@ -144,6 +147,9 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
     """
     payload = { 'apiToken': token, 'raceID': race_id}
     last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
+
+    #pvar = json.load(last_session_details)
+    #print(last_session_details.json)
     
     list_of_competitors = []
 
@@ -159,7 +165,7 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
 
     # Remove competitors (LOSERS)  with no position
     list_of_competitors = [racer for racer in list_of_competitors if racer['Number'] != '']
-    #print(list_of_competitors)
+    print(list_of_competitors)
         
     for i in range(len(list_of_competitors)): 
         print(list_of_competitors[i])
@@ -368,7 +374,7 @@ def printRankings(sorted_competitors, race_live):
     list_of_names = []
 
     for competitor in sorted_competitors:
-        #print(competitor)
+        print(competitor)
         for item in competitor:
             #print(item)
             if item == "FirstName" and item != '':
@@ -387,6 +393,7 @@ def printRankings(sorted_competitors, race_live):
         upper_class = args.selected_class[1].upper()
         logging.info("Current rankings for class {}.".format(upper_class))
         print(underline)
+        print(sorted_competitors)
         sorted_competitors_df = pandas.DataFrame(sorted_competitors, columns = ['Position', 'Number', 'Name', 'Laps', 'Category', 'Transponder'])
         sorted_competitors_df = sorted_competitors_df.replace({'Category': {'1': 'A', '2': 'DNQ', '3': 'B', '4': 'C'}})
         sorted_competitors_df = sorted_competitors_df[sorted_competitors_df['Category'].str.contains(upper_class)==True]
@@ -499,6 +506,7 @@ def pushInflux(racer_id, laps, influx, start_epoc, race_id):
                  Accepts a list of lap dicts and attempts to match
                  existing data. If there's new data, add it. 
     """
+    write_success = ''
     logging.debug("Entering network mode.")
     logging.debug('Start epoch in seconds: {}'.format(start_epoc))
     start_epoc = start_epoc * 1000
@@ -574,5 +582,4 @@ def pushInflux(racer_id, laps, influx, start_epoc, race_id):
 
 if __name__ == '__main__':
     main()
-
 
