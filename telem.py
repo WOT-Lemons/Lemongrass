@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
 
 syslogHandler = logging.handlers.SysLogHandler(address=('localhost', 6514), facility='user', socktype=socket.SOCK_DGRAM)
-#stdoutHandler = logging.StreamHandler(sys.stdout) 
+#stdoutHandler = logging.StreamHandler(sys.stdout)
 
 logger.addHandler(syslogHandler)
 #logger.addHandler(stdoutHandler)
@@ -33,13 +33,17 @@ if os.path.exists('/home/pi/.influxcred'):
   else:
     logger.debug("Failed to open ~/.influxcred")
 
-client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'stats_252')
+client = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'stats_252')
 
 def new_value(r):
-    client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'stats_252')
+    client = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'stats_252')
     ts = datetime.datetime.utcnow()
-    measurement = str(r.command).split(":")[1]
-    measurement = measurement.replace(" ", "-")
+    try:
+        measurement = str(r.command).split(":")[1]
+        measurement = measurement.replace(" ", "-")
+    except IndexError:
+        logger.debug("Caught IndexError in new_value")
+        main()
     try:
         json_body = [
         {
@@ -65,11 +69,11 @@ def new_fuel_status(r):
     except TypeError:
         logger.debug("Caught TypeError in new_fuel_status")
         main()
-    
+
     ts = datetime.datetime.utcnow()
     measurement = str(r.command).split(":")[0]
     measurement = measurement.replace(" ", "-")
-    
+
     if "Open loop due to insufficient engine temperature" in r.value:
         fuel_status = 0
     elif "Closed loop, using oxygen sensor feedback to determine fuel mix" in r.value:
@@ -97,7 +101,7 @@ def new_fuel_status(r):
 
 
 def main():
-    
+
     obd.logger.setLevel(obd.logging.DEBUG)
     connection = obd.Async()
     status = connection.status()
@@ -107,7 +111,7 @@ def main():
         sleep(1)
         connection = obd.Async()
         status = connection.status()
-        
+
     logger.debug(connection.status())
     supported_commands = connection.supported_commands
     watch_commands = {}
