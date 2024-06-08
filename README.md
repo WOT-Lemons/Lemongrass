@@ -1,13 +1,15 @@
 # Lemongrass
+
 This repo is where I keep the tools I use to work on my 24 Hours of Lemons team.
 
-# Telem
+## Telem
 
-# How to Use
+### How to Use
+
 1. Set up an influxDB instance.
 ![Image of InfluxDB starting in log](images/influx.png)
 
-```
+```plain
 > create user tom_admin with password 'THIS_IS_A_SECRET_TWAT' WITH ALL PRIVILEGES
 > SHOW USERS
 user		admin
@@ -32,19 +34,17 @@ stats_252
 ```
 
 2. Plug in a USB OBD Scanner and point telem at that instance.
-```
-client = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', 'HEY_I_SAID_NO_PEEKING', 'stats_252')
+
+```python
+client = InfluxDBClient('race.focism.com', 8086, 'car_252', 'HEY_I_SAID_NO_PEEKING', 'stats_252')
 ```
 
 3. Git goin. [~~A feed from an ECUSim 2000 is available here.~~ user:guest password:guest](https://stats.wotlemons.com/d/Heg64fsZk/ecusim-telemetry?orgId=1&refresh=5s&from=1580083825550&to=1580084125550)
 
+## Laps
 
+### How to Use
 
-
-
-# Laps
-
-# How to Use
 1. Get a Race Monitor API token
 https://www.race-monitor.com/Home/API
 
@@ -61,12 +61,13 @@ We need a Race ID to get information for. Head to https://www.race-monitor.com/L
 Requirements.txt coming maybe someday.
 
 Usage:
-```
+
+```shell
 ./laps.py RACE_ID CAR_NUMBER
 ```
 
-```
-18:40 $ ./laps.py 97220 252 
+```shell
+18:40 $ ./laps.py 97220 252
 2020-08-08 18:40:54,188 - INFO - Race 97220 is currently live.
 --------------------------------------------------------------------------------
 24 Hours of Lemons-Chargoggagogg	Started: 2020-08-07 09:00:00
@@ -75,85 +76,85 @@ Thompson Motor Speedway			Ends: 2020-08-08 18:00:00
 --------------------------------------------------------------------------------
 Pos. #    First Name                       Laps Competitor ID   Transponder ID
 --------------------------------------------------------------------------------
-1    992  SillyNannies2                    336  992             2-30  
+1    992  SillyNannies2                    336  992             2-30
 2    71   3 Pedal Mafia                    336  71              5409914
 3    41   3 Pedal Mafia                    335  41              9320976
 4    173  Bazinga Racing                   334  173             9237171
-5    99   FRS's Ugly Uncle                 334  99              1-28  
+5    99   FRS's Ugly Uncle                 334  99              1-28
 6    39   Overengineer'd Racing            326  39              725404
-7    88   88 Shades of Gray                325  88              1-24  
-8    213  SiSo Motorsports                 323  213             2-10  
-9    402  PunisherGP                       322  402             2-20  
-10   928  Scuderia Craptastic              321  928             2-28  
-11   496  Moot Point Racing                319  496             2-23  
-12   969  C-Team                           316  969             2-29  
-13   90   HAMMotorsports                   312  90              1-25  
-14   21   The Slow and Mello               312  21              1-6   
-15   55   Lemontarians                     305  55              1-12  
+7    88   88 Shades of Gray                325  88              1-24
+8    213  SiSo Motorsports                 323  213             2-10
+9    402  PunisherGP                       322  402             2-20
+10   928  Scuderia Craptastic              321  928             2-28
+11   496  Moot Point Racing                319  496             2-23
+12   969  C-Team                           316  969             2-29
+13   90   HAMMotorsports                   312  90              1-25
+14   21   The Slow and Mello               312  21              1-6
+15   55   Lemontarians                     305  55              1-12
 16   2    Murder Whorenet                  305  2               3568627
-17   292  SillyNannies3                    305  292             2-12  
+17   292  SillyNannies3                    305  292             2-12
 18   306  BostonWhiners                    302  306             8299765
 19   44   Wrecktum                         302  44              343902
 20   82   B.A.R.F Motorsports              301  82              1548772
-21   188  ALDS Assassins                   294  188             2-7   
+21   188  ALDS Assassins                   294  188             2-7
 22   777  Matt Ferenchak Motorsport (Silent But Deadly Racing) 293  777             961222
 23   461  Dumb As A Brick                  293  461             5348517
-24   316  Hit 'Em With the Hein Racing     290  316             2-16  
-25   199  FRS Ugly Uncle 2                 286  199             2-8   
-26   46   Brooklyn Bomb Squad              285  46              1-11  
+24   316  Hit 'Em With the Hein Racing     290  316             2-16
+25   199  FRS Ugly Uncle 2                 286  199             2-8
+26   46   Brooklyn Bomb Squad              285  46              1-11
 27   444  BostonWhiners                    281  444             3934044
-28   4    Flame Car Racing                 280  4               1-2   
-29   79   Hopes & Dreams Racing            280  79              1-19  
+28   4    Flame Car Racing                 280  4               1-2
+29   79   Hopes & Dreams Racing            280  79              1-19
 30   5    Duhhh-kota                       279  5               404255
 31   8    Team Duty                        278  8               1957371
 32   495  All Rhodes Racing                278  495             5682943
-33   85   Rusty Tear Racing                274  85              1-23  
+33   85   Rusty Tear Racing                274  85              1-23
 34   133  Cannibal Cafe Racing             273  133             9046109
 35   442  Punisher GP                      269  442             1904613
-36   3    Lemontarians                     267  3               1-1   
-37   252  Church of Focism                 264  252             2-11  
+36   3    Lemontarians                     267  3               1-1
+37   252  Church of Focism                 264  252             2-11
 38   196  Pro Bandaid Solutions            263  196             702279
 39   32   MarioKart Driving School /Bratva 263  32              1510569
-40   20   Del sol                          261  20              1-5   
-41   351  The  Cosmonaughts                260  351             2-18  
+40   20   Del sol                          261  20              1-5
+41   351  The  Cosmonaughts                260  351             2-18
 42   48   We Audi Be Faster I              259  48              1042046
 43   835  Top Off Racing                   258  835             9304196
-44   74   THE MIB                          256  74              1-17  
-45   111  Team Mean and the Mechanics      256  111             2-2   
-46   900  Saabs of Anarchy                 254  900             2-27  
-47   84   Altimate Warrior Racing          250  84              1-22  
-48   143  Neutralize And Destroy Racing    250  143             2-6   
-49   34   What are lug nuts?               245  34              1-8   
-50   36   The Rootes of All Evil           235  36              1-9   
-51   115  Twisted Metal                    234  115             2-3   
-52   70   Ghetto Art Rabbit                233  70              1-16  
-53   96   Our Mid Life Crisis              231  96              1-27  
-54   66   The Rowdy Rednecks               213  66              1-14  
-55   528  Lemons Plumbing and RACING       201  528             2-24  
-56   93   11th Chance                      201  93              1-26  
-57   314  The Science Project              195  314             2-15  
-58   888  Mome Rath Racing                 182  888             2-26  
+44   74   THE MIB                          256  74              1-17
+45   111  Team Mean and the Mechanics      256  111             2-2
+46   900  Saabs of Anarchy                 254  900             2-27
+47   84   Altimate Warrior Racing          250  84              1-22
+48   143  Neutralize And Destroy Racing    250  143             2-6
+49   34   What are lug nuts?               245  34              1-8
+50   36   The Rootes of All Evil           235  36              1-9
+51   115  Twisted Metal                    234  115             2-3
+52   70   Ghetto Art Rabbit                233  70              1-16
+53   96   Our Mid Life Crisis              231  96              1-27
+54   66   The Rowdy Rednecks               213  66              1-14
+55   528  Lemons Plumbing and RACING       201  528             2-24
+56   93   11th Chance                      201  93              1-26
+57   314  The Science Project              195  314             2-15
+58   888  Mome Rath Racing                 182  888             2-26
 59   222  Monkey House Racing              173  222             8177356
-60   60   Team Napa know it all's          171  60              1-13  
+60   60   Team Napa know it all's          171  60              1-13
 61   54   Somtingwong                      152  54              4193016
-62   13   Century Motor Cars               145  13              1-4   
-63   424  Old Guys with Angry Wives        113  424             2-21  
-64   609  Cheesebolt Enterprises           111  609             2-25  
-65   104  Days Asunder (Burgess Brothers Racing) 109  104             1-30  
-66   447  The Flying Scotsmen              99   447             2-22  
+62   13   Century Motor Cars               145  13              1-4
+63   424  Old Guys with Angry Wives        113  424             2-21
+64   609  Cheesebolt Enterprises           111  609             2-25
+65   104  Days Asunder (Burgess Brothers Racing) 109  104             1-30
+66   447  The Flying Scotsmen              99   447             2-22
 67   15   Nuthin' but a Z Thang            93   15              238308
 68   33   Great Globs of Oil /Bratva       93   33              1519918
-69   108  Frankenvette                     91   108             2-1   
-70   299  SillyNannies                     87   299             2-14  
-71   363  La Fiesta                        82   363             2-19  
-72   295  WeLikeTheTunaHere                79   295             2-13  
-73   206  British Empire Strikes Back      77   206             2-9   
-74   350  Scuderia VICTOR Motorsports      33   350             2-17  
+69   108  Frankenvette                     91   108             2-1
+70   299  SillyNannies                     87   299             2-14
+71   363  La Fiesta                        82   363             2-19
+72   295  WeLikeTheTunaHere                79   295             2-13
+73   206  British Empire Strikes Back      77   206             2-9
+74   350  Scuderia VICTOR Motorsports      33   350             2-17
 75   482  Dead Horse Beaters               29   482             8012270
-76   30   Tuga Racing                      23   30              1-7   
+76   30   Tuga Racing                      23   30              1-7
 77   147  Floodstang                       11   147             8746044
-78   101  Lemons Appliance Repair          7    101             1-29  
-79   121  Outatime                         2    121             2-5   
+78   101  Lemons Appliance Repair          7    101             1-29
+79   121  Outatime                         2    121             2-5
 --------------------------------------------------------------------------------
 --------------------------------------------------------------------------------
 Team: Church of Focism Car Number: 252  Transponder: 2-11
@@ -430,5 +431,4 @@ Total Time:	09:23:15.171
 --------------------------------------------------------------------------------
 2020-08-08 18:40:55,462 - INFO - Writing lap times to Church of Focism-97220.csv
 --------------------------------------------------------------------------------
-
 ```
