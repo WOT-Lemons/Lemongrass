@@ -4,7 +4,7 @@
 # Laps.py
 # Interact with the RaceMonitor lap timing system
 # TODO:
-#   When in live race mode timestamps are tagging with an offset different than the historical view. 
+#   When in live race mode timestamps are tagging with an offset different than the historical view.
 #   If this time offset can be adjusted it would be preferable to store the data in live view format over the weekend.
 
 from __future__ import print_function, unicode_literals
@@ -21,7 +21,7 @@ import pickle
 import time
 import signal
 import csv
-import pandas 
+import pandas
 import logging
 import argparse
 
@@ -53,7 +53,7 @@ def main():
         logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
     else:
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    
+
     # Pandas default max rows truncating lap times. I don't expect a team to do more than 1024 laps.
     pandas.set_option("display.max_rows", 1024)
 
@@ -76,16 +76,16 @@ def main():
             influx_pass = f.readline().rstrip()
             if influx_pass != "":
                 logging.debug("Influx password opened and read")
-                influx = InfluxDBClient('comms.wotlemons.com', 8086, 'car_252', influx_pass, 'laps_252')
+                influx = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'laps_252')
                 #logging.debug(influx)
         else:
             logging.error("Didn't open ~/.influxcred")
             sys.exit()
-    
-    # Get race_id from first argument or prompt user for it. 
+
+    # Get race_id from first argument or prompt user for it.
     # May add table of current races in the future to browse from the app.
     while True:
-        try: 
+        try:
             race_id = sys.argv[1]
             break
         except IndexError:
@@ -116,7 +116,7 @@ def main():
     # Check if race is live
     payload = { 'apiToken': token, 'RaceID': race_id}
     response = callRaceMonitor('/v2/Race/IsLive', payload)
-   
+
     if args.selected_class:
         selected_class = args.selected_class
         upper_class = selected_class.upper()
@@ -140,11 +140,11 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
     """
     Function name: liveRace
     Arguments: race_id, token
-    Description: Called if a race ID is live. 
+    Description: Called if a race ID is live.
     """
     payload = { 'apiToken': token, 'raceID': race_id}
     last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
-    
+
     list_of_competitors = []
 
     #for competitor in competitors:
@@ -152,32 +152,32 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
 
     for competitor in list_of_competitors:
         for key, value in competitor.items():
-            try: 
+            try:
                 if key == 'Position':
-                    competitor[key] = int(value) 
-            except ValueError: value = None 
+                    competitor[key] = int(value)
+            except ValueError: value = None
 
     # Remove competitors (LOSERS)  with no position
     list_of_competitors = [racer for racer in list_of_competitors if racer['Number'] != '']
     #print(list_of_competitors)
-        
-    for i in range(len(list_of_competitors)): 
+
+    for i in range(len(list_of_competitors)):
         print(list_of_competitors[i])
-        if list_of_competitors[i]['Position'] == '': 
+        if list_of_competitors[i]['Position'] == '':
             print("Dirty data")
-            list_of_competitors.remove(list_of_competitors[i]) 
+            list_of_competitors.remove(list_of_competitors[i])
             break
-        
-    sorted_competitors = sorted(list_of_competitors, key=lambda k: int(itemgetter('Position')(k))) 
+
+    sorted_competitors = sorted(list_of_competitors, key=lambda k: int(itemgetter('Position')(k)))
 
     printRankings(sorted_competitors, race_live)
 
     #if session['ID']== session_ids_for_race[-1]:
     #    competitors = session
-        
-    # Get car number from second argument or user input. 
+
+    # Get car number from second argument or user input.
     while True:
-        try: 
+        try:
             car_number = sys.argv[2]
             break
         except IndexError:
@@ -201,7 +201,7 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
         laps = response['Details']['Laps']
         competitor_details = response['Details']['Competitor']
 
-    #Make name 
+    #Make name
     competitor_details['Name'] = competitor_details['FirstName'] + competitor_details['LastName']
 
     print(underline)
@@ -209,12 +209,12 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
     print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(competitor_details['Name'], competitor_details['Number'], competitor_details['Transponder']))
     print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
     print(underline)
-    
+
     # Create pandas dataframe and print without index to remove row numbers
     lap_time_df = pandas.json_normalize(laps)
     print(lap_time_df.to_string(index=False))
     print(underline)
-    
+
     # If we're going to be starting network mode, check for presence of existing data.
     if network_mode:
         network_status = pushInflux(racer_id, laps, influx, start_epoc, race_id)
@@ -231,14 +231,14 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
             #monitorRoutine(car_number, laps, race_id, racer_id, token, influx=influx, start_epoc=start_epoc)
         #else:
         monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, token)
-    
+
     return
 
 def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
     """
     Function name: oldRace
     Arguments: race_id, token
-    Description: Called if a race ID is not live. 
+    Description: Called if a race ID is not live.
     """
 
     logging.debug("Getting sessions for race for {}".format(race_id))
@@ -254,9 +254,9 @@ def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
 
     logging.debug("Race {} has {} sessions, {}".format(race_id, len(session_ids_for_race), session_ids_for_race))
 
-    # Get car number from second argument or user input. 
+    # Get car number from second argument or user input.
     while True:
-        try: 
+        try:
             car_number = sys.argv[2]
             break
         except IndexError:
@@ -264,7 +264,7 @@ def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
             break
         try: car_number
         except NameError: car_number = None
-   
+
     laps = []
     competitor_missing = True
 
@@ -282,16 +282,16 @@ def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
                 competitor_missing = False
                 competitor_details = competitor
                 laps = laps + competitor['LapTimes'].copy()
-        
+
     if competitor_missing:
         logging.info('Car {} not found'.format(car_number))
         return 1
-                
+
     #lap_times = session_details['Session']['SortedCompetitors']
-    
+
     #race_live = False
     printRankings(sorted_competitors, race_live)
-    
+
     # Print competitor detail block
     print("Team: {:<6}\tCar Number: {:<4}\tTransponder: {}".format(competitor_details['FirstName'], competitor_details['Number'], competitor_details['Transponder']))
     print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(competitor_details['BestPosition'],competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
@@ -309,28 +309,28 @@ def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
     lap_time_df = pandas.json_normalize(laps)
     print(lap_time_df.to_string(index=False))
     print(underline)
-    
+
     # Remove competitors (LOSERS)  with no position
     for competitor in sorted_competitors:
         for key, value in competitor.items():
             #print(competitor.keys())
-            try: 
+            try:
                 if key == 'Position':
                     #print(value)
-                    competitor[key] = int(value) 
-            except ValueError: value = None 
-    
+                    competitor[key] = int(value)
+            except ValueError: value = None
+
     #pprint(lap_times)
-    
+
     # If we're going to be starting network mode, check for presence of existing data.
     if args.network_mode:
         network_status = pushInflux(racer_id, laps, influx, start_epoc, race_id)
-   
+
     if save_file:
         # Create filename and call function to write to CSV
         filename = "{}-{}-results".format(competitor_details['Name'], race_id)
         writeCSV(filename, laps)
-    
+
     return
 
 def callRaceMonitor(endpoint, payload):
@@ -349,7 +349,7 @@ def callRaceMonitor(endpoint, payload):
         logging.error('{} - Too many requests, waiting 10 seconds...'.format(r.status_code))
         time.sleep(10)
         r = requests.post(api_url, data = payload)
-    
+
     if r.status_code == 200:
         return json.loads(r.text)
     else:
@@ -360,7 +360,7 @@ def printRankings(sorted_competitors, race_live):
     """
     Function name: printRankings
     Arguments: sorted_competitors
-    Description: Take a dict of sorted competitors and print them 
+    Description: Take a dict of sorted competitors and print them
     in a nice table. Might be worth re-writing this with Pandas
     """
     global underline
@@ -381,8 +381,8 @@ def printRankings(sorted_competitors, race_live):
             competitor['Name'] = competitor['LastName']
         else:
             competitor['Name'] = competitor['FirstName']
-    
-    # Is class/category mode set? If so create a pandas dataframe accordingly. 
+
+    # Is class/category mode set? If so create a pandas dataframe accordingly.
     if args.selected_class:
         upper_class = args.selected_class[1].upper()
         logging.info("Current rankings for class {}.".format(upper_class))
@@ -394,7 +394,7 @@ def printRankings(sorted_competitors, race_live):
         sorted_competitors_df.rename(columns = {'Number':'#'}, inplace = True)
         sorted_competitors_df.rename(columns = {'Position':'Overall Pos.'}, inplace = True)
         sorted_competitors_df.reset_index(inplace=True, drop=True)
-        sorted_competitors_df.index += 1 
+        sorted_competitors_df.index += 1
         print(sorted_competitors_df.to_string(index=True))
     else:
         logging.info("Current overall rankings.")
@@ -413,7 +413,7 @@ def writeCSV(filename, competitor_lap_times):
     """
     Function name: writeCSV
     Arguments: filename, competitor_lap_times
-    Description: Write laptimes for a competitor to a file. 
+    Description: Write laptimes for a competitor to a file.
     """
     logging.info('Writing lap times to {}.csv'.format(filename))
     print(underline)
@@ -438,7 +438,7 @@ def monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, toke
     Arguments: car_number, last_lap_time
     Description: Destination routine for monitor mode.
                  Holds about the time of a lap and then checks
-                 to see if there's a new one. If there is none, 
+                 to see if there's a new one. If there is none,
                  hold until there is and then print a lap line. Repeat
     """
 
@@ -470,8 +470,8 @@ def refreshCompetitor(race_id, racer_id, token):
     """
     Function name: refreshCompetitor
     Arguments: car_number, last_lap_time
-    Description: If this is a new competitor, get all laps from all sessions. 
-                 If not, check only for the last lap from the last session. 
+    Description: If this is a new competitor, get all laps from all sessions.
+                 If not, check only for the last lap from the last session.
     """
 
     laps = []
@@ -485,8 +485,8 @@ def refreshCompetitor(race_id, racer_id, token):
     if response['Successful'] == True:
         laps = response['Details']['Laps']
         competitor_details = response['Details']['Competitor']
-    #except TypeError: return 
-    
+    #except TypeError: return
+
     logging.debug("Current lap is {} with time {}.".format(laps[-1]['Lap'], laps[-1]['LapTime']))
     response = []
     return laps
@@ -497,25 +497,25 @@ def pushInflux(racer_id, laps, influx, start_epoc, race_id):
     Arguments: laps
     Description: This function takes data and pushes it into influx.
                  Accepts a list of lap dicts and attempts to match
-                 existing data. If there's new data, add it. 
+                 existing data. If there's new data, add it.
     """
     logging.debug("Entering network mode.")
     logging.debug('Start epoch in seconds: {}'.format(start_epoc))
     start_epoc = start_epoc * 1000
     logging.debug("Start epoch in milliseconds: {}".format(start_epoc))
-   
+
     '''
-    output = subprocess.check_output(['dig', '@8.8.8.8', '+short', 'TXT', 'driver.wotlemons.com']) 
+    output = subprocess.check_output(['dig', '@8.8.8.8', '+short', 'TXT', 'driver.wotlemons.com'])
     dirty_driver = output.decode("utf-8")
     current_driver = dirty_driver.replace('"', '')
     current_driver = current_driver.rstrip()
     logging.info("Current driver: {}".format(current_driver))
     '''
     #logging.debug("Driver: {}".format(args.car_number))
-    
+
     if args.monitor_mode == False:
         logging.info("Writing laps to influx...")
-   
+
     current_driver = "Driver" + str(args.car_number[0])
 
     #TODO: Concat driver from args
@@ -546,12 +546,12 @@ def pushInflux(racer_id, laps, influx, start_epoc, race_id):
         #lap_seconds = int(h) * 3600 + int(m) * 60 + float(s)
         time_lap_completed_milliseconds = start_epoc + lap_finish_time_milliseconds
         lap_timestamp = str(time_lap_completed_milliseconds).replace(".", '')
-        
+
         # Convert lap time to number of nanoseconds
         h, m, s = lap['LapTime'].split(':')
         s, ms = s.split('.')
         lap_time_in_milliseconds = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
-        
+
         #print(lap_timestamp)
         data = []
         data.append('laps{},driver={} lap_no={},lap_time={},position={},flag_status="{}" {}'.format(race_id,current_driver,lap['Lap'],lap_time_in_milliseconds,lap['Position'],lap['FlagStatus'],lap_timestamp))
@@ -565,14 +565,12 @@ def pushInflux(racer_id, laps, influx, start_epoc, race_id):
 
     if write_success and args.monitor_mode == False:
         logging.info('All lap data written successfully')
-    
+
     print(underline)
     #query_data = influx.query('SELECT LAST(total_laps) FROM laps_252 BY *')
     #print(query_data.raw)
-    
+
     return
 
 if __name__ == '__main__':
     main()
-
-
