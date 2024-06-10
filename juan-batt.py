@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 #todo: rewrite for telegraf >> influx
 import time
 import socket
