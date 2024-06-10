@@ -4,7 +4,7 @@ This repo is where I keep the tools I use to work on my 24 Hours of Lemons team.
 
 ## Telem
 
-### How to Use
+### How to Use `telem.py`
 
 1. Set up an influxDB instance.
 ![Image of InfluxDB starting in log](images/influx.png)
@@ -43,7 +43,7 @@ client = InfluxDBClient('race.focism.com', 8086, 'car_252', 'HEY_I_SAID_NO_PEEKI
 
 ## Laps
 
-### How to Use
+### How to Use `laps.py`
 
 1. Get a Race Monitor API token
 https://www.race-monitor.com/Home/API
