@@ -1,5 +1,7 @@
-#!/usr/bin/python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+#
+# Last tested with Python 3.11.9 on 2024-06-08
 #
 # Laps.py
 # Interact with the RaceMonitor lap timing system
@@ -8,18 +10,13 @@
 #   If this time offset can be adjusted it would be preferable to store the data in live view format over the weekend.
 
 from __future__ import print_function, unicode_literals
-from PyInquirer import prompt, print_json
-from pprint import pprint
 from operator import itemgetter
 from influxdb import InfluxDBClient
 import os
 import sys
-import subprocess
 import requests
 import json
-import pickle
 import time
-import signal
 import csv
 import pandas
 import logging
