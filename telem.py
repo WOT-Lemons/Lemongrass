@@ -1,11 +1,8 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from pprint import pprint
 from influxdb import InfluxDBClient
 import os
-import sys
-import time
 from time import sleep
 import obd
 import datetime

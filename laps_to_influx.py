@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function, unicode_literals
@@ -39,10 +39,10 @@ def main():
         logging.error("Didn't open ./.token")
         sys.exit()
 
-    # Get race_id from first argument or prompt user for it. 
+    # Get race_id from first argument or prompt user for it.
     # May add table of current races in the future to browse from the app.
     while True:
-        try: 
+        try:
             race_id = sys.argv[1]
             break
         except IndexError:
@@ -53,10 +53,10 @@ def main():
             break
         try: race_id
         except NameError: race_id = None
-    
+
     """
-    # Originally race_details was needed for series_id and race_type_id. 
-    # This code may be useful in the future so it's staying. 
+    # Originally race_details was needed for series_id and race_type_id.
+    # This code may be useful in the future so it's staying.
 
     logging.debug("Getting details for {}".format(race_id))
     payload = { 'apiToken': token, 'raceID': race_id}
@@ -104,9 +104,9 @@ def main():
             }]
 
         client.write_points(json_body)
-    
+
         time.sleep(15)
-    
+
 def callRaceMonitor(endpoint, payload):
     """
     Function name: callRaceMonitor
