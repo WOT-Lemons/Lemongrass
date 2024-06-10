@@ -1,5 +1,7 @@
-#!/usr/bin/python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+#
+# Last tested with Python 3.11.9 on 2024-06-08
 #
 # Laps.py
 # Interact with the RaceMonitor lap timing system
