@@ -103,6 +103,9 @@ def main():
         FanSpeed = api.get_fan_speed()
         sendValue("fan-speed", FanSpeed)
 
+        WorkingMode = api.get_working_mode()
+        sendValue("working-mode", WorkingMode)
+
         sleep(0.5)
 
 if __name__== "__main__":
