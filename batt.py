@@ -55,56 +55,23 @@ def sendValue(measurement, value):
 def main():
 
     while True:
-        InputTemp = api.get_input_temp()
-        sendValue("input-temp", InputTemp)
-
-        InputVoltage = api.get_input_voltage()
-        sendValue("input-voltage", InputVoltage)
-
-        InputCurrent = api.get_input_current()
-        sendValue("input-current", InputCurrent)
-
-        InputPower = api.get_input_power()
-        sendValue("input-power", InputPower)
-
-        SystemTemp = api.get_system_temp()
-        sendValue("system-temp", SystemTemp)
-
-        SystemVoltage = api.get_system_voltage()
-        sendValue("system-voltage", SystemVoltage)
-
-        SystemCurrent = api.get_system_current()
-        sendValue("system-current", SystemCurrent)
-
-        SystemPower = api.get_system_power()
-        sendValue("system-power", SystemPower)
-
-        BatteryTemp = api.get_battery_temp()
-        sendValue("battery-temp", BatteryTemp)
-
-        BatteryVoltage = api.get_battery_voltage()
-        sendValue("battery-voltage", BatteryVoltage)
-
-        BatteryCurrent = api.get_battery_current()
-        sendValue("battery-current", BatteryCurrent)
-
-        BatteryPower = api.get_battery_power()
-        sendValue("battery-power", BatteryPower)
-
-        BatteryLevel = api.get_battery_level()
-        sendValue("battery-level", BatteryLevel)
-
-        BatteryHealth = api.get_battery_health()
-        sendValue("battery-health", BatteryHealth)
-
-        FanHealth = api.get_fan_health()
-        sendValue("fan-health", FanHealth)
-
-        FanSpeed = api.get_fan_speed()
-        sendValue("fan-speed", FanSpeed)
-
-        WorkingMode = api.get_working_mode()
-        sendValue("working-mode", WorkingMode)
+        sendValue("input-temp", api.get_input_temp())
+        sendValue("input-voltage", api.get_input_voltage())
+        sendValue("input-current", api.get_input_current())
+        sendValue("input-power", api.get_input_power())
+        sendValue("system-temp", api.get_system_temp())
+        sendValue("system-voltage", api.get_system_voltage())
+        sendValue("system-current", api.get_system_current())
+        sendValue("system-power", api.get_system_power())
+        sendValue("battery-temp", api.get_battery_temp())
+        sendValue("battery-voltage", api.get_battery_voltage())
+        sendValue("battery-current", api.get_battery_current())
+        sendValue("battery-power", api.get_battery_power())
+        sendValue("battery-level", api.get_battery_level())
+        sendValue("battery-health", api.get_battery_health())
+        sendValue("fan-health", api.get_fan_health())
+        sendValue("fan-speed", api.get_fan_speed())
+        sendValue("working-mode", api.get_working_mode())
 
         sleep(0.5)
 
