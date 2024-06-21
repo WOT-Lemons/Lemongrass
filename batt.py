@@ -62,6 +62,7 @@ def main():
         sendValue("battery-temp", api.get_battery_temp())
         sendValue("battery-voltage", api.get_battery_voltage())
         sendValue("fan-health", api.get_fan_health())
+        sendValue("fan-mode", api.get_fan_mode())
         sendValue("fan-speed", api.get_fan_speed())
         sendValue("input-current", api.get_input_current())
         sendValue("input-power", api.get_input_power())
