@@ -1,80 +1,81 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Sends power measurements to InfluxDB."""
 
-from pprint import pprint
-from influxdb import InfluxDBClient
-import os
-import sys
-import time
-from time import sleep
 import datetime
-import socket
 import logging
 import logging.handlers
+import os
+import socket
+
+from datetime import datetime, timezone
+from time import sleep
+from influxdb import InfluxDBClient
 from power_api import SixfabPower
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('batt')
 
-syslogHandler = logging.handlers.SysLogHandler(address=('localhost', 6514), facility='user', socktype=socket.SOCK_DGRAM)
+syslogHandler = logging.handlers.SysLogHandler(
+    address=('localhost', 6514),
+    facility='user',
+    socktype=socket.SOCK_DGRAM
+)
 #stdoutHandler = logging.StreamHandler(sys.stdout)
 
 logger.addHandler(syslogHandler)
 api = SixfabPower()
 #logger.addHandler(stdoutHandler)
 
-
 # Load tokenfile
 if os.path.exists('/home/pi/.influxcred'):
-  #logger.debug("Opening secret...")
-  f = open('/home/pi/.influxcred', 'r')
-  influx_pass = f.readline().rstrip()
-  if influx_pass != "":
-    logger.debug("Influx cred opened and read")
-  else:
-    logger.debug("Failed to open ~/.influxcred")
+    #logger.debug("Opening secret...")
+    with open('/home/pi/.influxcred', 'r', encoding='utf-8') as f:
+        influx_pass = f.readline().rstrip()
+        if influx_pass != "":
+            logger.debug("Influx cred opened and read")
+        else:
+            logger.debug("Failed to open ~/.influxcred")
 
 client = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'stats_252')
 
-def sendValue(measurement, value):
-
-    ts = datetime.datetime.utcnow()
+def send_value(measurement, value):
+    """Function that sends a measurement to InfluxDB."""
+    ts = datetime.now(timezone.utc)
 
     json_body = [
-    {
+      {
         "measurement": measurement,
         "time": ts,
-        "fields": {
-                "value": value
-            }
-    }]
+        "fields": { "value": value }
+      }
+    ]
     print(json_body)
     client.write_points(json_body)
 
-
 def main():
-
+    """Main loop of metrics collection."""
     while True:
-        sendValue("battery-current", api.get_battery_current())
-        sendValue("battery-health", api.get_battery_health())
-        sendValue("battery-level", api.get_battery_level())
-        sendValue("battery-power", api.get_battery_power())
-        sendValue("battery-temp", api.get_battery_temp())
-        sendValue("battery-voltage", api.get_battery_voltage())
-        sendValue("fan-health", api.get_fan_health())
-        sendValue("fan-mode", api.get_fan_mode())
-        sendValue("fan-speed", api.get_fan_speed())
-        sendValue("input-current", api.get_input_current())
-        sendValue("input-power", api.get_input_power())
-        sendValue("input-temp", api.get_input_temp())
-        sendValue("input-voltage", api.get_input_voltage())
-        sendValue("system-current", api.get_system_current())
-        sendValue("system-power", api.get_system_power())
-        sendValue("system-temp", api.get_system_temp())
-        sendValue("system-voltage", api.get_system_voltage())
-        sendValue("working-mode", api.get_working_mode())
+        send_value("battery-current", api.get_battery_current())
+        send_value("battery-health", api.get_battery_health())
+        send_value("battery-level", api.get_battery_level())
+        send_value("battery-power", api.get_battery_power())
+        send_value("battery-temp", api.get_battery_temp())
+        send_value("battery-voltage", api.get_battery_voltage())
+        send_value("fan-health", api.get_fan_health())
+        send_value("fan-mode", api.get_fan_mode())
+        send_value("fan-speed", api.get_fan_speed())
+        send_value("input-current", api.get_input_current())
+        send_value("input-power", api.get_input_power())
+        send_value("input-temp", api.get_input_temp())
+        send_value("input-voltage", api.get_input_voltage())
+        send_value("system-current", api.get_system_current())
+        send_value("system-power", api.get_system_power())
+        send_value("system-temp", api.get_system_temp())
+        send_value("system-voltage", api.get_system_voltage())
+        send_value("working-mode", api.get_working_mode())
 
         sleep(0.5)
 
 if __name__== "__main__":
-  main()
+    main()
