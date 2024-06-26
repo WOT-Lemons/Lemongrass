@@ -60,8 +60,10 @@ def main():
     """Main loop of metrics collection."""
     while True:
         send_value("battery-current", api.get_battery_current())
+        send_value("battery-design-capacity", api.get_battery_design_capacity())
         send_value("battery-health", api.get_battery_health())
         send_value("battery-level", api.get_battery_level())
+        send_value("battery-max-charge-level", api.get_battery_max_charge_level())
         send_value("battery-power", api.get_battery_power())
         send_value("battery-temp", api.get_battery_temp())
         send_value("battery-voltage", api.get_battery_voltage())
