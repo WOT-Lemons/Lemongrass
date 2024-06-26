@@ -24,8 +24,11 @@ syslogHandler = logging.handlers.SysLogHandler(
 #stdoutHandler = logging.StreamHandler(sys.stdout)
 
 logger.addHandler(syslogHandler)
-api = SixfabPower()
 #logger.addHandler(stdoutHandler)
+
+# Configure Sixfab Power API
+api = SixfabPower()
+api.set_fan_mode(1)
 
 # Load tokenfile
 if os.path.exists('/home/pi/.influxcred'):
