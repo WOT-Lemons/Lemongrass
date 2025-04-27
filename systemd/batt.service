@@ -1,13 +1,13 @@
 [Unit]
-Description = Send UPS metrics to influxdb
+Description=Send UPS metrics to influxdb
 After=network.target
 
 [Service]
-Type = simple
+Type=simple
 User=pi
-ExecStart = /home/pi/.pyenv/versions/Lemongrass-3.9.19/bin/python /home/pi/Lemongrass/batt.py
-Restart = always
-RestartSec = 5
+ExecStart=/home/pi/.pyenv/versions/Lemongrass-3.9.19/bin/python /home/pi/Lemongrass/batt.py
+Restart=always
+RestartSec=5
 
 [Install]
-WantedBy = multi-user.target
+WantedBy=multi-user.target
