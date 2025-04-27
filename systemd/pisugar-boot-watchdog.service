@@ -1,0 +1,12 @@
+[Unit]
+Description=PiSugar Boot Watchdog
+After=network.target
+
+[Service]
+Type=oneshot
+User=pi
+ExecStart=/home/pi/Lemongrass/pisugar-boot-watchdog.sh
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

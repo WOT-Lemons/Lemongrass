@@ -1,13 +1,13 @@
 [Unit]
-Description = Send OBD events to influxdb
+Description=Send OBD events to influxdb
 After=network.target
 
 [Service]
-Type = simple
+Type=simple
 User=pi
-ExecStart = /home/pi/.pyenv/versions/Lemongrass-3.9.19/bin/python /home/pi/Lemongrass/telem.py
-Restart = always
-RestartSec = 5
+ExecStart=/home/pi/.pyenv/versions/Lemongrass-3.9.19/bin/python /home/pi/Lemongrass/telem.py
+Restart=always
+RestartSec=5
 
 [Install]
-WantedBy = multi-user.target
+WantedBy=multi-user.target
