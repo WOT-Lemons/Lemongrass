@@ -1,0 +1,7 @@
+[flake8]
+indent-size = 2
+max-line-length = 120
+exclude = .git,__pycache__,build,dist
+# Use 2 spaces for indentation
+indent-after-paren = 2
+hang-closing = true

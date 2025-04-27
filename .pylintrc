@@ -1,0 +1,5 @@
+# Number of spaces of indent required inside a hanging or continued line.
+indent-after-paren=2
+# String used as indentation unit. This is usually "    " (4 spaces) or "\t" (1
+indent-string='  '
+max-line-length=120
