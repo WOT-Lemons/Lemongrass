@@ -47,13 +47,11 @@ def send_value(measurement, value):
   """Function that sends a measurement to InfluxDB."""
   ts = datetime.now(timezone.utc)
 
-  json_body = [
-      {
-          "measurement": measurement,
-          "time": ts,
-          "fields": {"value": value}
-          }
-      ]
+  json_body = [{
+      "measurement": measurement,
+      "time": ts,
+      "fields": {"value": value}
+      }]
   print(json_body)
   client.write_points(json_body)
 
