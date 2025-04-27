@@ -1,0 +1,14 @@
+[Unit]
+Description=PiSugar Watchdog
+After=network.target pisugar-boot-watchdog.service
+Requires=pisugar-boot-watchdog.service
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/home/pi/Lemongrass/pisugar-watchdog.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,3 +1,4 @@
 influxdb~=5.3
 obd~=0.7
 power-api~=0.3
+pisugar~=0.2
