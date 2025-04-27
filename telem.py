@@ -46,13 +46,11 @@ def new_value(r):
     logger.debug("Caught IndexError in new_value")
     main()
   try:
-    json_body = [
-        {
-            "measurement": measurement,
-            "time": ts,
-            "fields": {"value": r.value.magnitude}
-            }
-        ]
+    json_body = [{
+        "measurement": measurement,
+        "time": ts,
+        "fields": {"value": r.value.magnitude}
+        }]
     client.write_points(json_body)
   except TypeError:
     logger.debug("Caught TypeError in new_value")
@@ -90,16 +88,13 @@ def new_fuel_status(r):
   if fuel_status is None:
     fuel_status = 255
 
-  json_body = [
-      {
-          "measurement": measurement,
-          "time": ts,
-          "fields": {
-              "value": fuel_status
-              }
+  json_body = [{
+      "measurement": measurement,
+      "time": ts,
+      "fields": {
+          "value": fuel_status
           }
-      ]
-
+      }]
   client.write_points(json_body)
 
 
