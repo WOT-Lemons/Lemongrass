@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=pi
-ExecStart=/home/pi/.pyenv/versions/Lemongrass-3.11.12/bin/python /home/pi/Lemongrass/telem.py
+ExecStart=/home/pi/.pyenv/versions/Lemongrass-3.12.10/bin/python /home/pi/Lemongrass/telem.py
 Restart=always
 RestartSec=5
 
