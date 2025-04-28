@@ -46,17 +46,17 @@ client = InfluxDBClient('race.focism.com', 8086, 'car_252', 'HEY_I_SAID_NO_PEEKI
 ### How to Use `laps.py`
 
 1. Get a Race Monitor API token
-https://www.race-monitor.com/Home/API
+<https://www.race-monitor.com/Home/API>
 
 2. Put your token in a dotfile named token in the root of the project folder
 
 3. Get your race ID
 
-We need a Race ID to get information for. Head to https://www.race-monitor.com/Live/Race while your race is live to get this easily from the URL.
+We need a Race ID to get information for. Head to <https://www.race-monitor.com/Live/Race> while your race is live to get this easily from the URL.
 
 ![Image of Race ID in URL bar](https://i.imgur.com/1FQNvSb.png)
 
-3. Run the tool
+4. Run the tool
 
 Usage:
 
