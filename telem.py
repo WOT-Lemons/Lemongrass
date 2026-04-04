@@ -7,6 +7,7 @@ import logging
 import logging.handlers
 import os
 import socket
+import threading
 from time import sleep
 
 import obd
@@ -23,21 +24,22 @@ syslogHandler = logging.handlers.SysLogHandler(
 
 logger.addHandler(syslogHandler)
 
+EXCLUDED_PATTERNS = ["DTC", "MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
 
-# Load tokenfile
-if os.path.exists('/home/pi/.influxcred'):
-  f = open('/home/pi/.influxcred', 'r', encoding='utf-8')
-  influx_pass = f.readline().rstrip()
-  if influx_pass != "":
-    logger.debug("Influx cred opened and read")
-  else:
-    logger.debug("Failed to open ~/.influxcred")
+FUEL_STATUS_MAP = {
+    "Open loop due to insufficient engine temperature": 0,
+    "Closed loop, using oxygen sensor feedback to determine fuel mix": 1,
+    "Open loop due to engine load OR fuel cut due to deceleration": 2,
+    "Open loop due to system failure": 3,
+    "Closed loop, using at least one oxygen sensor but there is a fault in the feedback system": 4,
+}
 
-client = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'stats_252')
+pending_points = []
+pending_lock = threading.Lock()
 
 
 def new_value(r):
-  """Store new measurement in InfluxDB."""
+  """Queue new measurement for batch write to InfluxDB."""
   ts = datetime.now(timezone.utc)
   try:
     measurement = str(r.command).split(":")[1]
@@ -46,22 +48,23 @@ def new_value(r):
     logger.debug("Caught IndexError in new_value")
     return
   try:
-    json_body = [{
+    point = {
         "measurement": measurement,
         "time": ts,
         "fields": {"value": r.value.magnitude}
-        }]
-    client.write_points(json_body)
+        }
   except TypeError:
     logger.debug("Caught TypeError in new_value")
     return
   except AttributeError:
     logger.debug("Caught AttributeError in new_value")
     return
+  with pending_lock:
+    pending_points.append(point)
 
 
 def new_fuel_status(r):
-  """Store new fuel status in InfluxDB."""
+  """Queue new fuel status for batch write to InfluxDB."""
   logger.debug(r.value)
   try:
     if not r.value[0]:
@@ -74,33 +77,44 @@ def new_fuel_status(r):
   measurement = str(r.command).split(":", maxsplit=1)[0]
   measurement = measurement.replace(" ", "-")
 
-  fuel_status = None
-  if "Open loop due to insufficient engine temperature" in r.value:
-    fuel_status = 0
-  elif "Closed loop, using oxygen sensor feedback to determine fuel mix" in r.value:
-    fuel_status = 1
-  elif "Open loop due to engine load OR fuel cut due to deceleration" in r.value:
-    fuel_status = 2
-  elif "Open loop due to system failure" in r.value:
-    print("Caught open loop due to system failure")
-    fuel_status = 3
-  elif "Closed loop, using at least one oxygen sensor but there is a fault in the feedback system" in r.value:
-    fuel_status = 4
-  if fuel_status is None:
-    fuel_status = 255
+  fuel_status = next((v for k, v in FUEL_STATUS_MAP.items() if k in r.value), 255)
+  if fuel_status == 3:
+    logger.warning("Caught open loop due to system failure")
 
-  json_body = [{
-      "measurement": measurement,
-      "time": ts,
-      "fields": {
-          "value": fuel_status
-          }
-      }]
-  client.write_points(json_body)
+  with pending_lock:
+    pending_points.append({
+        "measurement": measurement,
+        "time": ts,
+        "fields": {"value": fuel_status}
+        })
+
+
+def flush_points(client):
+  """Write all pending points to InfluxDB in a single request."""
+  with pending_lock:
+    if not pending_points:
+      return
+    batch = pending_points.copy()
+    pending_points.clear()
+  client.write_points(batch)
 
 
 def main():
   """Main loop of OBD-II scraping"""
+  if os.path.exists('/home/pi/.influxcred'):
+    with open('/home/pi/.influxcred', 'r', encoding='utf-8') as f:
+      influx_pass = f.readline().rstrip()
+    if influx_pass:
+      logger.debug("Influx cred opened and read")
+    else:
+      logger.error("Failed to read ~/.influxcred")
+      return
+  else:
+    logger.error("~/.influxcred not found")
+    return
+
+  client = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'stats_252')
+
   obd.logger.setLevel(obd.logging.DEBUG)
   connection = obd.Async()
   status = connection.status()
@@ -112,19 +126,16 @@ def main():
     status = connection.status()
 
   logger.debug(connection.status())
-  supported_commands = connection.supported_commands
 
-  for command in supported_commands:
-    excluded_patterns = ["DTC", "MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
-    if not any(pattern in command.name for pattern in excluded_patterns):
-      if command.name != "STATUS":
-        if "FUEL_STATUS" in command.name:
-          # logger.info(f"{command.name} supported, watching...")
-          connection.watch(
-              command, callback=new_fuel_status)
-        else:
-          connection.watch(
-              command, callback=new_value)
+  for command in connection.supported_commands:
+    if any(pattern in command.name for pattern in EXCLUDED_PATTERNS):
+      continue
+    if command.name == "STATUS":
+      continue
+    if "FUEL_STATUS" in command.name:
+      connection.watch(command, callback=new_fuel_status)
+    else:
+      connection.watch(command, callback=new_value)
 
   try:
     connection.watch(obd.commands.ELM_VOLTAGE, callback=new_value)
@@ -135,6 +146,7 @@ def main():
 
   while True:
     sleep(0.5)
+    flush_points(client)
 
 
 if __name__ == "__main__":
