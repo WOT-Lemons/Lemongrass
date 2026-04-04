@@ -23,44 +23,51 @@ syslogHandler = logging.handlers.SysLogHandler(
 
 logger.addHandler(syslogHandler)
 
-# Configure PiSugar Server API
-pisugar_conn, pisugar_event_conn = pisugar.connect_tcp(socket.gethostname())
-pisugar_server = pisugar.PiSugarServer(pisugar_conn, pisugar_event_conn)
 
-# Load tokenfile
-if os.path.exists('/home/pi/.influxcred'):
-  with open('/home/pi/.influxcred', 'r', encoding='utf-8') as f:
-    influx_pass = f.readline().rstrip()
-    if influx_pass != "":
-      logger.debug("Influx cred opened and read")
-    else:
-      logger.debug("Failed to open ~/.influxcred")
-
-influx_client = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'stats_252')
-
-
-def send_value(measurement, value):
-  """Function that sends a measurement to InfluxDB."""
+def send_value(influx_client, measurement, value):
+  """Send a measurement to InfluxDB."""
   ts = datetime.now(timezone.utc)
-
   json_body = [{
       "measurement": measurement,
       "time": ts,
       "fields": {"value": value}
       }]
-  print(json_body)
-  influx_client.write_points(json_body)
+  logger.debug(json_body)
+  try:
+    influx_client.write_points(json_body)
+  except Exception:
+    logger.exception("Failed to write %s to InfluxDB", measurement)
 
 
 def main():
   """Main loop of metrics collection."""
+  if os.path.exists('/home/pi/.influxcred'):
+    with open('/home/pi/.influxcred', 'r', encoding='utf-8') as f:
+      influx_pass = f.readline().rstrip()
+    if influx_pass:
+      logger.debug("Influx cred opened and read")
+    else:
+      logger.error("Failed to read ~/.influxcred")
+      return
+  else:
+    logger.error("~/.influxcred not found")
+    return
+
+  influx_client = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'stats_252')
+
+  pisugar_conn, pisugar_event_conn = pisugar.connect_tcp(socket.gethostname())
+  pisugar_server = pisugar.PiSugarServer(pisugar_conn, pisugar_event_conn)
+
   while True:
-    send_value("pisugar-battery-charging", pisugar_server.get_battery_charging())
-    send_value("pisugar-battery-current", pisugar_server.get_battery_current())
-    send_value("pisugar-battery-level", pisugar_server.get_battery_level())
-    send_value("pisugar-battery-power-plugged", pisugar_server.get_battery_power_plugged())
-    send_value("pisugar-battery-voltage", pisugar_server.get_battery_voltage())
-    send_value("pisugar-temperature", pisugar_server.get_temperature())
+    try:
+      send_value(influx_client, "pisugar-battery-charging", pisugar_server.get_battery_charging())
+      send_value(influx_client, "pisugar-battery-current", pisugar_server.get_battery_current())
+      send_value(influx_client, "pisugar-battery-level", pisugar_server.get_battery_level())
+      send_value(influx_client, "pisugar-battery-power-plugged", pisugar_server.get_battery_power_plugged())
+      send_value(influx_client, "pisugar-battery-voltage", pisugar_server.get_battery_voltage())
+      send_value(influx_client, "pisugar-temperature", pisugar_server.get_temperature())
+    except Exception:
+      logger.exception("Error reading from PiSugar")
 
     sleep(0.5)
 
