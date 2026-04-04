@@ -1,6 +1,6 @@
 services:
   telem:
-    image: ghcr.io/wot-lemons/lemongrass:${TAG:-latest}
+    image: ghcr.io/wot-lemons/lemongrass-pi:${TAG:-latest}
     command: python telem.py
     restart: always
     devices:
@@ -9,7 +9,7 @@ services:
       - /home/pi/.influxcred:/home/pi/.influxcred:ro
 
   pisugar-monitor:
-    image: ghcr.io/wot-lemons/lemongrass:${TAG:-latest}
+    image: ghcr.io/wot-lemons/lemongrass-pi:${TAG:-latest}
     command: python pisugar-monitor.py
     restart: always
     network_mode: host

@@ -30,7 +30,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/wot-lemons/lemongrass
+          images: ghcr.io/wot-lemons/lemongrass-pi
           tags: |
             type=ref,event=pr
             type=semver,pattern={{version}}
