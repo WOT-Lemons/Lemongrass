@@ -22,31 +22,24 @@ import pandas
 import logging
 import argparse
 
-new_competitor = True
 underline = "-" * 80
-race_id = ''
-racer_id = ''
-car_number = ''
-selected_class = ''
-upper_class = ''
-race_live = True
-
-parser = argparse.ArgumentParser(description='Interact with lap data')
-parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
-parser.add_argument('car_number', metavar='car_number', nargs=1, type=int, action='store')
-parser.add_argument('-c', '--class', metavar='A/B/C', dest='selected_class', nargs='?',
-                    type=ascii, action='store', help='Group or filter by class (A/B/C)')
-parser.add_argument('-m', '--monitor', dest='monitor_mode', default=False,
-                    action='store_true', help='Update when new data received')
-parser.add_argument('-n', '--network', dest='network_mode', default=False,
-                    action='store_true', help='Forward lap data via influx')
-parser.add_argument('-o', '--out', dest='save_file', default=False, action='store_true', help='Write lap times to CSV')
-parser.add_argument('-v', '--verbose', help="Set debug logging", action='store_true')
-parser.set_defaults(monitor_mode=False, network_mode=False)
-args = parser.parse_args()
 
 
 def main():
+
+  parser = argparse.ArgumentParser(description='Interact with lap data')
+  parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
+  parser.add_argument('car_number', metavar='car_number', nargs=1, type=int, action='store')
+  parser.add_argument('-c', '--class', metavar='A/B/C', dest='selected_class', nargs='?',
+                      type=ascii, action='store', help='Group or filter by class (A/B/C)')
+  parser.add_argument('-m', '--monitor', dest='monitor_mode', default=False,
+                      action='store_true', help='Update when new data received')
+  parser.add_argument('-n', '--network', dest='network_mode', default=False,
+                      action='store_true', help='Forward lap data via influx')
+  parser.add_argument('-o', '--out', dest='save_file', default=False, action='store_true', help='Write lap times to CSV')
+  parser.add_argument('-v', '--verbose', help="Set debug logging", action='store_true')
+  parser.set_defaults(monitor_mode=False, network_mode=False)
+  args = parser.parse_args()
 
   if args.verbose:
     print(args)
@@ -83,27 +76,14 @@ def main():
       logging.error("Didn't open ~/.influxcred")
       sys.exit()
 
-  # Get race_id from first argument or prompt user for it.
-  # May add table of current races in the future to browse from the app.
-  while True:
-    try:
-      race_id = sys.argv[1]
-      break
-    except IndexError:
-      # payload = { 'apiToken': token}
-      # current_races = callRaceMonitor('/v2/Account/CurrentRaces', payload)
-      # print(current_races['Races'])
-      race_id = input("Race ID: ")
-      break
-    try:
-      race_id
-    except NameError:
-      race_id = None
+  race_id = str(args.race_id[0])
+  car_number = str(args.car_number[0])
+  selected_class = args.selected_class
 
   payload = {'apiToken': token, 'raceID': race_id}
   race_details = callRaceMonitor('/v2/Race/RaceDetails', payload)
 
-  if race_details['Successful'] == True:
+  if race_details['Successful']:
     race_name = race_details['Race']['Name']
     start_epoc = race_details['Race']['StartDateEpoc']
     logging.debug("StartDateEpoc: {}".format(start_epoc))
@@ -120,27 +100,24 @@ def main():
   payload = {'apiToken': token, 'RaceID': race_id}
   response = callRaceMonitor('/v2/Race/IsLive', payload)
 
-  if args.selected_class:
-    selected_class = args.selected_class
-    upper_class = selected_class.upper()
-    logging.info("Sorting results for class {}.".format(upper_class))
+  if selected_class:
+    logging.info("Sorting results for class {}.".format(selected_class.upper()))
 
   if response['Successful']:
     if response['IsLive'] is not True:
-      race_live = False
       logging.info("Race {} is not live. Monitor mode disabled.".format(race_id))
       if args.monitor_mode:
         return
       else:
-        oldRace(race_id, token, args.network_mode, start_epoc, influx, args.save_file)
+        oldRace(race_id, car_number, token, args.network_mode, start_epoc, influx, args.save_file, selected_class)
     else:
       logging.info("Race {} is currently live.".format(race_id))
-      liveRace(race_id, token, args.network_mode, args.monitor_mode, influx, start_epoc, args.save_file)
+      liveRace(race_id, car_number, token, args.network_mode, args.monitor_mode, influx, start_epoc, args.save_file, selected_class)
 
   return 0
 
 
-def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, save_file):
+def liveRace(race_id, car_number, token, network_mode, monitor_mode, influx, start_epoc, save_file, selected_class):
   """
   Function name: liveRace
   Arguments: race_id, token
@@ -175,23 +152,10 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
 
   sorted_competitors = sorted(list_of_competitors, key=lambda k: int(itemgetter('Position')(k)))
 
-  printRankings(sorted_competitors, race_live)
+  printRankings(sorted_competitors, True, selected_class)
 
   # if session['ID']== session_ids_for_race[-1]:
   #    competitors = session
-
-  # Get car number from second argument or user input.
-  while True:
-    try:
-      car_number = sys.argv[2]
-      break
-    except IndexError:
-      car_number = input("Car Number: ")
-      break
-    try:
-      car_number
-    except NameError:
-      car_number = None
 
   racer_id = car_number
   # logging.debug("Racer ID: {}".format(racer_id))
@@ -204,7 +168,7 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
   payload = {'apiToken': token, 'RacerID': racer_id, 'RaceID': race_id}
   response = callRaceMonitor('/v2/Live/GetRacer', payload)
 
-  if response['Successful'] == True:
+  if response['Successful']:
     laps = response['Details']['Laps']
     competitor_details = response['Details']['Competitor']
 
@@ -226,7 +190,7 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
 
   # If we're going to be starting network mode, check for presence of existing data.
   if network_mode:
-    network_status = pushInflux(racer_id, laps, influx, start_epoc, race_id)
+    network_status = pushInflux(racer_id, laps, influx, start_epoc, race_id, False, car_number)
 
   if save_file:
     # Create filename and call function to write to CSV
@@ -236,15 +200,12 @@ def liveRace(race_id, token, network_mode, monitor_mode, influx, start_epoc, sav
   if monitor_mode:
     # Enter monitoring loop
     competitor_last_lap = laps[-1]['LapTime']
-    # if args.network_mode == True:
-    # monitorRoutine(car_number, laps, race_id, racer_id, token, influx=influx, start_epoc=start_epoc)
-    # else:
-    monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, token)
+    monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, token, network_mode)
 
   return
 
 
-def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
+def oldRace(race_id, car_number, token, network_mode, start_epoc, influx, save_file, selected_class):
   """
   Function name: oldRace
   Arguments: race_id, token
@@ -263,19 +224,6 @@ def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
     session_ids_for_race.append(i['ID'])
 
   logging.debug("Race {} has {} sessions, {}".format(race_id, len(session_ids_for_race), session_ids_for_race))
-
-  # Get car number from second argument or user input.
-  while True:
-    try:
-      car_number = sys.argv[2]
-      break
-    except IndexError:
-      car_number = input("Car Number: ")
-      break
-    try:
-      car_number
-    except NameError:
-      car_number = None
 
   laps = []
   competitor_missing = True
@@ -301,8 +249,7 @@ def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
 
   # lap_times = session_details['Session']['SortedCompetitors']
 
-  # race_live = False
-  printRankings(sorted_competitors, race_live)
+  printRankings(sorted_competitors, False, selected_class)
 
   # Print competitor detail block
   print("Team: {:<6}\tCar Number: {:<4}\tTransponder: {}".format(
@@ -338,8 +285,8 @@ def oldRace(race_id, token, network_mode, start_epoc, influx, save_file):
   # pprint(lap_times)
 
   # If we're going to be starting network mode, check for presence of existing data.
-  if args.network_mode:
-    network_status = pushInflux(racer_id, laps, influx, start_epoc, race_id)
+  if network_mode:
+    network_status = pushInflux(car_number, laps, influx, start_epoc, race_id, False, car_number)
 
   if save_file:
     # Create filename and call function to write to CSV
@@ -373,7 +320,7 @@ def callRaceMonitor(endpoint, payload):
   return
 
 
-def printRankings(sorted_competitors, race_live):
+def printRankings(sorted_competitors, race_live, selected_class):
   """
   Function name: printRankings
   Arguments: sorted_competitors
@@ -400,8 +347,8 @@ def printRankings(sorted_competitors, race_live):
       competitor['Name'] = competitor['FirstName']
 
   # Is class/category mode set? If so create a pandas dataframe accordingly.
-  if args.selected_class:
-    upper_class = args.selected_class[1].upper()
+  if selected_class:
+    upper_class = selected_class[1].upper()
     logging.info("Current rankings for class {}.".format(upper_class))
     print(underline)
     sorted_competitors_df = pandas.DataFrame(
@@ -453,7 +400,7 @@ def writeCSV(filename, competitor_lap_times):
   return
 
 
-def monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, token):
+def monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, token, network_mode):
   """
   Function name: monitorRoutine
   Arguments: car_number, last_lap_time
@@ -483,8 +430,8 @@ def monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, toke
       print(current_competitor_lap_time_df.to_string(index=False, header=False))
       # print(current_competitor_lap_times[-1])
       laps.append(current_competitor_lap_times[-1])
-      if args.network_mode == True:
-        pushInflux(racer_id, current_competitor_lap_times, influx, start_epoc, race_id)
+      if network_mode:
+        pushInflux(racer_id, current_competitor_lap_times, influx, start_epoc, race_id, True, car_number)
   return
 
 
@@ -504,7 +451,7 @@ def refreshCompetitor(race_id, racer_id, token):
   response = callRaceMonitor('/v2/Live/GetRacer', payload)
 
   # try:
-  if response['Successful'] == True:
+  if response['Successful']:
     laps = response['Details']['Laps']
     competitor_details = response['Details']['Competitor']
   # except TypeError: return
@@ -514,7 +461,7 @@ def refreshCompetitor(race_id, racer_id, token):
   return laps
 
 
-def pushInflux(racer_id, laps, influx, start_epoc, race_id):
+def pushInflux(racer_id, laps, influx, start_epoc, race_id, monitor_mode, car_number):
   """
   Function name: pushInflux
   Arguments: laps
@@ -534,12 +481,12 @@ def pushInflux(racer_id, laps, influx, start_epoc, race_id):
     current_driver = current_driver.rstrip()
     logging.info("Current driver: {}".format(current_driver))
     '''
-  # logging.debug("Driver: {}".format(args.car_number))
+  # logging.debug("Driver: {}".format(car_number))
 
-  if args.monitor_mode == False:
+  if not monitor_mode:
     logging.info("Writing laps to influx...")
 
-  current_driver = "Driver" + str(args.car_number[0])
+  current_driver = "Driver" + str(car_number)
 
   # TODO: Concat driver from args
   for lap in laps:
@@ -587,7 +534,7 @@ def pushInflux(racer_id, laps, influx, start_epoc, race_id):
       logging.debug('Writing lap failed.')
       write_success = False
 
-  if write_success and args.monitor_mode == False:
+  if write_success and not monitor_mode:
     logging.info('All lap data written successfully')
 
   print(underline)
