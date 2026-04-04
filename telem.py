@@ -44,7 +44,7 @@ def new_value(r):
     measurement = measurement.replace(" ", "-")
   except IndexError:
     logger.debug("Caught IndexError in new_value")
-    main()
+    return
   try:
     json_body = [{
         "measurement": measurement,
@@ -54,10 +54,10 @@ def new_value(r):
     client.write_points(json_body)
   except TypeError:
     logger.debug("Caught TypeError in new_value")
-    main()
+    return
   except AttributeError:
     logger.debug("Caught AttributeError in new_value")
-    main()
+    return
 
 
 def new_fuel_status(r):
