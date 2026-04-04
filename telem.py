@@ -68,12 +68,13 @@ def new_fuel_status(r):
       raise TypeError
   except TypeError:
     logger.debug("Caught TypeError in new_fuel_status")
-    main()
+    return
 
   ts = datetime.now(timezone.utc)
   measurement = str(r.command).split(":", maxsplit=1)[0]
   measurement = measurement.replace(" ", "-")
 
+  fuel_status = None
   if "Open loop due to insufficient engine temperature" in r.value:
     fuel_status = 0
   elif "Closed loop, using oxygen sensor feedback to determine fuel mix" in r.value:
