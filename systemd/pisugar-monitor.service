@@ -1,6 +1,6 @@
 [Unit]
 Description=Send PiSugar metrics to influxdb
-After=network.target
+After=network-online.target
 
 [Service]
 Type=simple

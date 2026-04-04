@@ -1,7 +1,6 @@
 [Unit]
 Description=Reverse SSH Service
-ConditionPathExists=|/usr/bin
-After=network.target
+After=network-online.target
 
 [Service]
 User=pi
