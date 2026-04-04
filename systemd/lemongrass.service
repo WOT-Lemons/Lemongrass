@@ -1,0 +1,15 @@
+[Unit]
+Description=Lemongrass telemetry containers
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/Lemongrass
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
