@@ -1,0 +1,17 @@
+services:
+  telem:
+    build: .
+    command: python telem.py
+    restart: always
+    devices:
+      - /dev/obd:/dev/obd
+    volumes:
+      - /home/pi/.influxcred:/home/pi/.influxcred:ro
+
+  pisugar-monitor:
+    build: .
+    command: python pisugar-monitor.py
+    restart: always
+    network_mode: host
+    volumes:
+      - /home/pi/.influxcred:/home/pi/.influxcred:ro
