@@ -1,0 +1,9 @@
+# Fill in idVendor and idProduct for your OBD-II adapter.
+# To find them, plug in the adapter and run ONE of:
+#   udevadm info -a -n /dev/ttyUSB0 | grep -E 'idVendor|idProduct'
+#   lsusb   (find the OBD-II adapter line; ID format is VVVV:PPPP)
+#
+# Replace XXXX and YYYY below with the real values, then on the Pi run:
+#   sudo cp udev/99-obd.rules /etc/udev/rules.d/99-obd.rules
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="tty", ATTRS{idVendor}=="XXXX", ATTRS{idProduct}=="YYYY", SYMLINK+="obd"
