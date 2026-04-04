@@ -478,11 +478,11 @@ def monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, toke
     # if current_competitor_lap_times[-1] == laps[-1]:
     #    pass
     # else:
-    if current_competitor_lap_times not in laps:
+    if current_competitor_lap_times[-1] not in laps:
       current_competitor_lap_time_df = pandas.json_normalize(current_competitor_lap_times[-1])
       print(current_competitor_lap_time_df.to_string(index=False, header=False))
       # print(current_competitor_lap_times[-1])
-      laps.append(current_competitor_lap_times)
+      laps.append(current_competitor_lap_times[-1])
       if args.network_mode == True:
         pushInflux(racer_id, current_competitor_lap_times, influx, start_epoc, race_id)
   return
