@@ -64,6 +64,26 @@ Usage:
 ./laps.py RACE_ID CAR_NUMBER
 ```
 
+### Running with Docker
+
+Pull the latest image:
+
+```shell
+docker pull ghcr.io/wot-lemons/lemongrass-laps:latest
+```
+
+Run it, mounting your `.token` file and (if using `-n`) your `.influxcred`:
+
+```shell
+docker run --rm -it \
+  -v /path/to/.token:/app/.token:ro \
+  -v /home/pi/.influxcred:/home/pi/.influxcred:ro \
+  ghcr.io/wot-lemons/lemongrass-laps:latest \
+  RACE_ID CAR_NUMBER [flags]
+```
+
+To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass-laps`.
+
 ```shell
 18:40 $ ./laps.py 97220 252
 2020-08-08 18:40:54,188 - INFO - Race 97220 is currently live.
