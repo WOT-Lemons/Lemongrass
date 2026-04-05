@@ -91,7 +91,10 @@ def flush_points(write_api):
       return
     batch = pending_points.copy()
     pending_points.clear()
-  write_api.write(bucket='stats_252', record=batch)
+  try:
+    write_api.write(bucket='stats_252', record=batch)
+  except Exception as e:
+    logger.error('Failed to write %d points to InfluxDB: %s', len(batch), e)
 
 
 def main():
