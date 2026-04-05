@@ -11,7 +11,8 @@ import threading
 from time import sleep
 
 import obd
-from influxdb import InfluxDBClient
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
@@ -48,11 +49,7 @@ def new_value(r):
     logger.debug("Caught IndexError in new_value")
     return
   try:
-    point = {
-        "measurement": measurement,
-        "time": ts,
-        "fields": {"value": r.value.magnitude}
-        }
+    point = Point(measurement).field("value", r.value.magnitude).time(ts)
   except TypeError:
     logger.debug("Caught TypeError in new_value")
     return
@@ -82,29 +79,27 @@ def new_fuel_status(r):
     logger.warning("Caught open loop due to system failure")
 
   with pending_lock:
-    pending_points.append({
-        "measurement": measurement,
-        "time": ts,
-        "fields": {"value": fuel_status}
-        })
+    pending_points.append(
+        Point(measurement).field("value", fuel_status).time(ts)
+    )
 
 
-def flush_points(client):
+def flush_points(write_api):
   """Write all pending points to InfluxDB in a single request."""
   with pending_lock:
     if not pending_points:
       return
     batch = pending_points.copy()
     pending_points.clear()
-  client.write_points(batch)
+  write_api.write(bucket='stats_252', record=batch)
 
 
 def main():
   """Main loop of OBD-II scraping"""
   if os.path.exists('/home/pi/.influxcred'):
     with open('/home/pi/.influxcred', 'r', encoding='utf-8') as f:
-      influx_pass = f.readline().rstrip()
-    if influx_pass:
+      influx_token = f.readline().rstrip()
+    if influx_token:
       logger.debug("Influx cred opened and read")
     else:
       logger.error("Failed to read ~/.influxcred")
@@ -113,40 +108,41 @@ def main():
     logger.error("~/.influxcred not found")
     return
 
-  client = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'stats_252')
+  with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
+    write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
-  obd.logger.setLevel(obd.logging.DEBUG)
-  connection = obd.Async()
-  status = connection.status()
-  while "Car Connected" not in status:
-    connection.close()
-    logger.debug("No car connected, sleeping...")
-    sleep(1)
+    obd.logger.setLevel(obd.logging.DEBUG)
     connection = obd.Async()
     status = connection.status()
+    while "Car Connected" not in status:
+      connection.close()
+      logger.debug("No car connected, sleeping...")
+      sleep(1)
+      connection = obd.Async()
+      status = connection.status()
 
-  logger.debug(connection.status())
+    logger.debug(connection.status())
 
-  for command in connection.supported_commands:
-    if any(pattern in command.name for pattern in EXCLUDED_PATTERNS):
-      continue
-    if command.name == "STATUS":
-      continue
-    if "FUEL_STATUS" in command.name:
-      connection.watch(command, callback=new_fuel_status)
-    else:
-      connection.watch(command, callback=new_value)
+    for command in connection.supported_commands:
+      if any(pattern in command.name for pattern in EXCLUDED_PATTERNS):
+        continue
+      if command.name == "STATUS":
+        continue
+      if "FUEL_STATUS" in command.name:
+        connection.watch(command, callback=new_fuel_status)
+      else:
+        connection.watch(command, callback=new_value)
 
-  try:
-    connection.watch(obd.commands.ELM_VOLTAGE, callback=new_value)
-  except (AttributeError, KeyError):
-    logger.warning("Could not find voltage monitoring command - skipping")
+    try:
+      connection.watch(obd.commands.ELM_VOLTAGE, callback=new_value)
+    except (AttributeError, KeyError):
+      logger.warning("Could not find voltage monitoring command - skipping")
 
-  connection.start()
+    connection.start()
 
-  while True:
-    sleep(0.5)
-    flush_points(client)
+    while True:
+      sleep(0.5)
+      flush_points(write_api)
 
 
 if __name__ == "__main__":
