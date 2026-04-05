@@ -354,11 +354,9 @@ def printRankings(sorted_competitors, race_live, selected_class):
     sorted_competitors_df = pandas.DataFrame(
         sorted_competitors, columns=['Position', 'Number', 'Name', 'Laps', 'Category', 'Transponder'])
     sorted_competitors_df = sorted_competitors_df.replace({'Category': {'1': 'A', '2': 'DNQ', '3': 'B', '4': 'C'}})
-    sorted_competitors_df = sorted_competitors_df[sorted_competitors_df['Category'].str.contains(upper_class) == True]
-    sorted_competitors_df.rename(columns={'Category': 'Class'}, inplace=True)
-    sorted_competitors_df.rename(columns={'Number': '#'}, inplace=True)
-    sorted_competitors_df.rename(columns={'Position': 'Overall Pos.'}, inplace=True)
-    sorted_competitors_df.reset_index(inplace=True, drop=True)
+    sorted_competitors_df = sorted_competitors_df[sorted_competitors_df['Category'].str.contains(upper_class)]
+    sorted_competitors_df = sorted_competitors_df.rename(columns={'Category': 'Class', 'Number': '#', 'Position': 'Overall Pos.'})
+    sorted_competitors_df = sorted_competitors_df.reset_index(drop=True)
     sorted_competitors_df.index += 1
     print(sorted_competitors_df.to_string(index=True))
   else:
@@ -366,9 +364,7 @@ def printRankings(sorted_competitors, race_live, selected_class):
     print(underline)
     sorted_competitors_df = pandas.DataFrame(
         sorted_competitors, columns=['Position', 'Number', 'Name', 'Laps', 'Transponder'])
-    sorted_competitors_df.set_index('Position')
-    sorted_competitors_df.rename(columns={'Number': '#'}, inplace=True)
-    sorted_competitors_df.rename(columns={'Position': 'Pos.'}, inplace=True)
+    sorted_competitors_df = sorted_competitors_df.rename(columns={'Number': '#', 'Position': 'Pos.'})
     print(sorted_competitors_df.to_string(index=False))
 
   print(underline)
