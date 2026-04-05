@@ -11,7 +11,8 @@
 
 from __future__ import print_function, unicode_literals
 from operator import itemgetter
-from influxdb import InfluxDBClient
+from influxdb_client import InfluxDBClient
+from influxdb_client.client.write_api import SYNCHRONOUS
 import os
 import sys
 import requests
@@ -61,17 +62,19 @@ def main():
     logging.error("Didn't open ./.token")
     sys.exit()
 
-  influx = ''
-  # Load influx password
+  write_api = None
+  # Load influx token
   if args.network_mode:
-    os.stat('/home/pi/.influxcred')
     if os.path.exists('/home/pi/.influxcred'):
-      f = open('/home/pi/.influxcred', 'r')
-      influx_pass = f.readline().rstrip()
-      if influx_pass != "":
-        logging.debug("Influx password opened and read")
-        influx = InfluxDBClient('race.focism.com', 8086, 'car_252', influx_pass, 'laps_252')
-        # logging.debug(influx)
+      with open('/home/pi/.influxcred', 'r') as f:
+        influx_token = f.readline().rstrip()
+      if influx_token:
+        logging.debug("Influx token opened and read")
+        influx_client = InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism')
+        write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+      else:
+        logging.error("Failed to read ~/.influxcred")
+        sys.exit()
     else:
       logging.error("Didn't open ~/.influxcred")
       sys.exit()
@@ -109,15 +112,15 @@ def main():
       if args.monitor_mode:
         return
       else:
-        oldRace(race_id, car_number, token, args.network_mode, start_epoc, influx, args.save_file, selected_class)
+        oldRace(race_id, car_number, token, args.network_mode, start_epoc, write_api, args.save_file, selected_class)
     else:
       logging.info("Race {} is currently live.".format(race_id))
-      liveRace(race_id, car_number, token, args.network_mode, args.monitor_mode, influx, start_epoc, args.save_file, selected_class)
+      liveRace(race_id, car_number, token, args.network_mode, args.monitor_mode, write_api, start_epoc, args.save_file, selected_class)
 
   return 0
 
 
-def liveRace(race_id, car_number, token, network_mode, monitor_mode, influx, start_epoc, save_file, selected_class):
+def liveRace(race_id, car_number, token, network_mode, monitor_mode, write_api, start_epoc, save_file, selected_class):
   """
   Function name: liveRace
   Arguments: race_id, token
@@ -190,7 +193,7 @@ def liveRace(race_id, car_number, token, network_mode, monitor_mode, influx, sta
 
   # If we're going to be starting network mode, check for presence of existing data.
   if network_mode:
-    network_status = pushInflux(racer_id, laps, influx, start_epoc, race_id, False, car_number)
+    network_status = pushInflux(racer_id, laps, write_api, start_epoc, race_id, False, car_number)
 
   if save_file:
     # Create filename and call function to write to CSV
@@ -200,12 +203,12 @@ def liveRace(race_id, car_number, token, network_mode, monitor_mode, influx, sta
   if monitor_mode:
     # Enter monitoring loop
     competitor_last_lap = laps[-1]['LapTime']
-    monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, token, network_mode)
+    monitorRoutine(car_number, laps, race_id, racer_id, write_api, start_epoc, token, network_mode)
 
   return
 
 
-def oldRace(race_id, car_number, token, network_mode, start_epoc, influx, save_file, selected_class):
+def oldRace(race_id, car_number, token, network_mode, start_epoc, write_api, save_file, selected_class):
   """
   Function name: oldRace
   Arguments: race_id, token
@@ -286,7 +289,7 @@ def oldRace(race_id, car_number, token, network_mode, start_epoc, influx, save_f
 
   # If we're going to be starting network mode, check for presence of existing data.
   if network_mode:
-    network_status = pushInflux(car_number, laps, influx, start_epoc, race_id, False, car_number)
+    network_status = pushInflux(car_number, laps, write_api, start_epoc, race_id, False, car_number)
 
   if save_file:
     # Create filename and call function to write to CSV
@@ -396,7 +399,7 @@ def writeCSV(filename, competitor_lap_times):
   return
 
 
-def monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, token, network_mode):
+def monitorRoutine(car_number, laps, race_id, racer_id, write_api, start_epoc, token, network_mode):
   """
   Function name: monitorRoutine
   Arguments: car_number, last_lap_time
@@ -427,7 +430,7 @@ def monitorRoutine(car_number, laps, race_id, racer_id, influx, start_epoc, toke
       # print(current_competitor_lap_times[-1])
       laps.append(current_competitor_lap_times[-1])
       if network_mode:
-        pushInflux(racer_id, current_competitor_lap_times, influx, start_epoc, race_id, True, car_number)
+        pushInflux(racer_id, current_competitor_lap_times, write_api, start_epoc, race_id, True, car_number)
   return
 
 
@@ -457,7 +460,7 @@ def refreshCompetitor(race_id, racer_id, token):
   return laps
 
 
-def pushInflux(racer_id, laps, influx, start_epoc, race_id, monitor_mode, car_number):
+def pushInflux(racer_id, laps, write_api, start_epoc, race_id, monitor_mode, car_number):
   """
   Function name: pushInflux
   Arguments: laps
@@ -524,10 +527,11 @@ def pushInflux(racer_id, laps, influx, start_epoc, race_id, monitor_mode, car_nu
         race_id, current_driver, lap['Lap'], lap_time_in_milliseconds, lap['Position'], lap['FlagStatus'], lap_timestamp))
     logging.debug(data)
     write_success = True
-    if influx.write_points(data, database='laps_252', protocol='line', time_precision='ms'):
+    try:
+      write_api.write(bucket='laps_252', record=data, write_precision='ms')
       logging.debug('Lap {} written to influx.'.format(lap['Lap']))
-    else:
-      logging.debug('Writing lap failed.')
+    except Exception as e:
+      logging.debug('Writing lap failed: {}'.format(e))
       write_success = False
 
   if write_success and not monitor_mode:
