@@ -62,7 +62,6 @@ def main():
     logging.error("Didn't open ./.token")
     sys.exit()
 
-  write_api = None
   # Load influx token
   if args.network_mode:
     if os.path.exists('/home/pi/.influxcred'):
@@ -70,8 +69,6 @@ def main():
         influx_token = f.readline().rstrip()
       if influx_token:
         logging.debug("Influx token opened and read")
-        influx_client = InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism')
-        write_api = influx_client.write_api(write_options=SYNCHRONOUS)
       else:
         logging.error("Failed to read ~/.influxcred")
         sys.exit()
@@ -106,16 +103,31 @@ def main():
   if selected_class:
     logging.info("Sorting results for class {}.".format(selected_class.upper()))
 
-  if response['Successful']:
-    if response['IsLive'] is not True:
-      logging.info("Race {} is not live. Monitor mode disabled.".format(race_id))
-      if args.monitor_mode:
-        return
+  if args.network_mode:
+    with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
+      write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+      if response['Successful']:
+        if response['IsLive'] is not True:
+          logging.info("Race {} is not live. Monitor mode disabled.".format(race_id))
+          if args.monitor_mode:
+            return
+          else:
+            oldRace(race_id, car_number, token, args.network_mode, start_epoc, write_api, args.save_file, selected_class)
+        else:
+          logging.info("Race {} is currently live.".format(race_id))
+          liveRace(race_id, car_number, token, args.network_mode, args.monitor_mode, write_api, start_epoc, args.save_file, selected_class)
+  else:
+    write_api = None
+    if response['Successful']:
+      if response['IsLive'] is not True:
+        logging.info("Race {} is not live. Monitor mode disabled.".format(race_id))
+        if args.monitor_mode:
+          return
+        else:
+          oldRace(race_id, car_number, token, args.network_mode, start_epoc, write_api, args.save_file, selected_class)
       else:
-        oldRace(race_id, car_number, token, args.network_mode, start_epoc, write_api, args.save_file, selected_class)
-    else:
-      logging.info("Race {} is currently live.".format(race_id))
-      liveRace(race_id, car_number, token, args.network_mode, args.monitor_mode, write_api, start_epoc, args.save_file, selected_class)
+        logging.info("Race {} is currently live.".format(race_id))
+        liveRace(race_id, car_number, token, args.network_mode, args.monitor_mode, write_api, start_epoc, args.save_file, selected_class)
 
   return 0
 
@@ -488,6 +500,7 @@ def pushInflux(racer_id, laps, write_api, start_epoc, race_id, monitor_mode, car
   current_driver = "Driver" + str(car_number)
 
   # TODO: Concat driver from args
+  write_success = True
   for lap in laps:
     '''
     if int(lap['Lap']) <= 72:
@@ -526,12 +539,11 @@ def pushInflux(racer_id, laps, write_api, start_epoc, race_id, monitor_mode, car
     data.append('laps{},driver={} lap_no={},lap_time={},position={},flag_status="{}" {}'.format(
         race_id, current_driver, lap['Lap'], lap_time_in_milliseconds, lap['Position'], lap['FlagStatus'], lap_timestamp))
     logging.debug(data)
-    write_success = True
     try:
       write_api.write(bucket='laps_252', record=data, write_precision='ms')
       logging.debug('Lap {} written to influx.'.format(lap['Lap']))
     except Exception as e:
-      logging.debug('Writing lap failed: {}'.format(e))
+      logging.error('Writing lap failed: {}'.format(e))
       write_success = False
 
   if write_success and not monitor_mode:
