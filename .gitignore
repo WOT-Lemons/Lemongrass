@@ -8,3 +8,4 @@ personal/
 personal/*
 .DS_Store
 .influxcred
+docs/superpowers/*
