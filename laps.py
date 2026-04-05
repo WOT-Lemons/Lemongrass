@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-# Last tested with Python 3.11.9 on 2024-06-08
+# Last tested with Python 3.12 on 2026-04-05
 #
 # Laps.py
 # Interact with the RaceMonitor lap timing system
@@ -63,9 +63,10 @@ def main():
     sys.exit()
 
   # Load influx token
+  influx_token = None
   if args.network_mode:
     if os.path.exists('/home/pi/.influxcred'):
-      with open('/home/pi/.influxcred', 'r') as f:
+      with open('/home/pi/.influxcred', 'r', encoding='utf-8') as f:
         influx_token = f.readline().rstrip()
       if influx_token:
         logging.debug("Influx token opened and read")
