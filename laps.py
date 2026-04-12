@@ -541,7 +541,7 @@ def pushInflux(racer_id, laps, write_api, start_epoc, race_id, monitor_mode, car
         race_id, current_driver, lap['Lap'], lap_time_in_milliseconds, lap['Position'], lap['FlagStatus'], lap_timestamp))
     logging.debug(data)
     try:
-      write_api.write(bucket='laps_252', record=data, write_precision='ms')
+      write_api.write(bucket='laps_252/autogen', record=data, write_precision='ms')
       logging.debug('Lap {} written to influx.'.format(lap['Lap']))
     except Exception as e:
       logging.error('Writing lap failed: {}'.format(e))
