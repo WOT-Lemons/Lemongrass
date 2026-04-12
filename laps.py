@@ -558,4 +558,8 @@ def pushInflux(racer_id, laps, write_api, start_epoc, race_id, monitor_mode, car
 
 
 if __name__ == '__main__':
-  main()
+  try:
+    main()
+  except KeyboardInterrupt:
+    logging.info("Interrupted, exiting.")
+    sys.exit(0)
