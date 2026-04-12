@@ -92,7 +92,7 @@ def flush_points(write_api):
     batch = pending_points.copy()
     pending_points.clear()
   try:
-    write_api.write(bucket='stats_252', record=batch)
+    write_api.write(bucket='stats_252/autogen', record=batch)
   except Exception as e:
     logger.error('Failed to write %d points to InfluxDB: %s', len(batch), e)
     with pending_lock:
