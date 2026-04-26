@@ -6,8 +6,8 @@ services:
     restart: always
     devices:
       - /dev/obd:/dev/obd
-    volumes:
-      - /home/pi/.influxcred:/home/pi/.influxcred:ro
+    environment:
+      - INFLUX_TOKEN=${INFLUX_TOKEN}
 
   pisugar-monitor:
     container_name: pisugar-monitor
@@ -15,5 +15,21 @@ services:
     command: python pisugar-monitor.py
     restart: always
     network_mode: host
+    environment:
+      - INFLUX_TOKEN=${INFLUX_TOKEN}
+
+  telegraf:
+    container_name: telegraf
+    image: telegraf@sha256:88eb354ac9926d70791b70558d69644b527b3c7e6f02c2af9165038a3e306a6d # 1.38.3
+    restart: always
+    network_mode: host
     volumes:
-      - /home/pi/.influxcred:/home/pi/.influxcred:ro
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/hostfs:ro,rslave
+    environment:
+      - HOST_PROC=/host/proc
+      - HOST_SYS=/host/sys
+      - HOST_MOUNT_PREFIX=/hostfs
+      - INFLUX_TOKEN=${INFLUX_TOKEN}

@@ -52,29 +52,16 @@ def main():
   # Pandas default max rows truncating lap times. I don't expect a team to do more than 1024 laps.
   pandas.set_option("display.max_rows", 1024)
 
-  # Load tokenfile
-  if os.path.exists('./.token'):
-    f = open('.token', 'r')
-    token = f.readline().rstrip()
-    if token != "":
-      logging.debug("Tokenfile opened and read")
-  else:
-    logging.error("Didn't open ./.token")
+  token = os.environ.get('RACEMONITOR_TOKEN')
+  if not token:
+    logging.error("RACEMONITOR_TOKEN environment variable not set")
     sys.exit()
 
-  # Load influx token
   influx_token = None
   if args.network_mode:
-    if os.path.exists('/home/pi/.influxcred'):
-      with open('/home/pi/.influxcred', 'r', encoding='utf-8') as f:
-        influx_token = f.readline().rstrip()
-      if influx_token:
-        logging.debug("Influx token opened and read")
-      else:
-        logging.error("Failed to read ~/.influxcred")
-        sys.exit()
-    else:
-      logging.error("Didn't open ~/.influxcred")
+    influx_token = os.environ.get('INFLUX_TOKEN')
+    if not influx_token:
+      logging.error("INFLUX_TOKEN environment variable not set")
       sys.exit()
 
   race_id = str(args.race_id[0])

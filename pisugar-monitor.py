@@ -39,19 +39,12 @@ def send_value(write_api, measurement, value):
 
 def main():
   """Main loop of metrics collection."""
-  if os.path.exists('/home/pi/.influxcred'):
-    with open('/home/pi/.influxcred', 'r', encoding='utf-8') as f:
-      influx_pass = f.readline().rstrip()
-    if influx_pass:
-      logger.debug("Influx cred opened and read")
-    else:
-      logger.error("Failed to read ~/.influxcred")
-      return
-  else:
-    logger.error("~/.influxcred not found")
+  influx_token = os.environ.get('INFLUX_TOKEN')
+  if not influx_token:
+    logger.error("INFLUX_TOKEN environment variable not set")
     return
 
-  with InfluxDBClient(url='https://influxdb.focism.com', token=influx_pass, org='focism') as influx_client:
+  with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
     write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
     pisugar_conn, pisugar_event_conn = pisugar.connect_tcp(socket.gethostname())
