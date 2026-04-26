@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/WOT-Lemons/Lemongrass/compare/v0.1.0...v0.1.1) (2026-04-26)
+
+
+### Bug Fixes
+
+* **deps:** Bump python from `46cb7cc` to `4bdca44` ([#22](https://github.com/WOT-Lemons/Lemongrass/issues/22)) ([561276a](https://github.com/WOT-Lemons/Lemongrass/commit/561276aba64d1956b6fad64b5848d54b80efced8))
+
 ## [0.1.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.0.1...v0.1.0) (2026-04-26)
 
 
