@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.1.1...v0.2.0) (2026-04-26)
+
+
+### Features
+
+* separate and better influx token names ([#30](https://github.com/WOT-Lemons/Lemongrass/issues/30)) ([82e0af7](https://github.com/WOT-Lemons/Lemongrass/commit/82e0af724c440dfde1a59f34baefe480816b6ef2))
+
 ## [0.1.1](https://github.com/WOT-Lemons/Lemongrass/compare/v0.1.0...v0.1.1) (2026-04-26)
 
 
