@@ -20,7 +20,7 @@ services:
 
   telegraf:
     container_name: telegraf
-    image: telegraf:latest
+    image: telegraf@sha256:88eb354ac9926d70791b70558d69644b527b3c7e6f02c2af9165038a3e306a6d # 1.38.3
     restart: always
     network_mode: host
     volumes:
