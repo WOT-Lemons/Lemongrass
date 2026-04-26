@@ -1,0 +1,53 @@
+name: Package Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+  schedule:
+    - cron: '0 3 * * 0' # weekly on Sunday at 03:00 UTC
+
+jobs:
+  cleanup-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        package: [lemongrass-pi, lemongrass-laps]
+    steps:
+      - name: Delete ${{ matrix.package }} PR image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version_id=$(gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions \
+            --jq '.[] | select(any(.metadata.container.tags[]; . == "pr-${{ github.event.pull_request.number }}")) | .id' \
+            2>/dev/null)
+          if [ -n "$version_id" ]; then
+            gh api --method DELETE /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions/$version_id
+            echo "Deleted ${{ matrix.package }} pr-${{ github.event.pull_request.number }}"
+          else
+            echo "No image found for ${{ matrix.package }} pr-${{ github.event.pull_request.number }}, skipping"
+          fi
+
+  cleanup-untagged:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        package: [lemongrass-pi, lemongrass-laps]
+    steps:
+      - name: Delete untagged ${{ matrix.package }} versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
+            --jq '.[] | select(.metadata.container.tags | length == 0) | .id' | \
+          while read version_id; do
+            gh api --method DELETE /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions/$version_id
+            echo "Deleted untagged ${{ matrix.package }} version $version_id"
+          done
