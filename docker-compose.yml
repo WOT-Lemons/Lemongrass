@@ -7,7 +7,7 @@ services:
     devices:
       - /dev/obd:/dev/obd
     environment:
-      - INFLUX_TOKEN=${INFLUX_TOKEN}
+      - INFLUX_TELEMETRY_TOKEN=${INFLUX_TELEMETRY_TOKEN}
 
   pisugar-monitor:
     container_name: pisugar-monitor
@@ -16,7 +16,7 @@ services:
     restart: always
     network_mode: host
     environment:
-      - INFLUX_TOKEN=${INFLUX_TOKEN}
+      - INFLUX_TELEMETRY_TOKEN=${INFLUX_TELEMETRY_TOKEN}
 
   telegraf:
     container_name: telegraf
@@ -32,4 +32,4 @@ services:
       - HOST_PROC=/host/proc
       - HOST_SYS=/host/sys
       - HOST_MOUNT_PREFIX=/hostfs
-      - INFLUX_TOKEN=${INFLUX_TOKEN}
+      - INFLUX_SYSTEM_TOKEN=${INFLUX_SYSTEM_TOKEN}

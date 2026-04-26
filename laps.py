@@ -59,9 +59,9 @@ def main():
 
   influx_token = None
   if args.network_mode:
-    influx_token = os.environ.get('INFLUX_TOKEN')
+    influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
     if not influx_token:
-      logging.error("INFLUX_TOKEN environment variable not set")
+      logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
       sys.exit()
 
   race_id = str(args.race_id[0])

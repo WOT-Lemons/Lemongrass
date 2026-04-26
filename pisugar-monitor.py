@@ -39,9 +39,9 @@ def send_value(write_api, measurement, value):
 
 def main():
   """Main loop of metrics collection."""
-  influx_token = os.environ.get('INFLUX_TOKEN')
+  influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
   if not influx_token:
-    logger.error("INFLUX_TOKEN environment variable not set")
+    logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
     return
 
   with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:

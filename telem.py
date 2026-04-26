@@ -102,9 +102,9 @@ def flush_points(write_api):
 
 def main():
   """Main loop of OBD-II scraping"""
-  influx_token = os.environ.get('INFLUX_TOKEN')
+  influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
   if not influx_token:
-    logger.error("INFLUX_TOKEN environment variable not set")
+    logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
     return
 
   with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
