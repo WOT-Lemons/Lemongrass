@@ -39,16 +39,9 @@ def send_value(write_api, measurement, value):
 
 def main():
   """Main loop of metrics collection."""
-  if os.path.exists('/home/pi/.influxcred'):
-    with open('/home/pi/.influxcred', 'r', encoding='utf-8') as f:
-      influx_pass = f.readline().rstrip()
-    if influx_pass:
-      logger.debug("Influx cred opened and read")
-    else:
-      logger.error("Failed to read ~/.influxcred")
-      return
-  else:
-    logger.error("~/.influxcred not found")
+  influx_pass = os.environ.get('INFLUX_TOKEN')
+  if not influx_pass:
+    logger.error("INFLUX_TOKEN environment variable not set")
     return
 
   with InfluxDBClient(url='https://influxdb.focism.com', token=influx_pass, org='focism') as influx_client:
