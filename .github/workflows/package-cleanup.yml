@@ -6,7 +6,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 3 * * 0' # weekly on Sunday at 03:00 UTC
+    - cron: '0 23 * * 0' # weekly on Sunday at 23:00 UTC
 
 jobs:
   cleanup-pr:
