@@ -39,12 +39,12 @@ def send_value(write_api, measurement, value):
 
 def main():
   """Main loop of metrics collection."""
-  influx_pass = os.environ.get('INFLUX_TOKEN')
-  if not influx_pass:
+  influx_token = os.environ.get('INFLUX_TOKEN')
+  if not influx_token:
     logger.error("INFLUX_TOKEN environment variable not set")
     return
 
-  with InfluxDBClient(url='https://influxdb.focism.com', token=influx_pass, org='focism') as influx_client:
+  with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
     write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
     pisugar_conn, pisugar_event_conn = pisugar.connect_tcp(socket.gethostname())
