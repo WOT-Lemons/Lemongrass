@@ -1,0 +1,25 @@
+name: Cleanup PR Images
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        package: [lemongrass-pi, lemongrass-laps]
+    steps:
+      - name: Delete ${{ matrix.package }} PR image
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          owner: wot-lemons
+          package-name: ${{ matrix.package }}
+          package-type: container
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tagged-version: ^pr-${{ github.event.pull_request.number }}$
