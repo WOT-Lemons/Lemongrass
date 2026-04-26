@@ -93,6 +93,7 @@ def flush_points(write_api):
     pending_points.clear()
   try:
     write_api.write(bucket='stats_252/autogen', record=batch)
+    logger.info("Flushed %d points to InfluxDB", len(batch))
   except Exception as e:
     logger.error('Failed to write %d points to InfluxDB: %s', len(batch), e)
     with pending_lock:
@@ -121,7 +122,7 @@ def main():
     status = connection.status()
     while "Car Connected" not in status:
       connection.close()
-      logger.debug("No car connected, sleeping...")
+      logger.info("No car connected, sleeping...")
       sleep(1)
       connection = obd.Async()
       status = connection.status()

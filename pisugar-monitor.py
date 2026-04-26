@@ -32,6 +32,7 @@ def send_value(write_api, measurement, value):
   logger.debug(point)
   try:
     write_api.write(bucket='stats_252/autogen', record=point)
+    logger.info("Wrote %s: %s", measurement, value)
   except Exception:
     logger.exception("Failed to write %s to InfluxDB", measurement)
 
