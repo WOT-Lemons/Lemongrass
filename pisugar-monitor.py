@@ -54,7 +54,7 @@ def main():
     pisugar_server = pisugar.PiSugarServer(pisugar_conn, pisugar_event_conn)
 
     device_tags = {
-      "version": pisugar_server.get_version(),
+      "server_version": pisugar_server.get_version(),
       "model": pisugar_server.get_model(),
       "firmware_version": pisugar_server.get_firmware_version(),
     }
