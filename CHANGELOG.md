@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.2.1...v0.3.0) (2026-05-05)
+
+
+### Features
+
+* add tags to pisguar data points ([e18e3ab](https://github.com/WOT-Lemons/Lemongrass/commit/e18e3abbb418f39b946db05857ea80f5ecad14ab))
+
 ## [0.2.1](https://github.com/WOT-Lemons/Lemongrass/compare/v0.2.0...v0.2.1) (2026-04-26)
 
 
