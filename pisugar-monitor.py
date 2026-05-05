@@ -25,10 +25,13 @@ syslogHandler = logging.handlers.SysLogHandler(
 logger.addHandler(syslogHandler)
 
 
-def send_value(write_api, measurement, value):
+def send_value(write_api, measurement, value, tags=None):
   """Send a measurement to InfluxDB."""
   ts = datetime.now(timezone.utc)
-  point = Point(measurement).field("value", value).time(ts)
+  point = Point(measurement)
+  for k, v in (tags or {}).items():
+    point = point.tag(k, v)
+  point = point.field("value", value).time(ts)
   logger.debug(point)
   try:
     write_api.write(bucket='stats_252/autogen', record=point)
@@ -50,14 +53,21 @@ def main():
     pisugar_conn, pisugar_event_conn = pisugar.connect_tcp(socket.gethostname())
     pisugar_server = pisugar.PiSugarServer(pisugar_conn, pisugar_event_conn)
 
+    device_tags = {
+      "version": pisugar_server.get_version(),
+      "model": pisugar_server.get_model(),
+      "firmware_version": pisugar_server.get_firmware_version(),
+    }
+    logger.info("PiSugar device: %s", device_tags)
+
     while True:
       try:
-        send_value(write_api, "pisugar-battery-charging", pisugar_server.get_battery_charging())
-        send_value(write_api, "pisugar-battery-current", pisugar_server.get_battery_current())
-        send_value(write_api, "pisugar-battery-level", pisugar_server.get_battery_level())
-        send_value(write_api, "pisugar-battery-power-plugged", pisugar_server.get_battery_power_plugged())
-        send_value(write_api, "pisugar-battery-voltage", pisugar_server.get_battery_voltage())
-        send_value(write_api, "pisugar-temperature", pisugar_server.get_temperature())
+        send_value(write_api, "pisugar-battery-charging", pisugar_server.get_battery_charging(), device_tags)
+        send_value(write_api, "pisugar-battery-current", pisugar_server.get_battery_current(), device_tags)
+        send_value(write_api, "pisugar-battery-level", pisugar_server.get_battery_level(), device_tags)
+        send_value(write_api, "pisugar-battery-power-plugged", pisugar_server.get_battery_power_plugged(), device_tags)
+        send_value(write_api, "pisugar-battery-voltage", pisugar_server.get_battery_voltage(), device_tags)
+        send_value(write_api, "pisugar-temperature", pisugar_server.get_temperature(), device_tags)
       except Exception:
         logger.exception("Error reading from PiSugar")
 
