@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/WOT-Lemons/Lemongrass/compare/v0.4.0...v0.4.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* pisugar http API format ([#42](https://github.com/WOT-Lemons/Lemongrass/issues/42)) ([e649973](https://github.com/WOT-Lemons/Lemongrass/commit/e6499735f5a9049eab79e7740382dc4193066241))
+
 ## [0.4.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.3.0...v0.4.0) (2026-05-07)
 
 
