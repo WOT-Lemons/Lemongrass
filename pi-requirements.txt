@@ -1,3 +1,2 @@
 influxdb-client~=1.47
 obd~=0.7
-git+https://github.com/WOT-Lemons/pisugar-server-py.git@focism#egg=pisugar
