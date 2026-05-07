@@ -7,6 +7,7 @@ import logging
 import logging.handlers
 import os
 import socket
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -41,23 +42,30 @@ def read_credentials():
 
 def login(username, password):
   params = urllib.parse.urlencode({"username": username, "password": password})
-  with urllib.request.urlopen(f"{PISUGAR_API}/login?{params}") as resp:
+  req = urllib.request.Request(
+    f"{PISUGAR_API}/login?{params}",
+    data=b"",
+    method="POST",
+  )
+  with urllib.request.urlopen(req) as resp:
     return resp.read().decode().strip()
 
 
 def exec_command(command, token=None):
-  url = f"{PISUGAR_API}/exec"
+  headers = {"Content-Type": "text/plain"}
   if token:
-    url += f"?token={urllib.parse.quote(token)}"
+    headers["x-pisugar-token"] = token
   req = urllib.request.Request(
-    url,
+    f"{PISUGAR_API}/exec",
     data=command.encode(),
-    headers={"Content-Type": "text/plain"},
+    headers=headers,
     method="POST",
   )
   with urllib.request.urlopen(req) as resp:
-    line = resp.read().decode().strip()
-  _, _, raw = line.partition(": ")
+    raw = resp.read().decode().strip()
+_, sep, value = raw.partition(": ")
+  if sep:
+    raw = value
   if raw.lower() == "true":
     return True
   if raw.lower() == "false":
@@ -91,8 +99,14 @@ def main():
   pisugar_token = None
   username, password = read_credentials()
   if username and password:
-    pisugar_token = login(username, password)
-    logger.info("Authenticated with pisugar-server")
+    try:
+      pisugar_token = login(username, password)
+      logger.info("Authenticated with pisugar-server")
+    except urllib.error.HTTPError as e:
+      if e.code == 404:
+        logger.info("pisugar-server auth not enabled, proceeding unauthenticated")
+      else:
+        raise
 
   with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
     write_api = influx_client.write_api(write_options=SYNCHRONOUS)
