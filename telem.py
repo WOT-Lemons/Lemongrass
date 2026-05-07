@@ -33,7 +33,7 @@ FUEL_STATUS_MAP = {
     "Open loop due to engine load OR fuel cut due to deceleration": 2,
     "Open loop due to system failure": 3,
     "Closed loop, using at least one oxygen sensor but there is a fault in the feedback system": 4,
-}
+    }
 
 pending_points = []
 pending_lock = threading.Lock()
@@ -81,7 +81,7 @@ def new_fuel_status(r):
   with pending_lock:
     pending_points.append(
         Point(measurement).field("value", fuel_status).time(ts)
-    )
+        )
 
 
 def flush_points(write_api):

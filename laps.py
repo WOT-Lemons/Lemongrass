@@ -37,7 +37,13 @@ def main():
                       action='store_true', help='Update when new data received')
   parser.add_argument('-n', '--network', dest='network_mode', default=False,
                       action='store_true', help='Forward lap data via influx')
-  parser.add_argument('-o', '--out', dest='save_file', default=False, action='store_true', help='Write lap times to CSV')
+  parser.add_argument(
+      '-o',
+      '--out',
+      dest='save_file',
+      default=False,
+      action='store_true',
+      help='Write lap times to CSV')
   parser.add_argument('-v', '--verbose', help="Set debug logging", action='store_true')
   parser.set_defaults(monitor_mode=False, network_mode=False)
   args = parser.parse_args()
@@ -100,10 +106,27 @@ def main():
           if args.monitor_mode:
             return
           else:
-            oldRace(race_id, car_number, token, args.network_mode, start_epoc, write_api, args.save_file, selected_class)
+            oldRace(
+                race_id,
+                car_number,
+                token,
+                args.network_mode,
+                start_epoc,
+                write_api,
+                args.save_file,
+                selected_class)
         else:
           logging.info("Race {} is currently live.".format(race_id))
-          liveRace(race_id, car_number, token, args.network_mode, args.monitor_mode, write_api, start_epoc, args.save_file, selected_class)
+          liveRace(
+              race_id,
+              car_number,
+              token,
+              args.network_mode,
+              args.monitor_mode,
+              write_api,
+              start_epoc,
+              args.save_file,
+              selected_class)
   else:
     write_api = None
     if response['Successful']:
@@ -115,7 +138,16 @@ def main():
           oldRace(race_id, car_number, token, args.network_mode, start_epoc, write_api, args.save_file, selected_class)
       else:
         logging.info("Race {} is currently live.".format(race_id))
-        liveRace(race_id, car_number, token, args.network_mode, args.monitor_mode, write_api, start_epoc, args.save_file, selected_class)
+        liveRace(
+            race_id,
+            car_number,
+            token,
+            args.network_mode,
+            args.monitor_mode,
+            write_api,
+            start_epoc,
+            args.save_file,
+            selected_class)
 
   return 0
 
@@ -127,7 +159,7 @@ def liveRace(race_id, car_number, token, network_mode, monitor_mode, write_api, 
   Description: Called if a race ID is live.
   """
   payload = {'apiToken': token, 'raceID': race_id}
-  last_session_details = callRaceMonitor('/v2/Live/GetSession', payload)
+  callRaceMonitor('/v2/Live/GetSession', payload)
 
   list_of_competitors = []
 
@@ -164,7 +196,6 @@ def liveRace(race_id, car_number, token, network_mode, monitor_mode, write_api, 
   # logging.debug("Racer ID: {}".format(racer_id))
 
   competitor_details = []
-  competitor_lap_times = []
 
   # Get lap times from live racer
   logging.debug("Getting lap times for {} from race {}.".format(racer_id, race_id))
@@ -182,8 +213,14 @@ def liveRace(race_id, car_number, token, network_mode, monitor_mode, write_api, 
   # Print competitor detail block
   print("Team: {:<6} Car Number: {:<4} Transponder: {}".format(
       competitor_details['Name'], competitor_details['Number'], competitor_details['Transponder']))
-  print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(
-      competitor_details['BestPosition'], competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
+  fmt = (
+      "Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}"
+      "\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}"
+      )
+  print(fmt.format(
+      competitor_details['BestPosition'], competitor_details['Position'],
+      competitor_details['Laps'], competitor_details['BestLap'],
+      competitor_details['BestLapTime'], competitor_details['TotalTime']))
   print(underline)
 
   # Create pandas dataframe and print without index to remove row numbers
@@ -193,7 +230,7 @@ def liveRace(race_id, car_number, token, network_mode, monitor_mode, write_api, 
 
   # If we're going to be starting network mode, check for presence of existing data.
   if network_mode:
-    network_status = pushInflux(racer_id, laps, write_api, start_epoc, race_id, False, car_number)
+    pushInflux(racer_id, laps, write_api, start_epoc, race_id, False, car_number)
 
   if save_file:
     # Create filename and call function to write to CSV
@@ -201,8 +238,6 @@ def liveRace(race_id, car_number, token, network_mode, monitor_mode, write_api, 
     writeCSV(filename, laps)
 
   if monitor_mode:
-    # Enter monitoring loop
-    competitor_last_lap = laps[-1]['LapTime']
     monitorRoutine(car_number, laps, race_id, racer_id, write_api, start_epoc, token, network_mode)
 
   return
@@ -220,7 +255,6 @@ def oldRace(race_id, car_number, token, network_mode, start_epoc, write_api, sav
   race_details = callRaceMonitor('/v2/Results/SessionsForRace', payload)
 
   session_ids_for_race = []
-  competitor_lap_times = []
 
   # Get only session IDs in session_ids_for_race
   for i in race_details['Sessions']:
@@ -257,8 +291,14 @@ def oldRace(race_id, car_number, token, network_mode, start_epoc, write_api, sav
   # Print competitor detail block
   print("Team: {:<6}\tCar Number: {:<4}\tTransponder: {}".format(
       competitor_details['FirstName'], competitor_details['Number'], competitor_details['Transponder']))
-  print("Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}".format(
-      competitor_details['BestPosition'], competitor_details['Position'], competitor_details['Laps'], competitor_details['BestLap'], competitor_details['BestLapTime'], competitor_details['TotalTime']))
+  fmt = (
+      "Best Position:\t{:>}\nFinal Position:\t{:>}\nTotal Laps:\t{:>}"
+      "\nBest Lap:\t{:>}\nBest Lap Time:\t{:>}\nTotal Time:\t{:>}"
+      )
+  print(fmt.format(
+      competitor_details['BestPosition'], competitor_details['Position'],
+      competitor_details['Laps'], competitor_details['BestLap'],
+      competitor_details['BestLapTime'], competitor_details['TotalTime']))
   print(underline)
 
   for lap in laps:
@@ -289,7 +329,7 @@ def oldRace(race_id, car_number, token, network_mode, start_epoc, write_api, sav
 
   # If we're going to be starting network mode, check for presence of existing data.
   if network_mode:
-    network_status = pushInflux(car_number, laps, write_api, start_epoc, race_id, False, car_number)
+    pushInflux(car_number, laps, write_api, start_epoc, race_id, False, car_number)
 
   if save_file:
     # Create filename and call function to write to CSV
@@ -330,7 +370,6 @@ def printRankings(sorted_competitors, race_live, selected_class):
   Description: Take a dict of sorted competitors and print them
   in a nice table. Might be worth re-writing this with Pandas
   """
-  global underline
   print(underline)
   list_of_names = []
 
@@ -358,7 +397,8 @@ def printRankings(sorted_competitors, race_live, selected_class):
         sorted_competitors, columns=['Position', 'Number', 'Name', 'Laps', 'Category', 'Transponder'])
     sorted_competitors_df = sorted_competitors_df.replace({'Category': {'1': 'A', '2': 'DNQ', '3': 'B', '4': 'C'}})
     sorted_competitors_df = sorted_competitors_df[sorted_competitors_df['Category'].str.contains(upper_class)]
-    sorted_competitors_df = sorted_competitors_df.rename(columns={'Category': 'Class', 'Number': '#', 'Position': 'Overall Pos.'})
+    sorted_competitors_df = sorted_competitors_df.rename(
+        columns={'Category': 'Class', 'Number': '#', 'Position': 'Overall Pos.'})
     sorted_competitors_df = sorted_competitors_df.reset_index(drop=True)
     sorted_competitors_df.index += 1
     print(sorted_competitors_df.to_string(index=True))
@@ -416,8 +456,6 @@ def monitorRoutine(car_number, laps, race_id, racer_id, write_api, start_epoc, t
   lap_time_df = pandas.json_normalize(laps)
   print(lap_time_df.to_string(index=False))
 
-  # logging.debug("\nLast lap: {}\nLast lap: {} seconds\nSleep Time: {} seconds".format(last_lap_time, last_lap_seconds, sleep_interval))
-
   while True:
     time.sleep(30)
     current_competitor_lap_times = refreshCompetitor(race_id, racer_id, token)
@@ -443,7 +481,6 @@ def refreshCompetitor(race_id, racer_id, token):
   """
 
   laps = []
-  competitor_details = []
 
   logging.debug("Refreshing lap times for car {}.".format(racer_id))
   payload = {'apiToken': token, 'RaceID': race_id, 'RacerID': racer_id}
@@ -452,7 +489,6 @@ def refreshCompetitor(race_id, racer_id, token):
   # try:
   if response['Successful']:
     laps = response['Details']['Laps']
-    competitor_details = response['Details']['Competitor']
   # except TypeError: return
 
   logging.debug("Current lap is {} with time {}.".format(laps[-1]['Lap'], laps[-1]['LapTime']))
@@ -525,7 +561,8 @@ def pushInflux(racer_id, laps, write_api, start_epoc, race_id, monitor_mode, car
     # print(lap_timestamp)
     data = []
     data.append('laps{},driver={} lap_no={},lap_time={},position={},flag_status="{}" {}'.format(
-        race_id, current_driver, lap['Lap'], lap_time_in_milliseconds, lap['Position'], lap['FlagStatus'], lap_timestamp))
+        race_id, current_driver, lap['Lap'], lap_time_in_milliseconds,
+        lap['Position'], lap['FlagStatus'], lap_timestamp))
     logging.debug(data)
     try:
       write_api.write(bucket='laps_252/autogen', record=data, write_precision='ms')
