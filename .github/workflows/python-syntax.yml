@@ -1,0 +1,24 @@
+name: Python Syntax Check
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '**.py'
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Check syntax and style
+        run: flake8 $(git diff --name-only origin/main...HEAD -- '*.py')
