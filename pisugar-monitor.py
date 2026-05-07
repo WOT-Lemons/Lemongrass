@@ -2,16 +2,18 @@
 # -*- coding: utf-8 -*-
 """Sends PiSugar measurements to InfluxDB."""
 
+import json
 import logging
 import logging.handlers
 import os
 import socket
+import urllib.parse
+import urllib.request
 
 from datetime import datetime, timezone
 from time import sleep
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
-import pisugar
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('pisugar-monitor')
@@ -24,9 +26,49 @@ syslogHandler = logging.handlers.SysLogHandler(
 
 logger.addHandler(syslogHandler)
 
+PISUGAR_API = "http://localhost:8421"
+PISUGAR_CONFIG = "/etc/pisugar-server/config.json"
+
+
+def read_credentials():
+  try:
+    with open(PISUGAR_CONFIG) as f:
+      config = json.load(f)
+    return config.get('auth_user'), config.get('auth_password')
+  except (FileNotFoundError, json.JSONDecodeError):
+    return None, None
+
+
+def login(username, password):
+  params = urllib.parse.urlencode({"username": username, "password": password})
+  with urllib.request.urlopen(f"{PISUGAR_API}/login?{params}") as resp:
+    return resp.read().decode().strip()
+
+
+def exec_command(command, token=None):
+  url = f"{PISUGAR_API}/exec"
+  if token:
+    url += f"?token={urllib.parse.quote(token)}"
+  req = urllib.request.Request(
+    url,
+    data=command.encode(),
+    headers={"Content-Type": "text/plain"},
+    method="POST",
+  )
+  with urllib.request.urlopen(req) as resp:
+    line = resp.read().decode().strip()
+  _, _, raw = line.partition(": ")
+  if raw.lower() == "true":
+    return True
+  if raw.lower() == "false":
+    return False
+  try:
+    return float(raw)
+  except ValueError:
+    return raw
+
 
 def send_value(write_api, measurement, value, tags=None):
-  """Send a measurement to InfluxDB."""
   ts = datetime.now(timezone.utc)
   point = Point(measurement)
   for k, v in (tags or {}).items():
@@ -41,33 +83,35 @@ def send_value(write_api, measurement, value, tags=None):
 
 
 def main():
-  """Main loop of metrics collection."""
   influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
   if not influx_token:
     logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
     return
 
+  pisugar_token = None
+  username, password = read_credentials()
+  if username and password:
+    pisugar_token = login(username, password)
+    logger.info("Authenticated with pisugar-server")
+
   with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
     write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
-    pisugar_conn, pisugar_event_conn = pisugar.connect_tcp(socket.gethostname())
-    pisugar_server = pisugar.PiSugarServer(pisugar_conn, pisugar_event_conn)
-
     device_tags = {
-      "server_version": pisugar_server.get_version(),
-      "model": pisugar_server.get_model(),
-      "firmware_version": pisugar_server.get_firmware_version(),
+      "server_version": exec_command("get version", pisugar_token),
+      "model": exec_command("get model", pisugar_token),
+      "firmware_version": exec_command("get firmware_version", pisugar_token),
     }
     logger.info("PiSugar device: %s", device_tags)
 
     while True:
       try:
-        send_value(write_api, "pisugar-battery-charging", pisugar_server.get_battery_charging(), device_tags)
-        send_value(write_api, "pisugar-battery-current", pisugar_server.get_battery_current(), device_tags)
-        send_value(write_api, "pisugar-battery-level", pisugar_server.get_battery_level(), device_tags)
-        send_value(write_api, "pisugar-battery-power-plugged", pisugar_server.get_battery_power_plugged(), device_tags)
-        send_value(write_api, "pisugar-battery-voltage", pisugar_server.get_battery_voltage(), device_tags)
-        send_value(write_api, "pisugar-temperature", pisugar_server.get_temperature(), device_tags)
+        send_value(write_api, "pisugar-battery-charging", exec_command("get battery_charging", pisugar_token), device_tags)
+        send_value(write_api, "pisugar-battery-current", exec_command("get battery_i", pisugar_token), device_tags)
+        send_value(write_api, "pisugar-battery-level", exec_command("get battery", pisugar_token), device_tags)
+        send_value(write_api, "pisugar-battery-power-plugged", exec_command("get battery_power_plugged", pisugar_token), device_tags)
+        send_value(write_api, "pisugar-battery-voltage", exec_command("get battery_v", pisugar_token), device_tags)
+        send_value(write_api, "pisugar-temperature", exec_command("get temperature", pisugar_token), device_tags)
       except Exception:
         logger.exception("Error reading from PiSugar")
 
