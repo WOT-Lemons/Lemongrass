@@ -63,7 +63,7 @@ def exec_command(command, token=None):
   )
   with urllib.request.urlopen(req) as resp:
     raw = resp.read().decode().strip()
-_, sep, value = raw.partition(": ")
+  _, sep, value = raw.partition(": ")
   if sep:
     raw = value
   if raw.lower() == "true":
