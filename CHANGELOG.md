@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.3.0...v0.4.0) (2026-05-07)
+
+
+### Features
+
+* Use pisugar http API instead of python ([#40](https://github.com/WOT-Lemons/Lemongrass/issues/40)) ([36727cc](https://github.com/WOT-Lemons/Lemongrass/commit/36727ccd5ae0649a089928940ef813905b824b0c))
+
 ## [0.3.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.2.1...v0.3.0) (2026-05-05)
 
 
