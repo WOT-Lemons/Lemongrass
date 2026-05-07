@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/WOT-Lemons/Lemongrass/compare/v0.4.1...v0.4.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* Fix indentation ([#44](https://github.com/WOT-Lemons/Lemongrass/issues/44)) ([6478986](https://github.com/WOT-Lemons/Lemongrass/commit/64789862a4181d7a36ac17d7af57f6b9c980ae8a))
+
 ## [0.4.1](https://github.com/WOT-Lemons/Lemongrass/compare/v0.4.0...v0.4.1) (2026-05-07)
 
 
