@@ -62,8 +62,10 @@ def exec_command(command, token=None):
     method="POST",
   )
   with urllib.request.urlopen(req) as resp:
-    line = resp.read().decode().strip()
-  _, _, raw = line.partition(": ")
+    raw = resp.read().decode().strip()
+_, sep, value = raw.partition(": ")
+  if sep:
+    raw = value
   if raw.lower() == "true":
     return True
   if raw.lower() == "false":
