@@ -21,4 +21,4 @@ jobs:
         run: pip install flake8
 
       - name: Check syntax and style
-        run: flake8 $(git diff --name-only origin/main...HEAD -- '*.py')
+        run: flake8 .
