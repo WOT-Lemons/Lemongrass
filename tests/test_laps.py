@@ -24,12 +24,12 @@ class TestCallRaceMonitor:
     def test_returns_parsed_json_on_success(self):
         body = {"Successful": True, "Race": {"Name": "24hrs"}}
         _mod.requests.post.return_value = self._mock_response(200, body)
-        result = _mod.callRaceMonitor('/v2/Race/RaceDetails', {'apiToken': 'x'})
+        result = _mod.call_race_monitor('/v2/Race/RaceDetails', {'apiToken': 'x'})
         assert result == body
 
     def test_returns_none_on_error_status(self):
         _mod.requests.post.return_value = self._mock_response(500, {})
-        result = _mod.callRaceMonitor('/v2/Race/RaceDetails', {'apiToken': 'x'})
+        result = _mod.call_race_monitor('/v2/Race/RaceDetails', {'apiToken': 'x'})
         assert result is None
 
     def test_retries_on_rate_limit(self):
@@ -37,7 +37,7 @@ class TestCallRaceMonitor:
         throttled = self._mock_response(429, {})
         _mod.requests.post.side_effect = [throttled, ok]
         with patch.object(_mod.time, 'sleep'):
-            result = _mod.callRaceMonitor('/v2/Race/RaceDetails', {'apiToken': 'x'})
+            result = _mod.call_race_monitor('/v2/Race/RaceDetails', {'apiToken': 'x'})
         assert result == {"Successful": True}
         assert _mod.requests.post.call_count == 2
 
@@ -46,7 +46,7 @@ class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
         laps = [{"Lap": 1, "LapTime": "0:01:30.000"}]
         with patch("builtins.open", mock_open()) as m:
-            _mod.writeCSV("my-race", laps)
+            _mod.write_csv("my-race", laps)
         m.assert_called_once_with("./my-race.csv", 'w')
 
     def test_writes_header_and_rows(self):
@@ -54,7 +54,7 @@ class TestWriteCSV:
         written = []
         with patch("builtins.open", mock_open()) as m:
             m.return_value.__enter__.return_value.write = lambda s: written.append(s)
-            _mod.writeCSV("race", laps)
+            _mod.write_csv("race", laps)
         combined = "".join(written)
         assert "Lap" in combined
         assert "LapTime" in combined
