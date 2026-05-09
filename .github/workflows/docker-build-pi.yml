@@ -9,6 +9,8 @@ on:
     paths:
       - Dockerfile.pi
       - pi-requirements.txt
+      - pyproject.toml
+      - uv.lock
       - telem.py
       - pisugar-monitor.py
       - .github/workflows/docker-build-pi.yml
@@ -18,6 +20,8 @@ on:
     paths:
       - Dockerfile.pi
       - pi-requirements.txt
+      - pyproject.toml
+      - uv.lock
       - telem.py
       - pisugar-monitor.py
       - .github/workflows/docker-build-pi.yml

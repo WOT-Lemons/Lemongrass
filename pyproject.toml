@@ -1,0 +1,12 @@
+[project]
+name = "lemongrass"
+version = "0.4.2"
+requires-python = ">=3.12"
+dependencies = [
+    "influxdb-client~=1.47",
+]
+
+[dependency-groups]
+pi = ["obd~=0.7"]
+race = ["pandas~=2.3", "requests~=2.32"]
+

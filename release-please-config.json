@@ -4,6 +4,7 @@
   "packages": {
     ".": {
       "version-file": "VERSION",
+      "extra-files": ["pyproject.toml"],
       "bump-minor-pre-major": true
     }
   }
