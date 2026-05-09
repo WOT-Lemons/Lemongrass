@@ -47,7 +47,7 @@ class TestWriteCSV:
         laps = [{"Lap": 1, "LapTime": "0:01:30.000"}]
         with patch("builtins.open", mock_open()) as m:
             _mod.write_csv("my-race", laps)
-        m.assert_called_once_with("./my-race.csv", 'w')
+        m.assert_called_once_with("./my-race.csv", 'w', encoding='utf-8')
 
     def test_writes_header_and_rows(self):
         laps = [{"Lap": 1, "LapTime": "0:01:30.000"}, {"Lap": 2, "LapTime": "0:01:31.000"}]
