@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.4.2...v0.5.0) (2026-05-09)
+
+
+### Features
+
+* comply with pylint and use uv for dependencies ([#49](https://github.com/WOT-Lemons/Lemongrass/issues/49)) ([8ac5269](https://github.com/WOT-Lemons/Lemongrass/commit/8ac52694e67b11908a738d42a21e5123d9a3ebd0))
+* pisguar token expiration handler ([#47](https://github.com/WOT-Lemons/Lemongrass/issues/47)) ([3a77ad1](https://github.com/WOT-Lemons/Lemongrass/commit/3a77ad14142eb0d4e4a75a1d13293aad8f9d7fa8))
+
 ## [0.4.2](https://github.com/WOT-Lemons/Lemongrass/compare/v0.4.1...v0.4.2) (2026-05-07)
 
 
