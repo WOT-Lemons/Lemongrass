@@ -6,12 +6,15 @@ from unittest.mock import MagicMock, mock_open, patch
 _spec = importlib.util.spec_from_file_location(
   "laps",
   pathlib.Path(__file__).parent.parent / "laps.py",
-)
+  )
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
 
 class TestCallRaceMonitor:
+  def setup_method(self):
+    _mod.requests.post.reset_mock()
+
   def _mock_response(self, status_code, body):
     r = MagicMock()
     r.status_code = status_code

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 _spec = importlib.util.spec_from_file_location(
   "telem",
   pathlib.Path(__file__).parent.parent / "telem.py",
-)
+  )
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
@@ -68,7 +68,7 @@ class TestNewValue:
 
     with patch.object(_mod, 'Point', side_effect=capture_point):
       _mod.new_value(r)
-    assert captured_name[0] == "rpm"
+    assert captured_name[0] == "-rpm"
 
 
 class TestNewFuelStatus:
@@ -126,6 +126,6 @@ class TestFlushPoints:
     _mod.flush_points(write_api)
     written = write_api.write.call_args.kwargs.get(
       'record', write_api.write.call_args.args[0] if write_api.write.call_args.args else None
-    )
+      )
     assert written is not None
     assert len(_mod.pending_points) == 0

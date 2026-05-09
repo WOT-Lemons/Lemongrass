@@ -8,5 +8,5 @@ for _mod in [
   'obd',
   'pandas',
   'requests',
-]:
+  ]:
   sys.modules.setdefault(_mod, MagicMock())
