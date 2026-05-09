@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Sends PiSugar measurements to InfluxDB."""
 
+import base64
 import json
 import logging
 import logging.handlers
@@ -12,7 +13,7 @@ import urllib.parse
 import urllib.request
 
 from datetime import datetime, timezone
-from time import sleep
+from time import sleep, time
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
@@ -23,120 +24,144 @@ syslogHandler = logging.handlers.SysLogHandler(
     address=('localhost', 6514),
     facility='user',
     socktype=socket.SOCK_DGRAM
-    )
+)
 
 logger.addHandler(syslogHandler)
 
 PISUGAR_API = "http://localhost:8421"
 PISUGAR_CONFIG = "/etc/pisugar-server/config.json"
+TOKEN_REFRESH_MARGIN = 300  # seconds before expiry to proactively refresh
 
 
 def read_credentials():
-  try:
-    with open(PISUGAR_CONFIG) as f:
-      config = json.load(f)
-    return config.get('auth_user'), config.get('auth_password')
-  except (FileNotFoundError, json.JSONDecodeError):
-    return None, None
+    try:
+        with open(PISUGAR_CONFIG) as f:
+            config = json.load(f)
+        return config.get('auth_user'), config.get('auth_password')
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None, None
 
 
 def login(username, password):
-  params = urllib.parse.urlencode({"username": username, "password": password})
-  req = urllib.request.Request(
-      f"{PISUGAR_API}/login?{params}",
-      data=b"",
-      method="POST",
-      )
-  with urllib.request.urlopen(req) as resp:
-    return resp.read().decode().strip()
+    params = urllib.parse.urlencode({"username": username, "password": password})
+    req = urllib.request.Request(
+        f"{PISUGAR_API}/login?{params}",
+        data=b"",
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        return resp.read().decode().strip()
+
+
+def token_expiry(token):
+    try:
+        payload_b64 = token.split('.')[1]
+        payload_b64 += '=' * (-len(payload_b64) % 4)
+        payload = json.loads(base64.b64decode(payload_b64))
+        return payload.get('exp')
+    except Exception:
+        return None
 
 
 def exec_command(command, token=None):
-  headers = {"Content-Type": "text/plain"}
-  if token:
-    headers["x-pisugar-token"] = token
-  req = urllib.request.Request(
-      f"{PISUGAR_API}/exec",
-      data=command.encode(),
-      headers=headers,
-      method="POST",
-      )
-  with urllib.request.urlopen(req) as resp:
-    raw = resp.read().decode().strip()
-  _, sep, value = raw.partition(": ")
-  if sep:
-    raw = value
-  if raw.lower() == "true":
-    return True
-  if raw.lower() == "false":
-    return False
-  try:
-    return float(raw)
-  except ValueError:
-    return raw
+    headers = {"Content-Type": "text/plain"}
+    if token:
+        headers["x-pisugar-token"] = token
+    req = urllib.request.Request(
+        f"{PISUGAR_API}/exec",
+        data=command.encode(),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        raw = resp.read().decode().strip()
+    _, sep, value = raw.partition(": ")
+    if sep:
+        raw = value
+    if raw.lower() == "true":
+        return True
+    if raw.lower() == "false":
+        return False
+    try:
+        return float(raw)
+    except ValueError:
+        return raw
 
 
 def send_value(write_api, measurement, value, tags=None):
-  ts = datetime.now(timezone.utc)
-  point = Point(measurement)
-  for k, v in (tags or {}).items():
-    point = point.tag(k, v)
-  point = point.field("value", value).time(ts)
-  logger.debug(point)
-  try:
-    write_api.write(bucket='stats_252/autogen', record=point)
-    logger.info("Wrote %s: %s", measurement, value)
-  except Exception:
-    logger.exception("Failed to write %s to InfluxDB", measurement)
+    ts = datetime.now(timezone.utc)
+    point = Point(measurement)
+    for k, v in (tags or {}).items():
+        point = point.tag(k, v)
+    point = point.field("value", value).time(ts)
+    logger.debug(point)
+    try:
+        write_api.write(bucket='stats_252/autogen', record=point)
+        logger.info("Wrote %s: %s", measurement, value)
+    except Exception:
+        logger.exception("Failed to write %s to InfluxDB", measurement)
 
 
 def main():
-  influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
-  if not influx_token:
-    logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-    return
+    influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
+    if not influx_token:
+        logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+        return
 
-  pisugar_token = None
-  username, password = read_credentials()
-  if username and password:
-    try:
-      pisugar_token = login(username, password)
-      logger.info("Authenticated with pisugar-server")
-    except urllib.error.HTTPError as e:
-      if e.code == 404:
-        logger.info("pisugar-server auth not enabled, proceeding unauthenticated")
-      else:
-        raise
+    pisugar_token = None
+    username, password = read_credentials()
+    if username and password:
+        pisugar_token = login(username, password)
+        logger.info("Authenticated with pisugar-server")
 
-  with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
-    write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+    with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
+        write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
-    device_tags = {
-        "server_version": exec_command("get version", pisugar_token),
-        "model": exec_command("get model", pisugar_token),
-        "firmware_version": exec_command("get firmware_version", pisugar_token),
+        device_tags = {
+            "server_version": exec_command("get version", pisugar_token),
+            "model": exec_command("get model", pisugar_token),
+            "firmware_version": exec_command("get firmware_version", pisugar_token),
         }
-    logger.info("PiSugar device: %s", device_tags)
+        logger.info("PiSugar device: %s", device_tags)
 
-    while True:
-      try:
-        charging = exec_command("get battery_charging", pisugar_token)
-        current = exec_command("get battery_i", pisugar_token)
-        level = exec_command("get battery", pisugar_token)
-        plugged = exec_command("get battery_power_plugged", pisugar_token)
-        voltage = exec_command("get battery_v", pisugar_token)
-        temperature = exec_command("get temperature", pisugar_token)
-        send_value(write_api, "pisugar-battery-charging", charging, device_tags)
-        send_value(write_api, "pisugar-battery-current", current, device_tags)
-        send_value(write_api, "pisugar-battery-level", level, device_tags)
-        send_value(write_api, "pisugar-battery-power-plugged", plugged, device_tags)
-        send_value(write_api, "pisugar-battery-voltage", voltage, device_tags)
-        send_value(write_api, "pisugar-temperature", temperature, device_tags)
-      except Exception:
-        logger.exception("Error reading from PiSugar")
+        while True:
+            if pisugar_token and username and password:
+                exp = token_expiry(pisugar_token)
+                if exp and time() > exp - TOKEN_REFRESH_MARGIN:
+                    logger.info("PiSugar token nearing expiry, refreshing")
+                    try:
+                        pisugar_token = login(username, password)
+                    except Exception:
+                        logger.exception("Proactive token refresh failed")
 
-      sleep(0.5)
+            try:
+                charging = exec_command("get battery_charging", pisugar_token)
+                current = exec_command("get battery_i", pisugar_token)
+                level = exec_command("get battery", pisugar_token)
+                plugged = exec_command("get battery_power_plugged", pisugar_token)
+                voltage = exec_command("get battery_v", pisugar_token)
+                temperature = exec_command("get temperature", pisugar_token)
+                send_value(write_api, "pisugar-battery-charging", charging, device_tags)
+                send_value(write_api, "pisugar-battery-current", current, device_tags)
+                send_value(write_api, "pisugar-battery-level", level, device_tags)
+                send_value(write_api, "pisugar-battery-power-plugged", plugged, device_tags)
+                send_value(write_api, "pisugar-battery-voltage", voltage, device_tags)
+                send_value(write_api, "pisugar-temperature", temperature, device_tags)
+            except urllib.error.HTTPError as e:
+                if e.code == 401 and username and password:
+                    logger.warning("PiSugar token expired, re-authenticating")
+                    try:
+                        pisugar_token = login(username, password)
+                        logger.info("Re-authenticated with pisugar-server")
+                    except Exception:
+                        logger.exception("Re-authentication failed")
+                else:
+                    logger.exception("HTTP error reading from PiSugar")
+            except Exception:
+                logger.exception("Error reading from PiSugar")
+
+            sleep(0.5)
 
 
 if __name__ == "__main__":
-  main()
+    main()

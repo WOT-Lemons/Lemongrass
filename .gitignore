@@ -3,6 +3,10 @@
 .token
 .client_secrets.json
 *.pyc
+__pycache__/
+.pytest_cache/
+.cache/
+.venv/
 token.pickle
 *.csv
 personal/
