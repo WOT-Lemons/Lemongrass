@@ -1,3 +1,32 @@
-influxdb-client~=1.47
-pandas~=2.3
-requests~=2.32
+certifi==2026.4.22
+    # via
+    #   influxdb-client
+    #   requests
+charset-normalizer==3.4.7
+    # via requests
+idna==3.13
+    # via requests
+influxdb-client==1.50.0
+    # via lemongrass
+numpy==2.4.4
+    # via pandas
+pandas==2.3.3
+python-dateutil==2.9.0.post0
+    # via
+    #   influxdb-client
+    #   pandas
+pytz==2026.2
+    # via pandas
+reactivex==4.1.0
+    # via influxdb-client
+requests==2.33.1
+six==1.17.0
+    # via python-dateutil
+typing-extensions==4.15.0
+    # via reactivex
+tzdata==2026.2
+    # via pandas
+urllib3==2.7.0
+    # via
+    #   influxdb-client
+    #   requests

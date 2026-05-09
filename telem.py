@@ -4,9 +4,7 @@
 
 from datetime import datetime, timezone
 import logging
-import logging.handlers
 import os
-import socket
 import threading
 from time import sleep
 
@@ -16,14 +14,6 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
-
-syslogHandler = logging.handlers.SysLogHandler(
-    address=('localhost', 6514),
-    facility='user',
-    socktype=socket.SOCK_DGRAM
-)
-
-logger.addHandler(syslogHandler)
 
 EXCLUDED_PATTERNS = ["DTC", "MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
 
@@ -94,7 +84,7 @@ def flush_points(write_api):
     try:
         write_api.write(bucket='stats_252/autogen', record=batch)
         logger.info("Flushed %d points to InfluxDB", len(batch))
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error('Failed to write %d points to InfluxDB: %s', len(batch), e)
         with pending_lock:
             pending_points[:0] = batch
@@ -107,7 +97,9 @@ def main():
         logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
         return
 
-    with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
+    with InfluxDBClient(
+        url='https://influxdb.focism.com', token=influx_token, org='focism'
+    ) as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
         obd.logger.setLevel(obd.logging.DEBUG)

@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# pylint: disable=invalid-name
 """Sends PiSugar measurements to InfluxDB."""
 
 import base64
 import json
 import logging
-import logging.handlers
 import os
-import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,22 +19,15 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('pisugar-monitor')
 
-syslogHandler = logging.handlers.SysLogHandler(
-    address=('localhost', 6514),
-    facility='user',
-    socktype=socket.SOCK_DGRAM
-)
-
-logger.addHandler(syslogHandler)
-
 PISUGAR_API = "http://localhost:8421"
 PISUGAR_CONFIG = "/etc/pisugar-server/config.json"
 TOKEN_REFRESH_MARGIN = 300  # seconds before expiry to proactively refresh
 
 
 def read_credentials():
+    """Read PiSugar auth credentials from config file."""
     try:
-        with open(PISUGAR_CONFIG) as f:
+        with open(PISUGAR_CONFIG, encoding='utf-8') as f:
             config = json.load(f)
         return config.get('auth_user'), config.get('auth_password')
     except (FileNotFoundError, json.JSONDecodeError):
@@ -43,6 +35,7 @@ def read_credentials():
 
 
 def login(username, password):
+    """Authenticate with pisugar-server and return a session token."""
     params = urllib.parse.urlencode({"username": username, "password": password})
     req = urllib.request.Request(
         f"{PISUGAR_API}/login?{params}",
@@ -54,16 +47,18 @@ def login(username, password):
 
 
 def token_expiry(token):
+    """Decode JWT and return the expiry timestamp, or None if unparseable."""
     try:
         payload_b64 = token.split('.')[1]
         payload_b64 += '=' * (-len(payload_b64) % 4)
         payload = json.loads(base64.b64decode(payload_b64))
         return payload.get('exp')
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught
         return None
 
 
 def exec_command(command, token=None):
+    """Send a command to the PiSugar HTTP API and return the parsed value."""
     headers = {"Content-Type": "text/plain"}
     if token:
         headers["x-pisugar-token"] = token
@@ -89,6 +84,7 @@ def exec_command(command, token=None):
 
 
 def send_value(write_api, measurement, value, tags=None):
+    """Write a single measurement point to InfluxDB."""
     ts = datetime.now(timezone.utc)
     point = Point(measurement)
     for k, v in (tags or {}).items():
@@ -98,11 +94,12 @@ def send_value(write_api, measurement, value, tags=None):
     try:
         write_api.write(bucket='stats_252/autogen', record=point)
         logger.info("Wrote %s: %s", measurement, value)
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught
         logger.exception("Failed to write %s to InfluxDB", measurement)
 
 
 def main():
+    """Main loop: read PiSugar metrics and push to InfluxDB."""
     influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
     if not influx_token:
         logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
@@ -114,7 +111,9 @@ def main():
         pisugar_token = login(username, password)
         logger.info("Authenticated with pisugar-server")
 
-    with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
+    with InfluxDBClient(
+        url='https://influxdb.focism.com', token=influx_token, org='focism'
+    ) as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
         device_tags = {
@@ -131,7 +130,7 @@ def main():
                     logger.info("PiSugar token nearing expiry, refreshing")
                     try:
                         pisugar_token = login(username, password)
-                    except Exception:
+                    except Exception:  # pylint: disable=broad-exception-caught
                         logger.exception("Proactive token refresh failed")
 
             try:
@@ -153,11 +152,11 @@ def main():
                     try:
                         pisugar_token = login(username, password)
                         logger.info("Re-authenticated with pisugar-server")
-                    except Exception:
+                    except Exception:  # pylint: disable=broad-exception-caught
                         logger.exception("Re-authentication failed")
                 else:
                     logger.exception("HTTP error reading from PiSugar")
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 logger.exception("Error reading from PiSugar")
 
             sleep(0.5)
