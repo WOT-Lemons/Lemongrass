@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Sends PiSugar measurements to InfluxDB."""
 
+import base64
 import json
 import logging
 import logging.handlers
@@ -12,7 +13,7 @@ import urllib.parse
 import urllib.request
 
 from datetime import datetime, timezone
-from time import sleep
+from time import sleep, time
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
@@ -29,6 +30,7 @@ logger.addHandler(syslogHandler)
 
 PISUGAR_API = "http://localhost:8421"
 PISUGAR_CONFIG = "/etc/pisugar-server/config.json"
+TOKEN_REFRESH_MARGIN = 300  # seconds before expiry to proactively refresh
 
 
 def read_credentials():
@@ -49,6 +51,16 @@ def login(username, password):
       )
   with urllib.request.urlopen(req) as resp:
     return resp.read().decode().strip()
+
+
+def token_expiry(token):
+  try:
+    payload_b64 = token.split('.')[1]
+    payload_b64 += '=' * (-len(payload_b64) % 4)
+    payload = json.loads(base64.b64decode(payload_b64))
+    return payload.get('exp')
+  except Exception:
+    return None
 
 
 def exec_command(command, token=None):
@@ -99,14 +111,8 @@ def main():
   pisugar_token = None
   username, password = read_credentials()
   if username and password:
-    try:
-      pisugar_token = login(username, password)
-      logger.info("Authenticated with pisugar-server")
-    except urllib.error.HTTPError as e:
-      if e.code == 404:
-        logger.info("pisugar-server auth not enabled, proceeding unauthenticated")
-      else:
-        raise
+    pisugar_token = login(username, password)
+    logger.info("Authenticated with pisugar-server")
 
   with InfluxDBClient(url='https://influxdb.focism.com', token=influx_token, org='focism') as influx_client:
     write_api = influx_client.write_api(write_options=SYNCHRONOUS)
@@ -119,6 +125,15 @@ def main():
     logger.info("PiSugar device: %s", device_tags)
 
     while True:
+      if pisugar_token and username and password:
+        exp = token_expiry(pisugar_token)
+        if exp and time() > exp - TOKEN_REFRESH_MARGIN:
+          logger.info("PiSugar token nearing expiry, refreshing")
+          try:
+            pisugar_token = login(username, password)
+          except Exception:
+            logger.exception("Proactive token refresh failed")
+
       try:
         charging = exec_command("get battery_charging", pisugar_token)
         current = exec_command("get battery_i", pisugar_token)
@@ -132,6 +147,16 @@ def main():
         send_value(write_api, "pisugar-battery-power-plugged", plugged, device_tags)
         send_value(write_api, "pisugar-battery-voltage", voltage, device_tags)
         send_value(write_api, "pisugar-temperature", temperature, device_tags)
+      except urllib.error.HTTPError as e:
+        if e.code == 401 and username and password:
+          logger.warning("PiSugar token expired, re-authenticating")
+          try:
+            pisugar_token = login(username, password)
+            logger.info("Re-authenticated with pisugar-server")
+          except Exception:
+            logger.exception("Re-authentication failed")
+        else:
+          logger.exception("HTTP error reading from PiSugar")
       except Exception:
         logger.exception("Error reading from PiSugar")
 
