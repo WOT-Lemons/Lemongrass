@@ -6,38 +6,13 @@ This repo is where I keep the tools I use to work on my 24 Hours of Lemons team.
 
 ### How to Use `telem.py`
 
-1. Set up an influxDB instance.
-![Image of InfluxDB starting in log](images/influx.png)
+1. Add your InfluxDB token to your `.env` file (see `.env.sample`) and source it:
 
-```plain
-> create user tom_admin with password 'THIS_IS_A_SECRET_TWAT' WITH ALL PRIVILEGES
-> SHOW USERS
-user		admin
-----		-----
-tom_admin	true
-
-> CREATE USER car_252 WITH PASSWORD 'HEY_I_SAID_NO_PEEKING'
-> SHOW USERS
-user		admin
-----		-----
-tom_admin	true
-car_252		false
-
-> show databases
-name: databases
-name
-----
-_internal
-stats_252
-
-> grant write on stats_252 to car_252
+```shell
+source .env
 ```
 
-2. Plug in a USB OBD Scanner and point telem at that instance.
-
-```python
-client = InfluxDBClient('race.focism.com', 8086, 'car_252', 'HEY_I_SAID_NO_PEEKING', 'stats_252')
-```
+2. Plug in a USB OBD Scanner.
 
 3. Git goin.
 
