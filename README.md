@@ -2,6 +2,14 @@
 
 Open source car telemetry for 24 Hours of Lemons.
 
+## Requirements
+
+- Raspberry Pi running Raspberry Pi OS
+- PiSugar 3 UPS
+- USB OBD-II adapter
+- An InfluxDB instance running v2.x
+- Grafana to visualize the data
+
 ## Raspberry Pi Services
 
 The services on the pi are managed via [docker-compose.yml](docker-compose.yml).
@@ -43,12 +51,16 @@ Run it, passing your credentials via an env file (see `.env.sample`).
 
 To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass-laps`.
 
+Generic example:
+
 ```shell
 docker run --rm -it \
   --env-file .env \
   ghcr.io/wot-lemons/lemongrass-laps:latest \
-  RACE_ID CAR_NUMBER -m -n
+  RACE_ID CAR_NUMBER [flags]
 ```
+
+Real example:
 
 ```shell
 docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass-laps:latest 164732 372 -m -n
