@@ -1,9 +1,24 @@
+anyio==4.13.0
+    # via httpx
 certifi==2026.4.22
-    # via influxdb-client
+    # via
+    #   httpcore
+    #   httpx
+    #   influxdb-client
 flexcache==0.3
     # via pint
 flexparser==0.4
     # via pint
+h11==0.16.0
+    # via httpcore
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
+    # via race-monitor
+idna==3.13
+    # via
+    #   anyio
+    #   httpx
 influxdb-client==1.50.0
     # via lemongrass
 obd==0.7.3
@@ -15,12 +30,15 @@ pyserial==3.5
     # via obd
 python-dateutil==2.9.0.post0
     # via influxdb-client
+race-monitor==0.1.0
+    # via lemongrass
 reactivex==4.1.0
     # via influxdb-client
 six==1.17.0
     # via python-dateutil
 typing-extensions==4.15.0
     # via
+    #   anyio
     #   flexcache
     #   flexparser
     #   pint

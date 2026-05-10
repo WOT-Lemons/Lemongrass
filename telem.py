@@ -8,7 +8,7 @@ import os
 import threading
 from time import sleep
 
-import obd
+import obd  # pylint: disable=import-error
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
