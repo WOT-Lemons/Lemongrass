@@ -1,3 +1,4 @@
+# pylint: disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,too-few-public-methods
 import importlib.util
 import pathlib
 from unittest.mock import MagicMock, patch
