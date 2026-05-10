@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.5.0...v0.6.0) (2026-05-10)
+
+
+### Features
+
+* switch to race-monitor package ([#50](https://github.com/WOT-Lemons/Lemongrass/issues/50)) ([672ab4e](https://github.com/WOT-Lemons/Lemongrass/commit/672ab4ed01cb35d62f5e7f63d69c107c2a4de4e0))
+
 ## [0.5.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.4.2...v0.5.0) (2026-05-09)
 
 
