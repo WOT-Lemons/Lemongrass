@@ -11,7 +11,6 @@
 
 import argparse
 import csv
-import json
 import logging
 import os
 import sys
@@ -19,9 +18,9 @@ import time
 from operator import itemgetter
 
 import pandas
-import requests
 from influxdb_client import InfluxDBClient
 from influxdb_client.client.write_api import SYNCHRONOUS
+from race_monitor import RaceMonitorClient
 
 UNDERLINE = "-" * 80
 
@@ -75,67 +74,65 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
     car_number = str(args.car_number[0])
     selected_class = args.selected_class
 
-    payload = {'apiToken': token, 'raceID': race_id}
-    race_details = call_race_monitor('/v2/Race/RaceDetails', payload)
+    with RaceMonitorClient(api_token=token) as client:
+        race_details = client.race.details(race_id)
 
-    start_epoc = 0
-    if race_details['Successful']:
-        race_name = race_details['Race']['Name']
-        start_epoc = race_details['Race']['StartDateEpoc']
-        logging.debug("StartDateEpoc: %s", start_epoc)
-        start_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_epoc))
-        end_epoc = race_details['Race']['EndDateEpoc']
-        end_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_epoc))
-        race_track = race_details['Race']['Track']
-        print(UNDERLINE)
-        print(f"Race {race_id}")
-        print(
-            f"{race_name}\tStarted: {start_date:>}\n"
-            f"{race_track}\t\t\tEnds: {end_date:>}"
-        )
-        print(UNDERLINE)
+        start_epoc = 0
+        if race_details['Successful']:
+            race_name = race_details['Race']['Name']
+            start_epoc = race_details['Race']['StartDateEpoc']
+            logging.debug("StartDateEpoc: %s", start_epoc)
+            start_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_epoc))
+            end_epoc = race_details['Race']['EndDateEpoc']
+            end_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_epoc))
+            race_track = race_details['Race']['Track']
+            print(UNDERLINE)
+            print(f"Race {race_id}")
+            print(
+                f"{race_name}\tStarted: {start_date:>}\n"
+                f"{race_track}\t\t\tEnds: {end_date:>}"
+            )
+            print(UNDERLINE)
 
-    if selected_class:
-        logging.info("Sorting results for class %s.", selected_class.upper())
+        if selected_class:
+            logging.info("Sorting results for class %s.", selected_class.upper())
 
-    payload = {'apiToken': token, 'RaceID': race_id}
-    response = call_race_monitor('/v2/Race/IsLive', payload)
+        response = client.race.is_live(race_id)
 
-    if not response['Successful']:
-        return 1
+        if not response['Successful']:
+            return 1
 
-    if args.network_mode:
-        with InfluxDBClient(
-            url='https://influxdb.focism.com', token=influx_token, org='focism'
-        ) as influx_client:
-            write_api = influx_client.write_api(write_options=SYNCHRONOUS)
-            return _run_race(race_id, car_number, token, args, write_api, start_epoc, response)
-    return _run_race(race_id, car_number, token, args, None, start_epoc, response)
+        if args.network_mode:
+            with InfluxDBClient(
+                url='https://influxdb.focism.com', token=influx_token, org='focism'
+            ) as influx_client:
+                write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+                return _run_race(race_id, car_number, client, args, write_api, start_epoc, response)
+        return _run_race(race_id, car_number, client, args, None, start_epoc, response)
 
 
 def _run_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        race_id, car_number, token, args, write_api, start_epoc, response):
+        race_id, car_number, client, args, write_api, start_epoc, response):
     """Dispatch to live_race or old_race based on race status."""
     if response['IsLive'] is not True:
         logging.info("Race %s is not live. Monitor mode disabled.", race_id)
         if args.monitor_mode:
             return 0
-        old_race(race_id, car_number, token, args.network_mode,
+        old_race(race_id, car_number, client, args.network_mode,
                  start_epoc, write_api, args.save_file, args.selected_class)
     else:
         logging.info("Race %s is currently live.", race_id)
         live_race(
-            race_id, car_number, token, args.network_mode, args.monitor_mode,
+            race_id, car_number, client, args.network_mode, args.monitor_mode,
             write_api, start_epoc, args.save_file, args.selected_class)
     return 0
 
 
 def live_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-        race_id, car_number, token, network_mode, monitor_mode,
+        race_id, car_number, client, network_mode, monitor_mode,
         write_api, start_epoc, save_file, selected_class):
     """Called if a race ID is live."""
-    payload = {'apiToken': token, 'raceID': race_id}
-    call_race_monitor('/v2/Live/GetSession', payload)
+    client.live.get_session(race_id)
 
     list_of_competitors = []
 
@@ -172,8 +169,7 @@ def live_race(  # pylint: disable=too-many-arguments,too-many-positional-argumen
 
     # Get lap times from live racer
     logging.debug("Getting lap times for %s from race %s.", racer_id, race_id)
-    payload = {'apiToken': token, 'RacerID': racer_id, 'RaceID': race_id}
-    response = call_race_monitor('/v2/Live/GetRacer', payload)
+    response = client.live.get_racer(race_id, racer_id)
 
     if response['Successful']:
         laps = response['Details']['Laps']
@@ -205,7 +201,6 @@ def live_race(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
-    # If we're going to be starting network mode, check for presence of existing data.
     if network_mode:
         push_influx(racer_id, laps, write_api, start_epoc, race_id, False, car_number)
 
@@ -216,15 +211,14 @@ def live_race(  # pylint: disable=too-many-arguments,too-many-positional-argumen
 
     if monitor_mode:
         monitor_routine(
-            car_number, laps, race_id, racer_id, write_api, start_epoc, token, network_mode)
+            car_number, laps, race_id, racer_id, write_api, start_epoc, client, network_mode)
 
 
 def old_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches  # noqa: E501
-        race_id, car_number, token, network_mode, start_epoc, write_api, save_file, selected_class):
+        race_id, car_number, client, network_mode, start_epoc, write_api, save_file, selected_class):
     """Called if a race ID is not live."""
     logging.debug("Getting sessions for race for %s", race_id)
-    payload = {'apiToken': token, 'raceID': race_id}
-    race_details = call_race_monitor('/v2/Results/SessionsForRace', payload)
+    race_details = client.results.sessions_for_race(race_id)
 
     session_ids_for_race = []
 
@@ -243,9 +237,7 @@ def old_race(  # pylint: disable=too-many-arguments,too-many-positional-argument
     # Send request for all session_ids from a race, including lap times
     for session_id in session_ids_for_race:
         logging.debug("Getting session details for %s including lap times.", session_id)
-        payload = {'apiToken': token, 'sessionID': session_id, 'includeLapTimes': True}
-        # payload = { 'apiToken': token, 'sessionID': session_id, 'includeLapTimes': False}
-        session_details = call_race_monitor('/v2/Results/SessionDetails', payload)
+        session_details = client.results.session_details(session_id, include_lap_times=True)
         sorted_competitors = session_details['Session']['SortedCompetitors'].copy()
 
         for competitor in sorted_competitors:
@@ -298,7 +290,6 @@ def old_race(  # pylint: disable=too-many-arguments,too-many-positional-argument
             except ValueError:
                 value = None
 
-    # If we're going to be starting network mode, check for presence of existing data.
     if network_mode:
         push_influx(car_number, laps, write_api, start_epoc, race_id, False, car_number)
 
@@ -306,26 +297,6 @@ def old_race(  # pylint: disable=too-many-arguments,too-many-positional-argument
         # Create filename and call function to write to CSV
         filename = f"{competitor_details['Name']}-{race_id}-results"
         write_csv(filename, laps)
-
-
-def call_race_monitor(endpoint, payload):
-    """Take a race monitor API endpoint and payload, request from the API.
-
-    Handles rate limiting with sleep.
-    See https://www.race-monitor.com/APIDocs
-    """
-    api_url = 'https://api.race-monitor.com' + endpoint
-    r = requests.post(api_url, data=payload, timeout=30)
-
-    while r.status_code == 429:
-        logging.error("%s - Too many requests, waiting 10 seconds...", r.status_code)
-        time.sleep(10)
-        r = requests.post(api_url, data=payload, timeout=30)
-
-    if r.status_code == 200:
-        return json.loads(r.text)
-    logging.error("Error %s", r.status_code)
-    return None
 
 
 def print_rankings(sorted_competitors, _race_live, selected_class):
@@ -393,7 +364,7 @@ def write_csv(filename, competitor_lap_times):
 
 
 def monitor_routine(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        car_number, laps, race_id, racer_id, write_api, start_epoc, token, network_mode):
+        car_number, laps, race_id, racer_id, write_api, start_epoc, client, network_mode):
     """Monitor mode: poll for new laps and display/push as they arrive."""
     logging.info("Monitoring car %s...", car_number)
     print(UNDERLINE)
@@ -404,7 +375,7 @@ def monitor_routine(  # pylint: disable=too-many-arguments,too-many-positional-a
 
     while True:
         time.sleep(30)
-        current_competitor_lap_times = refresh_competitor(race_id, racer_id, token)
+        current_competitor_lap_times = refresh_competitor(race_id, racer_id, client)
         if current_competitor_lap_times[-1] not in laps:
             current_competitor_lap_time_df = pandas.json_normalize(
                 current_competitor_lap_times[-1])
@@ -416,13 +387,12 @@ def monitor_routine(  # pylint: disable=too-many-arguments,too-many-positional-a
                     start_epoc, race_id, True, car_number)
 
 
-def refresh_competitor(race_id, racer_id, token):
+def refresh_competitor(race_id, racer_id, client):
     """Get latest lap times for a competitor from the live API."""
     laps = []
 
     logging.debug("Refreshing lap times for car %s.", racer_id)
-    payload = {'apiToken': token, 'RaceID': race_id, 'RacerID': racer_id}
-    response = call_race_monitor('/v2/Live/GetRacer', payload)
+    response = client.live.get_racer(race_id, racer_id)
 
     if response['Successful']:
         laps = response['Details']['Laps']
