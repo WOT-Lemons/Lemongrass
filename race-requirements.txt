@@ -1,11 +1,20 @@
+anyio==4.13.0
+    # via httpx
 certifi==2026.4.22
     # via
+    #   httpcore
+    #   httpx
     #   influxdb-client
-    #   requests
-charset-normalizer==3.4.7
-    # via requests
+h11==0.16.0
+    # via httpcore
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
+    # via race-monitor
 idna==3.13
-    # via requests
+    # via
+    #   anyio
+    #   httpx
 influxdb-client==1.50.0
     # via lemongrass
 numpy==2.4.4
@@ -17,16 +26,17 @@ python-dateutil==2.9.0.post0
     #   pandas
 pytz==2026.2
     # via pandas
+race-monitor==0.1.0
+    # via lemongrass
 reactivex==4.1.0
     # via influxdb-client
-requests==2.33.1
 six==1.17.0
     # via python-dateutil
 typing-extensions==4.15.0
-    # via reactivex
+    # via
+    #   anyio
+    #   reactivex
 tzdata==2026.2
     # via pandas
 urllib3==2.7.0
-    # via
-    #   influxdb-client
-    #   requests
+    # via influxdb-client
