@@ -24,7 +24,6 @@ class TestIntervalArg:
 
 class TestMonitorRoutine:
     def test_uses_interval_as_wait_timeout(self):
-        stop = threading.Event()
         mock_event = MagicMock()
         mock_event.wait.return_value = True  # stop after first check
         with patch.object(_mod.threading, 'Event', return_value=mock_event):
@@ -35,7 +34,9 @@ class TestMonitorRoutine:
         stop = threading.Event()
         stop.set()
         with patch.object(_mod, 'refresh_competitor', return_value=[{'Lap': 1}]):
-            _mod.monitor_routine('42', [{'Lap': 1}], '123', '42', None, 0, MagicMock(), False, interval=30, _stop_event=stop)
+            _mod.monitor_routine(
+                '42', [{'Lap': 1}], '123', '42', None, 0, MagicMock(), False,
+                interval=30, _stop_event=stop)
 
 
 class TestWriteCSV:
