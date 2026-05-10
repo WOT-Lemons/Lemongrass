@@ -214,8 +214,9 @@ def live_race(  # pylint: disable=too-many-arguments,too-many-positional-argumen
             car_number, laps, race_id, racer_id, write_api, start_epoc, client, network_mode)
 
 
-def old_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,line-too-long
-        race_id, car_number, client, network_mode, start_epoc, write_api, save_file, selected_class):
+def old_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches  # noqa: E501
+        race_id, car_number, client, network_mode,
+        start_epoc, write_api, save_file, selected_class):
     """Called if a race ID is not live."""
     logging.debug("Getting sessions for race for %s", race_id)
     race_details = client.results.sessions_for_race(race_id)
