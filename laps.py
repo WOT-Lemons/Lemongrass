@@ -14,6 +14,7 @@ import csv
 import logging
 import os
 import sys
+import threading
 import time
 from operator import itemgetter
 
@@ -25,8 +26,8 @@ from race_monitor import RaceMonitorClient
 UNDERLINE = "-" * 80
 
 
-def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-locals
-    """Parse arguments and orchestrate race data retrieval."""
+def _build_parser():
+    """Build and return the argument parser."""
     parser = argparse.ArgumentParser(description='Interact with lap data')
     parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
     parser.add_argument('car_number', metavar='car_number', nargs=1, type=int, action='store')
@@ -44,8 +45,20 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
         action='store_true',
         help='Write lap times to CSV')
     parser.add_argument('-v', '--verbose', help="Set debug logging", action='store_true')
+    parser.add_argument(
+        '--interval',
+        dest='interval',
+        default=30,
+        type=int,
+        metavar='SECONDS',
+        help='Polling interval in seconds for monitor mode (default: 30)')
     parser.set_defaults(monitor_mode=False, network_mode=False)
-    args = parser.parse_args()
+    return parser
+
+
+def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-locals
+    """Parse arguments and orchestrate race data retrieval."""
+    args = _build_parser().parse_args()
 
     if args.verbose:
         print(args)
@@ -107,7 +120,8 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
                 url='https://influxdb.focism.com', token=influx_token, org='focism'
             ) as influx_client:
                 write_api = influx_client.write_api(write_options=SYNCHRONOUS)
-                return _run_race(race_id, car_number, client, args, write_api, start_epoc, response)
+                return _run_race(
+                    race_id, car_number, client, args, write_api, start_epoc, response)
         return _run_race(race_id, car_number, client, args, None, start_epoc, response)
 
 
@@ -124,13 +138,13 @@ def _run_race(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         logging.info("Race %s is currently live.", race_id)
         live_race(
             race_id, car_number, client, args.network_mode, args.monitor_mode,
-            write_api, start_epoc, args.save_file, args.selected_class)
+            write_api, start_epoc, args.save_file, args.selected_class, args.interval)
     return 0
 
 
 def live_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         race_id, car_number, client, network_mode, monitor_mode,
-        write_api, start_epoc, save_file, selected_class):
+        write_api, start_epoc, save_file, selected_class, interval=30):
     """Called if a race ID is live."""
     client.live.get_session(race_id)
 
@@ -211,7 +225,8 @@ def live_race(  # pylint: disable=too-many-arguments,too-many-positional-argumen
 
     if monitor_mode:
         monitor_routine(
-            car_number, laps, race_id, racer_id, write_api, start_epoc, client, network_mode)
+            car_number, laps, race_id, racer_id, write_api, start_epoc, client, network_mode,
+            interval=interval)
 
 
 def old_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches  # noqa: E501
@@ -365,7 +380,8 @@ def write_csv(filename, competitor_lap_times):
 
 
 def monitor_routine(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        car_number, laps, race_id, racer_id, write_api, start_epoc, client, network_mode):
+        car_number, laps, race_id, racer_id, write_api, start_epoc, client, network_mode,
+        interval=30, _stop_event=None):
     """Monitor mode: poll for new laps and display/push as they arrive."""
     logging.info("Monitoring car %s...", car_number)
     print(UNDERLINE)
@@ -374,8 +390,8 @@ def monitor_routine(  # pylint: disable=too-many-arguments,too-many-positional-a
     lap_time_df = pandas.json_normalize(laps)
     print(lap_time_df.to_string(index=False))
 
-    while True:
-        time.sleep(30)
+    stop = _stop_event if _stop_event is not None else threading.Event()
+    while not stop.wait(timeout=interval):
         current_competitor_lap_times = refresh_competitor(race_id, racer_id, client)
         if current_competitor_lap_times[-1] not in laps:
             current_competitor_lap_time_df = pandas.json_normalize(
