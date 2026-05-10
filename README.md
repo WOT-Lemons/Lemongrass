@@ -48,7 +48,11 @@ client = InfluxDBClient('race.focism.com', 8086, 'car_252', 'HEY_I_SAID_NO_PEEKI
 1. Get a Race Monitor API token
 <https://www.race-monitor.com/Home/API>
 
-2. Put your token in a dotfile named token in the root of the project folder
+2. Export your token as an environment variable:
+
+```shell
+export RACEMONITOR_TOKEN=your_token_here
+```
 
 3. Get your race ID
 
@@ -72,14 +76,23 @@ Pull the latest image:
 docker pull ghcr.io/wot-lemons/lemongrass-laps:latest
 ```
 
-Run it, mounting your `.token` file and (if using `-n`) your `.influxcred`:
+Run it, passing your credentials as environment variables:
 
 ```shell
 docker run --rm -it \
-  -v /path/to/.token:/app/.token:ro \
-  -v /home/pi/.influxcred:/home/pi/.influxcred:ro \
+  -e RACEMONITOR_TOKEN=your_token_here \
   ghcr.io/wot-lemons/lemongrass-laps:latest \
   RACE_ID CAR_NUMBER [flags]
+```
+
+If using `-n` (network/InfluxDB mode), also pass `INFLUX_TELEMETRY_TOKEN`:
+
+```shell
+docker run --rm -it \
+  -e RACEMONITOR_TOKEN=your_token_here \
+  -e INFLUX_TELEMETRY_TOKEN=your_influx_token_here \
+  ghcr.io/wot-lemons/lemongrass-laps:latest \
+  RACE_ID CAR_NUMBER -n [flags]
 ```
 
 To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass-laps`.
