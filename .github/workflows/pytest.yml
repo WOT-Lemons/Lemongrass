@@ -6,6 +6,11 @@ on:
       - main
     paths:
       - '**.py'
+      - 'Dockerfile.laps'
+      - 'Dockerfile.pi'
+      - 'pi-requirements.txt'
+      - 'race-requirements.txt'
+      - 'uv.lock'
 
 jobs:
   test:
