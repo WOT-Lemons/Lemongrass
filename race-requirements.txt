@@ -5,6 +5,8 @@ certifi==2026.4.22
     #   httpcore
     #   httpx
     #   influxdb-client
+exceptiongroup==1.3.1 ; python_full_version < '3.11'
+    # via anyio
 h11==0.16.0
     # via httpcore
 httpcore==1.0.9
@@ -17,7 +19,9 @@ idna==3.13
     #   httpx
 influxdb-client==1.50.0
     # via lemongrass
-numpy==2.4.4
+numpy==2.2.6 ; python_full_version < '3.11'
+    # via pandas
+numpy==2.4.4 ; python_full_version >= '3.11'
     # via pandas
 pandas==2.3.3
 python-dateutil==2.9.0.post0
@@ -26,7 +30,7 @@ python-dateutil==2.9.0.post0
     #   pandas
 pytz==2026.2
     # via pandas
-race-monitor==0.1.0
+race-monitor==0.3.0
     # via lemongrass
 reactivex==4.1.0
     # via influxdb-client
@@ -35,6 +39,7 @@ six==1.17.0
 typing-extensions==4.15.0
     # via
     #   anyio
+    #   exceptiongroup
     #   reactivex
 tzdata==2026.2
     # via pandas

@@ -1,7 +1,8 @@
 # pylint: disable=missing-module-docstring,missing-class-docstring,missing-function-docstring
 import importlib.util
 import pathlib
-from unittest.mock import mock_open, patch
+import threading
+from unittest.mock import MagicMock, mock_open, patch
 
 _spec = importlib.util.spec_from_file_location(
     "laps",
@@ -9,6 +10,33 @@ _spec = importlib.util.spec_from_file_location(
 )
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
+
+
+class TestIntervalArg:
+    def test_default_interval_is_30(self):
+        args = _mod._build_parser().parse_args(['12345', '42'])
+        assert args.interval == 30
+
+    def test_custom_interval(self):
+        args = _mod._build_parser().parse_args(['12345', '42', '--interval', '60'])
+        assert args.interval == 60
+
+
+class TestMonitorRoutine:
+    def test_uses_interval_as_wait_timeout(self):
+        mock_event = MagicMock()
+        mock_event.wait.return_value = True  # stop after first check
+        with patch.object(_mod.threading, 'Event', return_value=mock_event):
+            _mod.monitor_routine('42', [], '123', '42', None, 0, MagicMock(), False, interval=45)
+        mock_event.wait.assert_called_with(timeout=45)
+
+    def test_stop_event_exits_loop(self):
+        stop = threading.Event()
+        stop.set()
+        with patch.object(_mod, 'refresh_competitor', return_value=[{'Lap': 1}]):
+            _mod.monitor_routine(
+                '42', [{'Lap': 1}], '123', '42', None, 0, MagicMock(), False,
+                interval=30, _stop_event=stop)
 
 
 class TestWriteCSV:
