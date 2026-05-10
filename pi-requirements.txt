@@ -22,7 +22,7 @@ idna==3.13
 influxdb-client==1.50.0
     # via lemongrass
 obd==0.7.3
-pint==0.24.4
+pint==0.25.3
     # via obd
 platformdirs==4.9.6
     # via pint
