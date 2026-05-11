@@ -1,5 +1,5 @@
-FROM python@sha256:a70683445547bc1dadf65b4e7d3f323d7e375977996a044a672e45f7926fa01c
+FROM ghcr.io/astral-sh/uv:0.11.13-python3.14-trixie@sha256:8cc52137ffba0e08e8519f299e85c0ec4ed6c2ff8476e740bf32686bcb530fbd
 WORKDIR /app
-COPY pi-requirements.txt .
-RUN pip install --no-cache-dir --root-user-action=ignore -r pi-requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --group pi
 COPY telem.py pisugar-monitor.py ./
