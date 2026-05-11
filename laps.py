@@ -16,6 +16,7 @@ import os
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from operator import itemgetter
 
 import pandas
@@ -24,6 +25,26 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 from race_monitor import RaceMonitorClient
 
 UNDERLINE = "-" * 80
+
+
+@dataclass
+class RaceContext:
+    """Fixed context for a run: race identity, API client, and optional InfluxDB handle."""
+    race_id: str
+    car_number: str
+    client: object
+    write_api: object
+    start_epoc: int
+
+
+@dataclass
+class RaceOptions:
+    """User-configured behaviour flags, built directly from CLI args."""
+    network_mode: bool = False
+    monitor_mode: bool = False
+    save_file: bool = False
+    selected_class: str | None = None
+    interval: int = 30
 
 
 def _build_parser():
@@ -85,7 +106,14 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
 
     race_id = str(args.race_id[0])
     car_number = str(args.car_number[0])
-    selected_class = args.selected_class
+
+    opts = RaceOptions(
+        network_mode=args.network_mode,
+        monitor_mode=args.monitor_mode,
+        save_file=args.save_file,
+        selected_class=args.selected_class,
+        interval=args.interval,
+    )
 
     with RaceMonitorClient(api_token=token) as client:
         race_details = client.race.details(race_id)
@@ -107,46 +135,41 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
             )
             print(UNDERLINE)
 
-        if selected_class:
-            logging.info("Sorting results for class %s.", selected_class.upper())
+        if opts.selected_class:
+            logging.info("Sorting results for class %s.", opts.selected_class.upper())
 
         response = client.race.is_live(race_id)
 
         if not response['Successful']:
             return 1
 
-        if args.network_mode:
-            with InfluxDBClient(
-                url='https://influxdb.focism.com', token=influx_token, org='focism'
-            ) as influx_client:
-                write_api = influx_client.write_api(write_options=SYNCHRONOUS)
-                return _run_race(
-                    race_id, car_number, client, args, write_api, start_epoc, response)
-        return _run_race(race_id, car_number, client, args, None, start_epoc, response)
+        if not opts.network_mode:
+            return _run_race(RaceContext(race_id, car_number, client, None, start_epoc), opts, response)
+
+        with InfluxDBClient(
+            url='https://influxdb.focism.com', token=influx_token, org='focism'
+        ) as influx_client:
+            write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+            return _run_race(
+                RaceContext(race_id, car_number, client, write_api, start_epoc), opts, response)
 
 
-def _run_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        race_id, car_number, client, args, write_api, start_epoc, response):
+def _run_race(ctx, opts, response):
     """Dispatch to live_race or old_race based on race status."""
     if response['IsLive'] is not True:
-        logging.info("Race %s is not live. Monitor mode disabled.", race_id)
-        if args.monitor_mode:
+        logging.info("Race %s is not live. Monitor mode disabled.", ctx.race_id)
+        if opts.monitor_mode:
             return 0
-        old_race(race_id, car_number, client, args.network_mode,
-                 start_epoc, write_api, args.save_file, args.selected_class)
+        old_race(ctx, opts)
     else:
-        logging.info("Race %s is currently live.", race_id)
-        live_race(
-            race_id, car_number, client, args.network_mode, args.monitor_mode,
-            write_api, start_epoc, args.save_file, args.selected_class, args.interval)
+        logging.info("Race %s is currently live.", ctx.race_id)
+        live_race(ctx, opts)
     return 0
 
 
-def live_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-        race_id, car_number, client, network_mode, monitor_mode,
-        write_api, start_epoc, save_file, selected_class, interval=30):
+def live_race(ctx, opts):
     """Called if a race ID is live."""
-    client.live.get_session(race_id)
+    ctx.client.live.get_session(ctx.race_id)
 
     list_of_competitors = []
 
@@ -174,16 +197,14 @@ def live_race(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     sorted_competitors = sorted(
         list_of_competitors, key=lambda k: int(itemgetter('Position')(k)))
 
-    print_rankings(sorted_competitors, True, selected_class)
-
-    racer_id = car_number
+    print_rankings(sorted_competitors, True, opts.selected_class)
 
     competitor_details = {}
     laps = []
 
     # Get lap times from live racer
-    logging.debug("Getting lap times for %s from race %s.", racer_id, race_id)
-    response = client.live.get_racer(race_id, racer_id)
+    logging.debug("Getting lap times for %s from race %s.", ctx.car_number, ctx.race_id)
+    response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
 
     if response['Successful']:
         laps = response['Details']['Laps']
@@ -215,36 +236,28 @@ def live_race(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
-    if network_mode:
-        push_influx(racer_id, laps, write_api, start_epoc, race_id, False, car_number)
+    if opts.network_mode:
+        push_influx(ctx, laps, False)
 
-    if save_file:
+    if opts.save_file:
         # Create filename and call function to write to CSV
-        filename = f"{competitor_details['Name']}-{race_id}"
+        filename = f"{competitor_details['Name']}-{ctx.race_id}"
         write_csv(filename, laps)
 
-    if monitor_mode:
-        monitor_routine(
-            car_number, laps, race_id, racer_id, write_api, start_epoc, client, network_mode,
-            interval=interval)
+    if opts.monitor_mode:
+        monitor_routine(ctx, laps, opts)
 
 
-def old_race(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches  # noqa: E501
-        race_id, car_number, client, network_mode,
-        start_epoc, write_api, save_file, selected_class):
+def old_race(ctx, opts):
     """Called if a race ID is not live."""
-    logging.debug("Getting sessions for race for %s", race_id)
-    race_details = client.results.sessions_for_race(race_id)
+    logging.debug("Getting sessions for race for %s", ctx.race_id)
+    race_details = ctx.client.results.sessions_for_race(ctx.race_id)
 
-    session_ids_for_race = []
-
-    # Get only session IDs in session_ids_for_race
-    for i in race_details['Sessions']:
-        session_ids_for_race.append(i['ID'])
+    session_ids_for_race = [s['ID'] for s in race_details['Sessions']]
 
     logging.debug(
         "Race %s has %s sessions, %s",
-        race_id, len(session_ids_for_race), session_ids_for_race)
+        ctx.race_id, len(session_ids_for_race), session_ids_for_race)
 
     laps = []
     competitor_details = {}
@@ -253,20 +266,20 @@ def old_race(  # pylint: disable=too-many-arguments,too-many-positional-argument
     # Send request for all session_ids from a race, including lap times
     for session_id in session_ids_for_race:
         logging.debug("Getting session details for %s including lap times.", session_id)
-        session_details = client.results.session_details(session_id, include_lap_times=True)
+        session_details = ctx.client.results.session_details(session_id, include_lap_times=True)
         sorted_competitors = session_details['Session']['SortedCompetitors'].copy()
 
         for competitor in sorted_competitors:
-            if competitor['Number'] == car_number:
+            if competitor['Number'] == ctx.car_number:
                 competitor_missing = False
                 competitor_details = competitor
                 laps = laps + competitor['LapTimes'].copy()
 
     if competitor_missing:
-        logging.info('Car %s not found', car_number)
+        logging.info('Car %s not found', ctx.car_number)
         return
 
-    print_rankings(sorted_competitors, False, selected_class)
+    print_rankings(sorted_competitors, False, opts.selected_class)
 
     # Print competitor detail block
     print(
@@ -306,12 +319,12 @@ def old_race(  # pylint: disable=too-many-arguments,too-many-positional-argument
             except ValueError:
                 value = None
 
-    if network_mode:
-        push_influx(car_number, laps, write_api, start_epoc, race_id, False, car_number)
+    if opts.network_mode:
+        push_influx(ctx, laps, False)
 
-    if save_file:
+    if opts.save_file:
         # Create filename and call function to write to CSV
-        filename = f"{competitor_details['Name']}-{race_id}-results"
+        filename = f"{competitor_details['Name']}-{ctx.race_id}-results"
         write_csv(filename, laps)
 
 
@@ -368,22 +381,17 @@ def write_csv(filename, competitor_lap_times):
     """Write laptimes for a competitor to a file."""
     logging.info("Writing lap times to %s.csv", filename)
     print(UNDERLINE)
-    with open(f"./{filename}.csv", 'w', encoding='utf-8') as lap_csv_fh:
-        csvwriter = csv.writer(lap_csv_fh)
-        count = 0
-        for lap in competitor_lap_times:
-            if count == 0:
-                header = lap.keys()
-                csvwriter.writerow(header)
-                count += 1
-            csvwriter.writerow(lap.values())
+    if not competitor_lap_times:
+        return
+    with open(f"./{filename}.csv", 'w', encoding='utf-8', newline='') as lap_csv_fh:
+        writer = csv.DictWriter(lap_csv_fh, fieldnames=competitor_lap_times[0].keys())
+        writer.writeheader()
+        writer.writerows(competitor_lap_times)
 
 
-def monitor_routine(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        car_number, laps, race_id, racer_id, write_api, start_epoc, client, network_mode,
-        interval=30, _stop_event=None):
+def monitor_routine(ctx, laps, opts, _stop_event=None):
     """Monitor mode: poll for new laps and display/push as they arrive."""
-    logging.info("Monitoring car %s...", car_number)
+    logging.info("Monitoring car %s...", ctx.car_number)
     print(UNDERLINE)
 
     # Create pandas dataframe and print without index to remove row numbers
@@ -391,47 +399,42 @@ def monitor_routine(  # pylint: disable=too-many-arguments,too-many-positional-a
     print(lap_time_df.to_string(index=False))
 
     stop = _stop_event if _stop_event is not None else threading.Event()
-    while not stop.wait(timeout=interval):
-        current_competitor_lap_times = refresh_competitor(race_id, racer_id, client)
+    while not stop.wait(timeout=opts.interval):
+        current_competitor_lap_times = refresh_competitor(ctx)
         if current_competitor_lap_times[-1] not in laps:
             current_competitor_lap_time_df = pandas.json_normalize(
                 current_competitor_lap_times[-1])
             print(current_competitor_lap_time_df.to_string(index=False, header=False))
             laps.append(current_competitor_lap_times[-1])
-            if network_mode:
-                push_influx(
-                    racer_id, current_competitor_lap_times, write_api,
-                    start_epoc, race_id, True, car_number)
+            if opts.network_mode:
+                push_influx(ctx, current_competitor_lap_times, True)
 
 
-def refresh_competitor(race_id, racer_id, client):
+def refresh_competitor(ctx):
     """Get latest lap times for a competitor from the live API."""
+    logging.debug("Refreshing lap times for car %s.", ctx.car_number)
+    response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
+
     laps = []
-
-    logging.debug("Refreshing lap times for car %s.", racer_id)
-    response = client.live.get_racer(race_id, racer_id)
-
     if response['Successful']:
         laps = response['Details']['Laps']
 
     logging.debug(
         "Current lap is %s with time %s.", laps[-1]['Lap'], laps[-1]['LapTime'])
-    response = []
     return laps
 
 
-def push_influx(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-        _racer_id, laps, write_api, start_epoc, race_id, monitor_mode, car_number):
+def push_influx(ctx, laps, monitor_mode):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
-    logging.debug("Start epoch in seconds: %s", start_epoc)
-    start_epoc = start_epoc * 1000
-    logging.debug("Start epoch in milliseconds: %s", start_epoc)
+    logging.debug("Start epoch in seconds: %s", ctx.start_epoc)
+    start_epoc_ms = ctx.start_epoc * 1000
+    logging.debug("Start epoch in milliseconds: %s", start_epoc_ms)
 
     if not monitor_mode:
         logging.info("Writing laps to influx...")
 
-    current_driver = "Driver" + str(car_number)
+    current_driver = "Driver" + str(ctx.car_number)
 
     # TODO: Concat driver from args
     write_success = True
@@ -440,7 +443,7 @@ def push_influx(  # pylint: disable=too-many-arguments,too-many-positional-argum
         h, m, s = lap['TotalTime'].split(':')
         s, ms = s.split('.')
         lap_finish_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
-        time_lap_completed_ms = start_epoc + lap_finish_ms
+        time_lap_completed_ms = start_epoc_ms + lap_finish_ms
         lap_timestamp = str(time_lap_completed_ms).replace(".", '')
 
         # Convert lap time to milliseconds
@@ -448,16 +451,15 @@ def push_influx(  # pylint: disable=too-many-arguments,too-many-positional-argum
         s, ms = s.split('.')
         lap_time_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
 
-        data = []
-        data.append(
-            f"laps{race_id},driver={current_driver} "
+        data = [
+            f"laps{ctx.race_id},driver={current_driver} "
             f"lap_no={lap['Lap']},lap_time={lap_time_ms},"
             f"position={lap['Position']},flag_status=\"{lap['FlagStatus']}\" "
             f"{lap_timestamp}"
-        )
+        ]
         logging.debug(data)
         try:
-            write_api.write(bucket='laps_252/autogen', record=data, write_precision='ms')
+            ctx.write_api.write(bucket='laps_252/autogen', record=data, write_precision='ms')
             logging.debug("Lap %s written to influx.", lap['Lap'])
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Writing lap failed: %s", e)
