@@ -144,7 +144,8 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
             return 1
 
         if not opts.network_mode:
-            return _run_race(RaceContext(race_id, car_number, client, None, start_epoc), opts, response)
+            return _run_race(
+                RaceContext(race_id, car_number, client, None, start_epoc), opts, response)
 
         with InfluxDBClient(
             url='https://influxdb.focism.com', token=influx_token, org='focism'
