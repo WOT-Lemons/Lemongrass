@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.6.0...v0.7.0) (2026-05-11)
+
+
+### Features
+
+* **deps:** python 3.14 ([#55](https://github.com/WOT-Lemons/Lemongrass/issues/55)) ([301610e](https://github.com/WOT-Lemons/Lemongrass/commit/301610e7995e0b3900b659208011ff64fd28a9f8))
+* upgrade to race-monitor 0.3.0 ([#57](https://github.com/WOT-Lemons/Lemongrass/issues/57)) ([2602e4b](https://github.com/WOT-Lemons/Lemongrass/commit/2602e4b609311bf32a34cdac080dc970427439f5))
+* use uv base images ([#65](https://github.com/WOT-Lemons/Lemongrass/issues/65)) ([6c899d2](https://github.com/WOT-Lemons/Lemongrass/commit/6c899d23dfd5bbb44bdd344bf0199e07d6d7d8f2))
+
 ## [0.6.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.5.0...v0.6.0) (2026-05-10)
 
 
