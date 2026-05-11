@@ -19,7 +19,7 @@ idna==3.13
     #   httpx
 influxdb-client==1.50.0
     # via lemongrass
-numpy==2.2.6 ; python_full_version < '3.11'
+numpy==2.4.4 ; python_full_version < '3.11'
     # via pandas
 numpy==2.4.4 ; python_full_version >= '3.11'
     # via pandas
