@@ -9,4 +9,4 @@ dependencies = [
 
 [dependency-groups]
 pi = ["obd~=0.7"]
-race = ["pandas~=2.3"]
+race = ["pandas~=3.0"]
