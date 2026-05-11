@@ -1,7 +1,7 @@
 [project]
 name = "lemongrass"
 version = "0.0.0"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 dependencies = [
     "influxdb-client~=1.47",
     "race-monitor~=0.3",
