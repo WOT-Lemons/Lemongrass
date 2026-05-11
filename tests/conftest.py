@@ -8,5 +8,6 @@ for _mod in [
     'influxdb_client.client.write_api',
     'obd',
     'pandas',
+    'race_monitor',
 ]:
     sys.modules.setdefault(_mod, MagicMock())
