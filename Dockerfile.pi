@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:0.11.13-python3.14-trixie@sha256:8cc52137ffba0e08e8519f299e85c0ec4ed6c2ff8476e740bf32686bcb530fbd
+FROM ghcr.io/astral-sh/uv:0.11.14-python3.14-trixie@sha256:ce5c2af593c72eedbfd70bf243861bc12e161959dd73e79dd2b807e81e0badf4
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --group pi
