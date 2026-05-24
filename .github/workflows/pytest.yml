@@ -8,8 +8,7 @@ on:
       - '**.py'
       - 'Dockerfile.laps'
       - 'Dockerfile.pi'
-      - 'pi-requirements.txt'
-      - 'race-requirements.txt'
+      - 'pyproject.toml'
       - 'uv.lock'
 
 jobs:
@@ -20,5 +19,8 @@ jobs:
 
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
+      - name: Check lockfile is up to date
+        run: uv lock --check
+
       - name: Run tests
-        run: uv run --with pytest pytest tests/
+        run: uv run --frozen --with pytest pytest tests/
