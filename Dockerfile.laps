@@ -2,5 +2,6 @@ FROM ghcr.io/astral-sh/uv:0.11.13-python3.14-trixie@sha256:e334c2bc6bef0aa02f860
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --group race
+ENV PATH="/app/.venv/bin:$PATH"
 COPY laps.py .
 ENTRYPOINT ["python", "laps.py"]
