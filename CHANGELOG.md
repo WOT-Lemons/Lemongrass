@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/WOT-Lemons/Lemongrass/compare/v0.9.0...v0.9.1) (2026-05-24)
+
+
+### Bug Fixes
+
+* **docker:** fix docker venv PATH and clean up files migrated to iac ([#78](https://github.com/WOT-Lemons/Lemongrass/issues/78)) ([002fd1d](https://github.com/WOT-Lemons/Lemongrass/commit/002fd1db73bd4cc3d46acbbbfba5dc8a2621b7f7))
+
 ## [0.9.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.8.0...v0.9.0) (2026-05-11)
 
 
