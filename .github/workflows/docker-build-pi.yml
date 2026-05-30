@@ -8,7 +8,7 @@ on:
       - 'v*'
     paths:
       - Dockerfile.pi
-      - pi-requirements.txt
+      - .dockerignore
       - pyproject.toml
       - uv.lock
       - telem.py
@@ -19,7 +19,7 @@ on:
       - main
     paths:
       - Dockerfile.pi
-      - pi-requirements.txt
+      - .dockerignore
       - pyproject.toml
       - uv.lock
       - telem.py

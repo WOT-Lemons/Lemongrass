@@ -8,7 +8,7 @@ on:
       - 'v*'
     paths:
       - Dockerfile.laps
-      - race-requirements.txt
+      - .dockerignore
       - pyproject.toml
       - uv.lock
       - laps.py
@@ -18,7 +18,7 @@ on:
       - main
     paths:
       - Dockerfile.laps
-      - race-requirements.txt
+      - .dockerignore
       - pyproject.toml
       - uv.lock
       - laps.py
