@@ -74,6 +74,15 @@ def new_fuel_status(r):
         )
 
 
+def connect():
+    """Open an OBD-II connection on the configured serial port.
+
+    Defaults to the ``/dev/obd`` udev symlink (passed into the container via a
+    device mapping). ``OBD_PORT`` overrides it for host-based testing.
+    """
+    return obd.Async(portstr=os.environ.get('OBD_PORT', '/dev/obd'))
+
+
 def flush_points(write_api):
     """Write all pending points to InfluxDB in a single request."""
     with pending_lock:
@@ -103,13 +112,13 @@ def main():
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
         obd.logger.setLevel(obd.logging.DEBUG)
-        connection = obd.Async()
+        connection = connect()
         status = connection.status()
         while "Car Connected" not in status:
             connection.close()
             logger.info("No car connected, sleeping...")
             sleep(1)
-            connection = obd.Async()
+            connection = connect()
             status = connection.status()
 
         logger.debug(connection.status())

@@ -24,6 +24,20 @@ def _reset():
     _mod.pending_points.clear()
 
 
+class TestConnect:
+    def test_defaults_to_obd_symlink(self, monkeypatch):
+        monkeypatch.delenv("OBD_PORT", raising=False)
+        with patch.object(_mod.obd, "Async") as mock_async:
+            _mod.connect()
+        mock_async.assert_called_once_with(portstr="/dev/obd")
+
+    def test_uses_obd_port_env_override(self, monkeypatch):
+        monkeypatch.setenv("OBD_PORT", "/dev/ttyUSB0")
+        with patch.object(_mod.obd, "Async") as mock_async:
+            _mod.connect()
+        mock_async.assert_called_once_with(portstr="/dev/ttyUSB0")
+
+
 class TestNewValue:
     def setup_method(self):
         _reset()
