@@ -1,0 +1,29 @@
+# Version control
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.python-version
+
+# Build artifacts
+dist
+build
+*.egg-info
+
+# Local env / secrets
+.env
+.env.sample
+
+# Editor / tooling
+.claude
+.github
+docs
+images
+tests
+*.md
+*.txt
+LICENSE
