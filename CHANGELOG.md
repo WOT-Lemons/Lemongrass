@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.9.1...v0.10.0) (2026-05-30)
+
+
+### Features
+
+* **telem:** connect OBD on configurable /dev/obd port ([#88](https://github.com/WOT-Lemons/Lemongrass/issues/88)) ([fa0283e](https://github.com/WOT-Lemons/Lemongrass/commit/fa0283eebfaf36ecb1b113111b9448c715e47ab9))
+
 ## [0.9.1](https://github.com/WOT-Lemons/Lemongrass/compare/v0.9.0...v0.9.1) (2026-05-24)
 
 
