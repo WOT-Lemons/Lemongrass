@@ -13,6 +13,7 @@ import argparse
 import csv
 import logging
 import os
+from collections import defaultdict
 import sys
 import threading
 import time
@@ -237,8 +238,13 @@ def live_race(ctx, opts):
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
-    if opts.network_mode:
-        push_influx(ctx, laps, False)
+    if opts.network_mode and laps:
+        class_name, class_position = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
+        class_positions = (
+            {int(laps[-1]['Lap']): class_position}
+            if class_position is not None else None
+        )
+        push_influx(ctx, laps, False, class_name=class_name, class_positions=class_positions)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -264,17 +270,29 @@ def old_race(ctx, opts):
     competitor_details = {}
     competitor_missing = True
 
-    # Send request for all session_ids from a race, including lap times
     for session_id in session_ids_for_race:
         logging.debug("Getting session details for %s including lap times.", session_id)
         session_details = ctx.client.results.session_details(session_id, include_lap_times=True)
-        sorted_competitors = session_details['Session']['SortedCompetitors'].copy()
+        sorted_competitors = [dict(c) for c in session_details['Session']['SortedCompetitors']]
 
+        session_laps = []
         for competitor in sorted_competitors:
             if competitor['Number'] == ctx.car_number:
                 competitor_missing = False
                 competitor_details = competitor
-                laps = laps + competitor['LapTimes'].copy()
+                session_laps = competitor['LapTimes'].copy()
+                laps = laps + [dict(lap) for lap in session_laps]
+
+        if opts.network_mode and session_laps:
+            flag_map = {0: "Green", 1: "Yellow", -1: "Finish"}
+            influx_laps = [
+                {**lap, 'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus']))}
+                for lap in session_laps
+            ]
+            class_name, class_positions = _resolve_class_historical(ctx.car_number, session_details)
+            push_influx(
+                ctx, influx_laps, False,
+                class_name=class_name, class_positions=class_positions)
 
     if competitor_missing:
         logging.info('Car %s not found', ctx.car_number)
@@ -282,7 +300,6 @@ def old_race(ctx, opts):
 
     print_rankings(sorted_competitors, False, opts.selected_class)
 
-    # Print competitor detail block
     print(
         f"Team: {competitor_details['FirstName']:<6}\t"
         f"Car Number: {competitor_details['Number']:<4}\t"
@@ -306,12 +323,10 @@ def old_race(ctx, opts):
         elif lap['FlagStatus'] == -1:
             lap['FlagStatus'] = "Finish"
 
-    # Create pandas dataframe and print without index to remove row numbers
     lap_time_df = pandas.json_normalize(laps)
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
-    # Remove competitors (LOSERS) with no position
     for competitor in sorted_competitors:
         for key, value in competitor.items():
             try:
@@ -320,12 +335,8 @@ def old_race(ctx, opts):
             except ValueError:
                 value = None
 
-    if opts.network_mode:
-        push_influx(ctx, laps, False)
-
     if opts.save_file:
-        # Create filename and call function to write to CSV
-        filename = f"{competitor_details['Name']}-{ctx.race_id}-results"
+        filename = f"{competitor_details['FirstName']}-{ctx.race_id}-results"
         write_csv(filename, laps)
 
 
@@ -408,7 +419,14 @@ def monitor_routine(ctx, laps, opts, _stop_event=None):
             print(current_competitor_lap_time_df.to_string(index=False, header=False))
             laps.append(current_competitor_lap_times[-1])
             if opts.network_mode:
-                push_influx(ctx, current_competitor_lap_times, True)
+                class_name, class_position = _resolve_class_live(
+                    ctx.client, ctx.race_id, ctx.car_number)
+                new_lap_num = int(current_competitor_lap_times[-1]['Lap'])
+                class_positions = (
+                    {new_lap_num: class_position} if class_position is not None else None)
+                push_influx(
+                    ctx, [current_competitor_lap_times[-1]], True,
+                    class_name=class_name, class_positions=class_positions)
 
 
 def refresh_competitor(ctx):
@@ -425,7 +443,7 @@ def refresh_competitor(ctx):
     return laps
 
 
-def push_influx(ctx, laps, monitor_mode):
+def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
     logging.debug("Start epoch in seconds: %s", ctx.start_epoc)
@@ -436,28 +454,34 @@ def push_influx(ctx, laps, monitor_mode):
         logging.info("Writing laps to influx...")
 
     current_driver = "Driver" + str(ctx.car_number)
+    tag_str = (
+        f"class={class_name},driver={current_driver}"
+        if class_name else f"driver={current_driver}"
+    )
 
-    # TODO: Concat driver from args
     write_success = True
     for lap in laps:
-        # Convert HH:MM:SS.MS to get time lap completed
         h, m, s = lap['TotalTime'].split(':')
         s, ms = s.split('.')
         lap_finish_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
         time_lap_completed_ms = start_epoc_ms + lap_finish_ms
         lap_timestamp = str(time_lap_completed_ms).replace(".", '')
 
-        # Convert lap time to milliseconds
         h, m, s = lap['LapTime'].split(':')
         s, ms = s.split('.')
         lap_time_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
 
-        data = [
-            f"laps{ctx.race_id},driver={current_driver} "
-            f"lap_no={lap['Lap']},lap_time={lap_time_ms},"
-            f"position={lap['Position']},flag_status=\"{lap['FlagStatus']}\" "
-            f"{lap_timestamp}"
-        ]
+        lap_num = int(lap['Lap'])
+        field_str = (
+            f"lap_no={lap_num},lap_time={lap_time_ms},"
+            f"position={lap['Position']},flag_status=\"{lap['FlagStatus']}\""
+        )
+        if class_positions is not None:
+            class_pos = class_positions.get(lap_num)
+            if class_pos is not None:
+                field_str += f",class_position={class_pos}"
+
+        data = [f"laps{ctx.race_id},{tag_str} {field_str} {lap_timestamp}"]
         logging.debug(data)
         try:
             ctx.write_api.write(bucket='laps_252/autogen', record=data, write_precision='ms')
@@ -470,6 +494,93 @@ def push_influx(ctx, laps, monitor_mode):
         logging.info('All lap data written successfully')
 
     print(UNDERLINE)
+
+
+def _resolve_class_historical(car_number, session_details):
+    """Return (class_name, {lap_num: class_position}) for the tracked car."""
+    session = session_details['Session']
+    competitors = session['SortedCompetitors']
+    categories = session['Categories']
+
+    tracked_category = None
+    tracked_laps = {}
+    for competitor in competitors:
+        if competitor['Number'] == car_number:
+            tracked_category = competitor['Category']
+            for lap in competitor['LapTimes']:
+                try:
+                    tracked_laps[int(lap['Lap'])] = int(lap['Position'])
+                except (ValueError, TypeError):
+                    pass
+            break
+
+    if tracked_category is None:
+        return None, {}
+
+    class_name = (
+        categories.get(tracked_category, {})
+        .get('Name', tracked_category)
+        .replace(' ', '_').replace(',', '').replace('=', '')
+    )
+
+    class_lap_positions = defaultdict(list)
+    for competitor in competitors:
+        if competitor['Number'] == car_number or competitor['Category'] != tracked_category:
+            continue
+        for lap in competitor['LapTimes']:
+            try:
+                class_lap_positions[int(lap['Lap'])].append(int(lap['Position']))
+            except (ValueError, TypeError):
+                pass
+
+    class_positions = {
+        lap_num: 1 + sum(1 for pos in class_lap_positions.get(lap_num, []) if pos < tracked_pos)
+        for lap_num, tracked_pos in tracked_laps.items()
+    }
+
+    return class_name, class_positions
+
+
+def _resolve_class_live(client, race_id, car_number):
+    """Return (class_name, class_position) for the tracked car using current session state."""
+    response = client.live.get_session(race_id)
+    if not response['Successful']:
+        return None, None
+    session = response['Session']
+    classes = session['Classes']
+    competitors = session['Competitors']
+
+    tracked = None
+    for competitor in competitors.values():
+        if competitor['Number'] == car_number:
+            tracked = competitor
+            break
+
+    if tracked is None:
+        return None, None
+
+    class_id = tracked['ClassID']
+    class_name = (
+        classes.get(class_id, {}).get('Description', class_id)
+        .replace(' ', '_').replace(',', '').replace('=', '')
+    )
+
+    try:
+        tracked_pos = int(tracked['Position'])
+    except (ValueError, TypeError):
+        return class_name, None
+
+    class_position = 1
+    for competitor in competitors.values():
+        if competitor['Number'] == car_number or competitor['ClassID'] != class_id:
+            continue
+        try:
+            if int(competitor['Position']) < tracked_pos:
+                class_position += 1
+        except (ValueError, TypeError):
+            pass
+
+    return class_name, class_position
 
 
 if __name__ == '__main__':
