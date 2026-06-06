@@ -281,6 +281,21 @@ class TestPushInfluxClassInfo:
         _mod.push_influx(ctx, self._laps(), False)
         assert 'class_position' not in self._record(write_api)
 
+    def test_ctx_start_epoc_used_when_no_override(self):
+        ctx, write_api = self._ctx()  # ctx.start_epoc = 0
+        _mod.push_influx(ctx, self._laps(), False)
+        record = self._record(write_api)
+        # start_epoc=0 → timestamp = 0*1000 + 90000 = 90000
+        # TotalTime '0:01:30.000' = 90000 ms
+        assert record.endswith('90000')
+
+    def test_start_epoc_override_changes_timestamp(self):
+        ctx, write_api = self._ctx()  # ctx.start_epoc = 0, would give 90000
+        _mod.push_influx(ctx, self._laps(), False, start_epoc=1000)
+        record = self._record(write_api)
+        # start_epoc=1000 → timestamp = 1000*1000 + 90000 = 1090000
+        assert record.endswith('1090000')
+
 
 class TestOldRaceClassWiring:
     def _session_details(self, car_number='42', cat_id='1', cat_name='A'):

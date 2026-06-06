@@ -442,11 +442,11 @@ def refresh_competitor(ctx):
     return laps
 
 
-def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None):
+def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None, start_epoc=None):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
     logging.debug("Start epoch in seconds: %s", ctx.start_epoc)
-    start_epoc_ms = ctx.start_epoc * 1000
+    start_epoc_ms = (start_epoc if start_epoc is not None else ctx.start_epoc) * 1000
     logging.debug("Start epoch in milliseconds: %s", start_epoc_ms)
 
     if not monitor_mode:
