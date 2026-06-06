@@ -291,7 +291,8 @@ def old_race(ctx, opts):
             class_name, class_positions = _resolve_class_historical(ctx.car_number, session_details)
             push_influx(
                 ctx, influx_laps, False,
-                class_name=class_name, class_positions=class_positions)
+                class_name=class_name, class_positions=class_positions,
+                start_epoc=session_details['Session']['SessionStartDateEpoc'])
 
     if competitor_missing:
         logging.info('Car %s not found', ctx.car_number)
@@ -445,8 +446,9 @@ def refresh_competitor(ctx):
 def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None, start_epoc=None):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
-    logging.debug("Start epoch in seconds: %s", ctx.start_epoc)
-    start_epoc_ms = (start_epoc if start_epoc is not None else ctx.start_epoc) * 1000
+    effective_epoc = start_epoc if start_epoc is not None else ctx.start_epoc
+    logging.debug("Start epoch in seconds: %s", effective_epoc)
+    start_epoc_ms = effective_epoc * 1000
     logging.debug("Start epoch in milliseconds: %s", start_epoc_ms)
 
     if not monitor_mode:

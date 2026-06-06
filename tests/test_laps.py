@@ -347,6 +347,21 @@ class TestOldRaceClassWiring:
         _, kwargs = mock_push.call_args
         assert kwargs.get('class_name') == 'A'
 
+    def test_passes_session_start_epoc_to_push_influx(self):
+        # ctx.start_epoc=9999 is intentionally different from SessionStartDateEpoc=5555
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 9999)
+        opts = _mod.RaceOptions(network_mode=True)
+        session = self._session_details()
+        session['Session']['SessionStartDateEpoc'] = 5555
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = session
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('start_epoc') == 5555
+
     def test_no_network_mode_skips_resolve(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
         opts = _mod.RaceOptions(network_mode=False)
