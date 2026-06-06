@@ -135,3 +135,20 @@ class TestResolveClassHistorical:
         sd['Session']['Categories'] = {}
         class_name, _ = _mod._resolve_class_historical('42', sd)
         assert class_name == '9'
+
+    def test_three_cars_tracked_car_in_middle(self):
+        # tracked laps: pos3, pos2 — one ahead at pos1 — one behind at pos8
+        sd = self._session('42', '1', others=[('10', [(1, 1), (2, 1)]), ('99', [(1, 8), (2, 8)])])
+        _, positions = _mod._resolve_class_historical('42', sd)
+        assert positions[1] == 2
+        assert positions[2] == 2
+
+    def test_classmate_missing_lap_not_counted_as_ahead(self):
+        # tracked car completes lap 2, class-mate only has lap 1 data
+        # class-mate's absence from lap 2 should not bump tracked car's class_pos
+        sd = self._session('42', '1', others=[('99', [(1, 1)])])  # 99 only has lap 1
+        _, positions = _mod._resolve_class_historical('42', sd)
+        # at lap 1: 99 is at pos1 < tracked pos3 → tracked is class_pos 2
+        assert positions[1] == 2
+        # at lap 2: 99 has no lap 2 record → not counted → tracked is class_pos 1
+        assert positions[2] == 1
