@@ -242,6 +242,7 @@ def live_race(ctx, opts):
         # class_position intentionally discarded: historical laps were completed before launch
         # so any position we compute now is stale. monitor_routine owns class_position writes.
         class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
+        logging.info("Car %s: class %r", ctx.car_number, class_name)
         push_influx(ctx, laps, False, class_name=class_name, class_positions=None)
 
     if opts.save_file:
@@ -589,7 +590,7 @@ def _resolve_class_live(client, race_id, car_number):
         except (ValueError, TypeError):
             pass
 
-    logging.info(
+    logging.debug(
         "_resolve_class_live: car=%s class=%r overall_pos=%s class_pos=%s",
         car_number, class_name, tracked_pos, class_position,
     )
