@@ -514,6 +514,43 @@ def _resolve_class_historical(car_number, session_details):
     return class_name, class_positions
 
 
+def _resolve_class_live(client, race_id, car_number):
+    """Return (class_name, class_position) for the tracked car using current session state."""
+    response = client.live.get_session(race_id)
+    session = response['Session']
+    classes = session['Classes']
+    competitors = session['Competitors']
+
+    tracked = None
+    for competitor in competitors.values():
+        if competitor['Number'] == car_number:
+            tracked = competitor
+            break
+
+    if tracked is None:
+        return None, None
+
+    class_id = tracked['ClassID']
+    class_name = classes.get(class_id, {}).get('Description', class_id).replace(' ', '_')
+
+    try:
+        tracked_pos = int(tracked['Position'])
+    except (ValueError, TypeError):
+        return class_name, None
+
+    class_position = 1
+    for competitor in competitors.values():
+        if competitor['Number'] == car_number or competitor['ClassID'] != class_id:
+            continue
+        try:
+            if int(competitor['Position']) < tracked_pos:
+                class_position += 1
+        except (ValueError, TypeError):
+            pass
+
+    return class_name, class_position
+
+
 if __name__ == '__main__':
     try:
         main()

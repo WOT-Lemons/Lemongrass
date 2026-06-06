@@ -152,3 +152,69 @@ class TestResolveClassHistorical:
         assert positions[1] == 2
         # at lap 2: 99 has no lap 2 record → not counted → tracked is class_pos 1
         assert positions[2] == 1
+
+
+class TestResolveClassLive:
+    def _make_client(self, car_number, class_id, car_position, others=None):
+        """others: list of (car_number, class_id, position)."""
+        competitors = {
+            'r1': {
+                'RacerID': 'r1', 'Number': car_number, 'ClassID': class_id,
+                'Position': str(car_position), 'Transponder': '', 'FirstName': '',
+                'LastName': '', 'Nationality': '', 'AdditionalData': '',
+                'Laps': '', 'TotalTime': '', 'BestPosition': '',
+                'BestLap': '', 'BestLapTime': '', 'LastLapTime': '',
+            }
+        }
+        for i, (num, cid, pos) in enumerate(others or []):
+            competitors[f'r{i + 2}'] = {
+                'RacerID': f'r{i + 2}', 'Number': num, 'ClassID': cid,
+                'Position': str(pos), 'Transponder': '', 'FirstName': '',
+                'LastName': '', 'Nationality': '', 'AdditionalData': '',
+                'Laps': '', 'TotalTime': '', 'BestPosition': '',
+                'BestLap': '', 'BestLapTime': '', 'LastLapTime': '',
+            }
+        client = MagicMock()
+        client.live.get_session.return_value = {
+            'Successful': True,
+            'Session': {
+                'RunNumber': '', 'SessionName': '', 'TrackName': '',
+                'TrackLength': '', 'CurrentTime': '', 'SessionTime': '',
+                'TimeToGo': '', 'LapsToGo': '', 'FlagStatus': '', 'SortMode': '',
+                'Classes': {class_id: {'ClassID': class_id, 'Description': 'A'}},
+                'Competitors': competitors,
+            },
+        }
+        return client
+
+    def test_returns_class_name(self):
+        client = self._make_client('42', 'classA', 3)
+        client.live.get_session.return_value['Session']['Classes']['classA']['Description'] = 'A'
+        class_name, _ = _mod._resolve_class_live(client, '999', '42')
+        assert class_name == 'A'
+
+    def test_only_car_in_class_is_position_1(self):
+        client = self._make_client('42', 'classA', 3)
+        _, class_pos = _mod._resolve_class_live(client, '999', '42')
+        assert class_pos == 1
+
+    def test_tracked_car_ahead_in_class(self):
+        client = self._make_client('42', 'classA', 3, others=[('99', 'classA', 5)])
+        _, class_pos = _mod._resolve_class_live(client, '999', '42')
+        assert class_pos == 1
+
+    def test_tracked_car_behind_in_class(self):
+        client = self._make_client('42', 'classA', 5, others=[('99', 'classA', 1)])
+        _, class_pos = _mod._resolve_class_live(client, '999', '42')
+        assert class_pos == 2
+
+    def test_different_class_not_counted(self):
+        client = self._make_client('42', 'classA', 5, others=[('99', 'classB', 1)])
+        _, class_pos = _mod._resolve_class_live(client, '999', '42')
+        assert class_pos == 1
+
+    def test_car_not_found_returns_none_none(self):
+        client = self._make_client('42', 'classA', 3)
+        class_name, class_pos = _mod._resolve_class_live(client, '999', '99')
+        assert class_name is None
+        assert class_pos is None
