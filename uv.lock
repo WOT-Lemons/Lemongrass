@@ -86,11 +86,11 @@ wheels = [
 
 [[package]]
 name = "idna"
-version = "3.14"
+version = "3.18"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/05/b1/efac073e0c297ecf2fb33c346989a529d4e19164f1759102dee5953ee17e/idna-3.14.tar.gz", hash = "sha256:466d810d7a2cc1022bea9b037c39728d51ae7dad40d480fc9b7d7ecf98ba8ee3", size = 198272, upload-time = "2026-05-10T20:32:15.935Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/63/9496c57188a2ee585e0f1db071d75089a11e98aa86eb99d9d7618fc1edce/idna-3.18.tar.gz", hash = "sha256:ffb385a7e039654cef1ab9ef32c6fafe283c0c0467bba1d9029738ce4a14a848", size = 196711, upload-time = "2026-06-02T14:34:07.794Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/3c/3f62dee257eb3d6b2c1ef2a09d36d9793c7111156a73b5654d2c2305e5ce/idna-3.14-py3-none-any.whl", hash = "sha256:e677eaf072e290f7b725f9acf0b3a2bd55f9fd6f7c70abe5f0e34823d0accf69", size = 72184, upload-time = "2026-05-10T20:32:14.295Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl", hash = "sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2", size = 65455, upload-time = "2026-06-02T14:34:06.319Z" },
 ]
 
 [[package]]
@@ -128,7 +128,7 @@ race = [
 [package.metadata]
 requires-dist = [
     { name = "influxdb-client", specifier = "~=1.47" },
-    { name = "race-monitor", specifier = ">=0.3,<1" },
+    { name = "race-monitor", specifier = ">=0.5.1,<1" },
 ]
 
 [package.metadata.requires-dev]
@@ -260,14 +260,15 @@ wheels = [
 
 [[package]]
 name = "race-monitor"
-version = "0.4.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
+    { name = "idna" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8f/52/1f1a785f6132d0cee40a1a330e2c9b34533a6b74fddebd0c48b5e6bdfb04/race_monitor-0.4.0.tar.gz", hash = "sha256:86118f8aedcdc69745c5829198a808b87fd582e2433918ef33411d3da694e5d6", size = 42714, upload-time = "2026-05-11T00:52:54.051Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/f4/9a8c144fa040a1f499597fccde38082c6d140df63f3e0fe69bbe5fed0002/race_monitor-0.5.1.tar.gz", hash = "sha256:89faa62e2eb7ae66dc635156f64ed13dbc007a8ab22350374602aab00964e74a", size = 10815, upload-time = "2026-06-06T17:57:23.776Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/d6/b6726c00407b2f14cf1749402b36dd16e2bacd85a5682a20111be80f597b/race_monitor-0.4.0-py3-none-any.whl", hash = "sha256:3053851b5dec56da7586988ec5db4f054e4fe48c81120c9273d81c15f931fc6e", size = 13122, upload-time = "2026-05-11T00:52:52.577Z" },
+    { url = "https://files.pythonhosted.org/packages/61/f8/5e4807b75a9f67d2b13b79bec1e4e559a514c123121ad1389279093372c8/race_monitor-0.5.1-py3-none-any.whl", hash = "sha256:c5dbf91cd0d3f3c1e0eadb571a388e3f765a5cadb2904db39ce14072f9f58863", size = 15973, upload-time = "2026-06-06T17:57:22.486Z" },
 ]
 
 [[package]]
