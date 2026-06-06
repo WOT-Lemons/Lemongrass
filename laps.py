@@ -472,6 +472,48 @@ def push_influx(ctx, laps, monitor_mode):
     print(UNDERLINE)
 
 
+def _resolve_class_historical(car_number, session_details):
+    """Return (class_name, {lap_num: class_position}) for the tracked car."""
+    session = session_details['Session']
+    competitors = session['SortedCompetitors']
+    categories = session['Categories']
+
+    tracked_category = None
+    tracked_laps = {}
+    for competitor in competitors:
+        if competitor['Number'] == car_number:
+            tracked_category = competitor['Category']
+            for lap in competitor['LapTimes']:
+                try:
+                    tracked_laps[int(lap['Lap'])] = int(lap['Position'])
+                except (ValueError, TypeError):
+                    pass
+            break
+
+    if tracked_category is None:
+        return None, {}
+
+    class_name = categories.get(tracked_category, {}).get('Name', tracked_category).replace(' ', '_')
+
+    class_positions = {}
+    for lap_num, tracked_pos in tracked_laps.items():
+        class_pos = 1
+        for competitor in competitors:
+            if competitor['Number'] == car_number or competitor['Category'] != tracked_category:
+                continue
+            for lap in competitor['LapTimes']:
+                try:
+                    if int(lap['Lap']) == lap_num:
+                        if int(lap['Position']) < tracked_pos:
+                            class_pos += 1
+                        break
+                except (ValueError, TypeError):
+                    pass
+        class_positions[lap_num] = class_pos
+
+    return class_name, class_positions
+
+
 if __name__ == '__main__':
     try:
         main()

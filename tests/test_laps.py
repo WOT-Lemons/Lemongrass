@@ -57,3 +57,81 @@ class TestWriteCSV:
         combined = "".join(written)
         assert "Lap" in combined
         assert "LapTime" in combined
+
+
+class TestResolveClassHistorical:
+    def _session(self, tracked_number, cat_id, others=None):
+        """others: list of (car_number, [(lap_num, position), ...]) for same-class cars."""
+        def _make_competitor(number, laps_data, comp_id):
+            return {
+                'Number': number, 'Category': cat_id,
+                'ID': comp_id, 'SessionID': 1, 'RaceID': 1,
+                'FirstName': '', 'LastName': '', 'Position': '', 'Laps': '',
+                'LastLapTime': '', 'BestPosition': '', 'BestLap': '',
+                'BestLapTime': '', 'TotalTime': '', 'Transponder': '',
+                'Nationality': '', 'AdditionalData': '',
+                'LapTimes': [
+                    {'Lap': str(lap), 'LapTime': '0:01:30.000',
+                     'Position': str(pos), 'FlagStatus': 0,
+                     'TotalTime': '0:01:30.000'}
+                    for lap, pos in laps_data
+                ],
+            }
+
+        competitors = [_make_competitor(tracked_number, [(1, 3), (2, 2)], 1)]
+        for i, (num, laps_data) in enumerate(others or []):
+            competitors.append(_make_competitor(num, laps_data, i + 2))
+
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 1, 'Name': 'S1', 'SessionDate': '',
+                'SessionTime': '', 'SortMode': '', 'CategoryString': '',
+                'ResultsProcessorVersion': 1, 'SessionStartDateEpoc': 0,
+                'Categories': {cat_id: {'ID': cat_id, 'Name': 'A'}},
+                'SortedCompetitors': competitors,
+            },
+        }
+
+    def test_returns_class_name(self):
+        sd = self._session('42', '1')
+        class_name, _ = _mod._resolve_class_historical('42', sd)
+        assert class_name == 'A'
+
+    def test_class_name_spaces_replaced_with_underscores(self):
+        sd = self._session('42', '1')
+        sd['Session']['Categories']['1']['Name'] = 'Super Street'
+        class_name, _ = _mod._resolve_class_historical('42', sd)
+        assert class_name == 'Super_Street'
+
+    def test_only_car_in_class_is_always_position_1(self):
+        sd = self._session('42', '1')
+        _, positions = _mod._resolve_class_historical('42', sd)
+        assert positions[1] == 1
+        assert positions[2] == 1
+
+    def test_two_cars_tracked_car_ahead(self):
+        # tracked: lap1=pos3, lap2=pos2 — other: lap1=pos5, lap2=pos4
+        sd = self._session('42', '1', others=[('99', [(1, 5), (2, 4)])])
+        _, positions = _mod._resolve_class_historical('42', sd)
+        assert positions[1] == 1
+        assert positions[2] == 1
+
+    def test_two_cars_tracked_car_behind(self):
+        # tracked: lap1=pos3, lap2=pos2 — other: lap1=pos1, lap2=pos1
+        sd = self._session('42', '1', others=[('99', [(1, 1), (2, 1)])])
+        _, positions = _mod._resolve_class_historical('42', sd)
+        assert positions[1] == 2
+        assert positions[2] == 2
+
+    def test_car_not_in_session_returns_none_and_empty(self):
+        sd = self._session('42', '1')
+        class_name, positions = _mod._resolve_class_historical('99', sd)
+        assert class_name is None
+        assert positions == {}
+
+    def test_unknown_category_falls_back_to_raw_id(self):
+        sd = self._session('42', '9')
+        sd['Session']['Categories'] = {}
+        class_name, _ = _mod._resolve_class_historical('42', sd)
+        assert class_name == '9'
