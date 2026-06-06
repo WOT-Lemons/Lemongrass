@@ -289,7 +289,9 @@ def old_race(ctx, opts):
                 for lap in session_laps
             ]
             class_name, class_positions = _resolve_class_historical(ctx.car_number, session_details)
-            push_influx(ctx, influx_laps, False, class_name=class_name, class_positions=class_positions)
+            push_influx(
+                ctx, influx_laps, False,
+                class_name=class_name, class_positions=class_positions)
 
     if competitor_missing:
         logging.info('Car %s not found', ctx.car_number)
@@ -419,8 +421,11 @@ def monitor_routine(ctx, laps, opts, _stop_event=None):
                 class_name, class_position = _resolve_class_live(
                     ctx.client, ctx.race_id, ctx.car_number)
                 new_lap_num = int(current_competitor_lap_times[-1]['Lap'])
-                class_positions = {new_lap_num: class_position} if class_position is not None else None
-                push_influx(ctx, current_competitor_lap_times, True, class_name=class_name, class_positions=class_positions)
+                class_positions = (
+                    {new_lap_num: class_position} if class_position is not None else None)
+                push_influx(
+                    ctx, current_competitor_lap_times, True,
+                    class_name=class_name, class_positions=class_positions)
 
 
 def refresh_competitor(ctx):
@@ -448,7 +453,10 @@ def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None):
         logging.info("Writing laps to influx...")
 
     current_driver = "Driver" + str(ctx.car_number)
-    tag_str = f"class={class_name},driver={current_driver}" if class_name else f"driver={current_driver}"
+    tag_str = (
+        f"class={class_name},driver={current_driver}"
+        if class_name else f"driver={current_driver}"
+    )
 
     write_success = True
     for lap in laps:
@@ -508,7 +516,11 @@ def _resolve_class_historical(car_number, session_details):
     if tracked_category is None:
         return None, {}
 
-    class_name = categories.get(tracked_category, {}).get('Name', tracked_category).replace(' ', '_')
+    class_name = (
+        categories.get(tracked_category, {})
+        .get('Name', tracked_category)
+        .replace(' ', '_')
+    )
 
     class_positions = {}
     for lap_num, tracked_pos in tracked_laps.items():
