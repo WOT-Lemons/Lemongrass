@@ -239,6 +239,8 @@ def live_race(ctx, opts):
     print(UNDERLINE)
 
     if opts.network_mode and laps:
+        # class_position intentionally discarded: historical laps were completed before launch
+        # so any position we compute now is stale. monitor_routine owns class_position writes.
         class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
         push_influx(ctx, laps, False, class_name=class_name, class_positions=None)
 
