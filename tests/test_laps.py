@@ -1,5 +1,6 @@
 # pylint: disable=missing-module-docstring,missing-class-docstring,missing-function-docstring
 import importlib.util
+import logging
 import pathlib
 import threading
 from unittest.mock import MagicMock, mock_open, patch
@@ -296,6 +297,13 @@ class TestPushInfluxClassInfo:
         # start_epoc=1000 → timestamp = 1000*1000 + 90000 = 1090000
         assert record.endswith('1090000')
 
+    def test_warns_when_effective_epoc_is_zero(self, caplog):
+        ctx, write_api = self._ctx()  # ctx.start_epoc = 0
+        with caplog.at_level(logging.WARNING):
+            _mod.push_influx(ctx, self._laps(), False)
+        assert any('epoch' in r.message.lower() and r.levelno == logging.WARNING
+                   for r in caplog.records)
+
 
 class TestOldRaceClassWiring:
     def _session_details(self, car_number='42', cat_id='1', cat_name='A'):
@@ -361,6 +369,20 @@ class TestOldRaceClassWiring:
                     _mod.old_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('start_epoc') == 5555
+
+    def test_handles_missing_session_start_epoc_key(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        session = self._session_details()
+        del session['Session']['SessionStartDateEpoc']
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = session
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('start_epoc') is None
 
     def test_no_network_mode_skips_resolve(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)

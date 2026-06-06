@@ -292,7 +292,7 @@ def old_race(ctx, opts):
             push_influx(
                 ctx, influx_laps, False,
                 class_name=class_name, class_positions=class_positions,
-                start_epoc=session_details['Session']['SessionStartDateEpoc'])
+                start_epoc=session_details['Session'].get('SessionStartDateEpoc'))
 
     if competitor_missing:
         logging.info('Car %s not found', ctx.car_number)
@@ -447,6 +447,8 @@ def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None, 
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
     effective_epoc = start_epoc if start_epoc is not None else ctx.start_epoc
+    if effective_epoc == 0:
+        logging.warning("Start epoch is 0; lap timestamps will be anchored to Unix epoch")
     logging.debug("Start epoch in seconds: %s", effective_epoc)
     start_epoc_ms = effective_epoc * 1000
     logging.debug("Start epoch in milliseconds: %s", start_epoc_ms)
