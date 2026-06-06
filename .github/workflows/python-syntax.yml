@@ -16,4 +16,4 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Check syntax and style
-        run: uv run --with flake8 flake8 .
+        run: uv run --with ruff ruff check .

@@ -7,6 +7,10 @@ dependencies = [
     "race-monitor>=0.5.1,<1",
 ]
 
+[tool.ruff]
+line-length = 100
+exclude = [".git", "__pycache__", "build", "dist", ".venv"]
+
 [dependency-groups]
 pi = ["obd~=0.7"]
 race = ["pandas~=2.3"]
