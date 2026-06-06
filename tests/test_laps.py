@@ -312,7 +312,9 @@ class TestOldRaceClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
-        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})) as mock_resolve:
+        with patch.object(
+            _mod, '_resolve_class_historical', return_value=('A', {1: 1})
+        ) as mock_resolve:
             with patch.object(_mod, 'push_influx'):
                 with patch.object(_mod, 'print_rankings'):
                     _mod.old_race(ctx, opts)
