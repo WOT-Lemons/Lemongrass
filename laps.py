@@ -240,7 +240,7 @@ def live_race(ctx, opts):
     if opts.network_mode:
         class_name, class_position = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
         class_positions = (
-            {int(lap['Lap']): class_position for lap in laps}
+            {int(laps[-1]['Lap']): class_position}
             if class_position is not None else None
         )
         push_influx(ctx, laps, False, class_name=class_name, class_positions=class_positions)
@@ -424,7 +424,7 @@ def monitor_routine(ctx, laps, opts, _stop_event=None):
                 class_positions = (
                     {new_lap_num: class_position} if class_position is not None else None)
                 push_influx(
-                    ctx, current_competitor_lap_times, True,
+                    ctx, [current_competitor_lap_times[-1]], True,
                     class_name=class_name, class_positions=class_positions)
 
 
@@ -519,24 +519,26 @@ def _resolve_class_historical(car_number, session_details):
     class_name = (
         categories.get(tracked_category, {})
         .get('Name', tracked_category)
-        .replace(' ', '_')
+        .replace(' ', '_').replace(',', '').replace('=', '')
     )
 
-    class_positions = {}
-    for lap_num, tracked_pos in tracked_laps.items():
-        class_pos = 1
-        for competitor in competitors:
-            if competitor['Number'] == car_number or competitor['Category'] != tracked_category:
-                continue
-            for lap in competitor['LapTimes']:
-                try:
-                    if int(lap['Lap']) == lap_num:
-                        if int(lap['Position']) < tracked_pos:
-                            class_pos += 1
-                        break
-                except (ValueError, TypeError):
-                    pass
-        class_positions[lap_num] = class_pos
+    class_lap_positions = {}
+    for competitor in competitors:
+        if competitor['Number'] == car_number or competitor['Category'] != tracked_category:
+            continue
+        for lap in competitor['LapTimes']:
+            try:
+                lap_num = int(lap['Lap'])
+                if lap_num not in class_lap_positions:
+                    class_lap_positions[lap_num] = []
+                class_lap_positions[lap_num].append(int(lap['Position']))
+            except (ValueError, TypeError):
+                pass
+
+    class_positions = {
+        lap_num: 1 + sum(1 for pos in class_lap_positions.get(lap_num, []) if pos < tracked_pos)
+        for lap_num, tracked_pos in tracked_laps.items()
+    }
 
     return class_name, class_positions
 
@@ -544,6 +546,8 @@ def _resolve_class_historical(car_number, session_details):
 def _resolve_class_live(client, race_id, car_number):
     """Return (class_name, class_position) for the tracked car using current session state."""
     response = client.live.get_session(race_id)
+    if not response['Successful']:
+        return None, None
     session = response['Session']
     classes = session['Classes']
     competitors = session['Competitors']
@@ -558,7 +562,10 @@ def _resolve_class_live(client, race_id, car_number):
         return None, None
 
     class_id = tracked['ClassID']
-    class_name = classes.get(class_id, {}).get('Description', class_id).replace(' ', '_')
+    class_name = (
+        classes.get(class_id, {}).get('Description', class_id)
+        .replace(' ', '_').replace(',', '').replace('=', '')
+    )
 
     try:
         tracked_pos = int(tracked['Position'])

@@ -104,6 +104,13 @@ class TestResolveClassHistorical:
         class_name, _ = _mod._resolve_class_historical('42', sd)
         assert class_name == 'Super_Street'
 
+    def test_class_name_special_chars_stripped(self):
+        sd = self._session('42', '1')
+        sd['Session']['Categories']['1']['Name'] = 'GT3,Pro=Am'
+        class_name, _ = _mod._resolve_class_historical('42', sd)
+        assert ',' not in class_name
+        assert '=' not in class_name
+
     def test_only_car_in_class_is_always_position_1(self):
         sd = self._session('42', '1')
         _, positions = _mod._resolve_class_historical('42', sd)
@@ -218,6 +225,21 @@ class TestResolveClassLive:
         class_name, class_pos = _mod._resolve_class_live(client, '999', '99')
         assert class_name is None
         assert class_pos is None
+
+    def test_api_failure_returns_none_none(self):
+        client = MagicMock()
+        client.live.get_session.return_value = {'Successful': False}
+        class_name, class_pos = _mod._resolve_class_live(client, '999', '42')
+        assert class_name is None
+        assert class_pos is None
+
+    def test_class_name_special_chars_stripped(self):
+        client = self._make_client('42', 'classA', 1)
+        client.live.get_session.return_value['Session']['Classes']['classA']['Description'] = (
+            'GT3,Pro=Am')
+        class_name, _ = _mod._resolve_class_live(client, '999', '42')
+        assert ',' not in class_name
+        assert '=' not in class_name
 
 
 class TestPushInfluxClassInfo:
@@ -360,6 +382,43 @@ class TestLiveClassWiring:
                     _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('class_name') == 'A'
+
+    def test_live_race_class_positions_only_has_last_lap(self):
+        ctx = self._make_ctx()
+        ctx.client.live.get_racer.return_value['Details']['Laps'] = [
+            {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
+            {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '2',
+             'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
+        ]
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 2)):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.live_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        class_positions = kwargs.get('class_positions')
+        assert class_positions == {2: 2}
+
+    def test_monitor_routine_push_influx_receives_only_new_lap(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        existing_laps = [
+            {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
+        ]
+        new_laps = existing_laps + [
+            {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
+        ]
+        mock_stop = MagicMock()
+        mock_stop.wait.side_effect = [False, True]
+        with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
+            with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
+        laps_arg = mock_push.call_args[0][1]
+        assert laps_arg == [new_laps[-1]]
 
     def test_monitor_routine_calls_resolve_class_live_on_new_lap(self):
         ctx = self._make_ctx()
