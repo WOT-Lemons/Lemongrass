@@ -218,3 +218,43 @@ class TestResolveClassLive:
         class_name, class_pos = _mod._resolve_class_live(client, '999', '99')
         assert class_name is None
         assert class_pos is None
+
+
+class TestPushInfluxClassInfo:
+    def _laps(self):
+        return [{'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
+                 'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'}]
+
+    def _ctx(self):
+        write_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 0)
+        return ctx, write_api
+
+    def _record(self, write_api):
+        return write_api.write.call_args[1]['record'][0]
+
+    def test_includes_class_tag_when_provided(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 2})
+        assert 'class=A' in self._record(write_api)
+
+    def test_class_tag_before_driver_tag(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 1})
+        record = self._record(write_api)
+        assert record.index('class=') < record.index('driver=')
+
+    def test_includes_class_position_field_when_provided(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 2})
+        assert 'class_position=2' in self._record(write_api)
+
+    def test_omits_class_tag_when_not_provided(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert 'class=' not in self._record(write_api)
+
+    def test_omits_class_position_when_not_provided(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert 'class_position' not in self._record(write_api)

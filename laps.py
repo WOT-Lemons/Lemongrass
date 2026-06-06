@@ -425,7 +425,7 @@ def refresh_competitor(ctx):
     return laps
 
 
-def push_influx(ctx, laps, monitor_mode):
+def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
     logging.debug("Start epoch in seconds: %s", ctx.start_epoc)
@@ -436,28 +436,31 @@ def push_influx(ctx, laps, monitor_mode):
         logging.info("Writing laps to influx...")
 
     current_driver = "Driver" + str(ctx.car_number)
+    tag_str = f"class={class_name},driver={current_driver}" if class_name else f"driver={current_driver}"
 
-    # TODO: Concat driver from args
     write_success = True
     for lap in laps:
-        # Convert HH:MM:SS.MS to get time lap completed
         h, m, s = lap['TotalTime'].split(':')
         s, ms = s.split('.')
         lap_finish_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
         time_lap_completed_ms = start_epoc_ms + lap_finish_ms
         lap_timestamp = str(time_lap_completed_ms).replace(".", '')
 
-        # Convert lap time to milliseconds
         h, m, s = lap['LapTime'].split(':')
         s, ms = s.split('.')
         lap_time_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
 
-        data = [
-            f"laps{ctx.race_id},driver={current_driver} "
-            f"lap_no={lap['Lap']},lap_time={lap_time_ms},"
-            f"position={lap['Position']},flag_status=\"{lap['FlagStatus']}\" "
-            f"{lap_timestamp}"
-        ]
+        lap_num = int(lap['Lap'])
+        field_str = (
+            f"lap_no={lap_num},lap_time={lap_time_ms},"
+            f"position={lap['Position']},flag_status=\"{lap['FlagStatus']}\""
+        )
+        if class_positions is not None:
+            class_pos = class_positions.get(lap_num)
+            if class_pos is not None:
+                field_str += f",class_position={class_pos}"
+
+        data = [f"laps{ctx.race_id},{tag_str} {field_str} {lap_timestamp}"]
         logging.debug(data)
         try:
             ctx.write_api.write(bucket='laps_252/autogen', record=data, write_precision='ms')
