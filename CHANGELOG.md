@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/WOT-Lemons/Lemongrass/compare/v0.11.1...v0.11.2) (2026-06-06)
+
+
+### Bug Fixes
+
+* **laps:** anchor historical timestamps to SessionStartDateEpoc ([#94](https://github.com/WOT-Lemons/Lemongrass/issues/94)) ([da710d1](https://github.com/WOT-Lemons/Lemongrass/commit/da710d109880f5045681e6152baf8bc9bf5c629a))
+
 ## [0.11.1](https://github.com/WOT-Lemons/Lemongrass/compare/v0.11.0...v0.11.1) (2026-06-06)
 
 
