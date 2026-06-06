@@ -385,20 +385,30 @@ class TestLiveClassWiring:
 
     def test_live_race_class_positions_only_has_last_lap(self):
         ctx = self._make_ctx()
-        ctx.client.live.get_racer.return_value['Details']['Laps'] = [
+        two_laps = [
             {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
              'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
             {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '2',
              'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
         ]
+        ctx.client.live.get_racer.return_value['Details']['Laps'] = two_laps
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 2)):
             with patch.object(_mod, 'push_influx') as mock_push:
                 with patch.object(_mod, 'print_rankings'):
                     _mod.live_race(ctx, opts)
-        _, kwargs = mock_push.call_args
-        class_positions = kwargs.get('class_positions')
-        assert class_positions == {2: 2}
+        args, kwargs = mock_push.call_args
+        assert args[1] == two_laps
+        assert kwargs.get('class_positions') == {2: 2}
+
+    def test_live_race_skips_influx_when_no_laps(self):
+        ctx = self._make_ctx()
+        ctx.client.live.get_racer.return_value['Details']['Laps'] = []
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx') as mock_push:
+            with patch.object(_mod, 'print_rankings'):
+                _mod.live_race(ctx, opts)
+        mock_push.assert_not_called()
 
     def test_monitor_routine_push_influx_receives_only_new_lap(self):
         ctx = self._make_ctx()

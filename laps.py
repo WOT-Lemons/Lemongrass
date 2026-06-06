@@ -13,6 +13,7 @@ import argparse
 import csv
 import logging
 import os
+from collections import defaultdict
 import sys
 import threading
 import time
@@ -237,7 +238,7 @@ def live_race(ctx, opts):
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
-    if opts.network_mode:
+    if opts.network_mode and laps:
         class_name, class_position = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
         class_positions = (
             {int(laps[-1]['Lap']): class_position}
@@ -522,16 +523,13 @@ def _resolve_class_historical(car_number, session_details):
         .replace(' ', '_').replace(',', '').replace('=', '')
     )
 
-    class_lap_positions = {}
+    class_lap_positions = defaultdict(list)
     for competitor in competitors:
         if competitor['Number'] == car_number or competitor['Category'] != tracked_category:
             continue
         for lap in competitor['LapTimes']:
             try:
-                lap_num = int(lap['Lap'])
-                if lap_num not in class_lap_positions:
-                    class_lap_positions[lap_num] = []
-                class_lap_positions[lap_num].append(int(lap['Position']))
+                class_lap_positions[int(lap['Lap'])].append(int(lap['Position']))
             except (ValueError, TypeError):
                 pass
 
