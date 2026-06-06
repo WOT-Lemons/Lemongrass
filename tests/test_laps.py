@@ -317,3 +317,66 @@ class TestOldRaceClassWiring:
             with patch.object(_mod, 'print_rankings'):
                 _mod.old_race(ctx, opts)
         mock_resolve.assert_not_called()
+
+
+class TestLiveClassWiring:
+    def _make_ctx(self):
+        write_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 0)
+        ctx.client.live.get_racer.return_value = {
+            'Successful': True,
+            'Details': {
+                'Competitor': {
+                    'RacerID': 'r1', 'Number': '42', 'ClassID': 'A',
+                    'Position': '3', 'Laps': '1', 'TotalTime': '0:01:30.000',
+                    'BestPosition': '3', 'BestLap': '1', 'BestLapTime': '0:01:30.000',
+                    'LastLapTime': '0:01:30.000', 'Transponder': '',
+                    'FirstName': 'Jane', 'LastName': 'Doe',
+                    'Nationality': '', 'AdditionalData': '',
+                },
+                'Laps': [
+                    {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
+                     'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
+                ],
+            },
+        }
+        return ctx
+
+    def test_live_race_calls_resolve_class_live(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)) as mock_resolve:
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.live_race(ctx, opts)
+        mock_resolve.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
+
+    def test_live_race_passes_class_name_to_push_influx(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 2)):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.live_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('class_name') == 'A'
+
+    def test_monitor_routine_calls_resolve_class_live_on_new_lap(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        existing_laps = [
+            {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
+        ]
+        new_laps = existing_laps + [
+            {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
+        ]
+        # wait() returns False first (enter loop body), then True (stop)
+        mock_stop = MagicMock()
+        mock_stop.wait.side_effect = [False, True]
+        with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
+            with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)) as mock_resolve:
+                with patch.object(_mod, 'push_influx'):
+                    _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
+        mock_resolve.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)

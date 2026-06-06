@@ -238,7 +238,12 @@ def live_race(ctx, opts):
     print(UNDERLINE)
 
     if opts.network_mode:
-        push_influx(ctx, laps, False)
+        class_name, class_position = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
+        class_positions = (
+            {int(lap['Lap']): class_position for lap in laps}
+            if class_position is not None else None
+        )
+        push_influx(ctx, laps, False, class_name=class_name, class_positions=class_positions)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -411,7 +416,11 @@ def monitor_routine(ctx, laps, opts, _stop_event=None):
             print(current_competitor_lap_time_df.to_string(index=False, header=False))
             laps.append(current_competitor_lap_times[-1])
             if opts.network_mode:
-                push_influx(ctx, current_competitor_lap_times, True)
+                class_name, class_position = _resolve_class_live(
+                    ctx.client, ctx.race_id, ctx.car_number)
+                new_lap_num = int(current_competitor_lap_times[-1]['Lap'])
+                class_positions = {new_lap_num: class_position} if class_position is not None else None
+                push_influx(ctx, current_competitor_lap_times, True, class_name=class_name, class_positions=class_positions)
 
 
 def refresh_competitor(ctx):
