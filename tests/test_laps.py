@@ -258,3 +258,62 @@ class TestPushInfluxClassInfo:
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False)
         assert 'class_position' not in self._record(write_api)
+
+
+class TestOldRaceClassWiring:
+    def _session_details(self, car_number='42', cat_id='1', cat_name='A'):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionDate': '',
+                'SessionTime': '', 'SortMode': '', 'CategoryString': '',
+                'ResultsProcessorVersion': 1, 'SessionStartDateEpoc': 0,
+                'Categories': {cat_id: {'ID': cat_id, 'Name': cat_name}},
+                'SortedCompetitors': [{
+                    'Number': car_number, 'Category': cat_id,
+                    'ID': 1, 'SessionID': 1, 'RaceID': 999,
+                    'FirstName': 'Jane', 'LastName': 'Doe',
+                    'Position': '1', 'Laps': '1', 'LastLapTime': '',
+                    'BestPosition': '1', 'BestLap': '1',
+                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+                    'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+                    'LapTimes': [
+                        {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                         'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+                    ],
+                }],
+            },
+        }
+
+    def test_calls_resolve_class_historical_per_session(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})) as mock_resolve:
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        mock_resolve.assert_called_once_with('42', self._session_details())
+
+    def test_passes_class_name_to_push_influx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('class_name') == 'A'
+
+    def test_no_network_mode_skips_resolve(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, '_resolve_class_historical') as mock_resolve:
+            with patch.object(_mod, 'print_rankings'):
+                _mod.old_race(ctx, opts)
+        mock_resolve.assert_not_called()

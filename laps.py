@@ -264,17 +264,27 @@ def old_race(ctx, opts):
     competitor_details = {}
     competitor_missing = True
 
-    # Send request for all session_ids from a race, including lap times
     for session_id in session_ids_for_race:
         logging.debug("Getting session details for %s including lap times.", session_id)
         session_details = ctx.client.results.session_details(session_id, include_lap_times=True)
-        sorted_competitors = session_details['Session']['SortedCompetitors'].copy()
+        sorted_competitors = [dict(c) for c in session_details['Session']['SortedCompetitors']]
 
+        session_laps = []
         for competitor in sorted_competitors:
             if competitor['Number'] == ctx.car_number:
                 competitor_missing = False
                 competitor_details = competitor
-                laps = laps + competitor['LapTimes'].copy()
+                session_laps = competitor['LapTimes'].copy()
+                laps = laps + [dict(lap) for lap in session_laps]
+
+        if opts.network_mode and session_laps:
+            flag_map = {0: "Green", 1: "Yellow", -1: "Finish"}
+            influx_laps = [
+                {**lap, 'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus']))}
+                for lap in session_laps
+            ]
+            class_name, class_positions = _resolve_class_historical(ctx.car_number, session_details)
+            push_influx(ctx, influx_laps, False, class_name=class_name, class_positions=class_positions)
 
     if competitor_missing:
         logging.info('Car %s not found', ctx.car_number)
@@ -282,7 +292,6 @@ def old_race(ctx, opts):
 
     print_rankings(sorted_competitors, False, opts.selected_class)
 
-    # Print competitor detail block
     print(
         f"Team: {competitor_details['FirstName']:<6}\t"
         f"Car Number: {competitor_details['Number']:<4}\t"
@@ -306,12 +315,10 @@ def old_race(ctx, opts):
         elif lap['FlagStatus'] == -1:
             lap['FlagStatus'] = "Finish"
 
-    # Create pandas dataframe and print without index to remove row numbers
     lap_time_df = pandas.json_normalize(laps)
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
-    # Remove competitors (LOSERS) with no position
     for competitor in sorted_competitors:
         for key, value in competitor.items():
             try:
@@ -320,12 +327,8 @@ def old_race(ctx, opts):
             except ValueError:
                 value = None
 
-    if opts.network_mode:
-        push_influx(ctx, laps, False)
-
     if opts.save_file:
-        # Create filename and call function to write to CSV
-        filename = f"{competitor_details['Name']}-{ctx.race_id}-results"
+        filename = f"{competitor_details['FirstName']}-{ctx.race_id}-results"
         write_csv(filename, laps)
 
 
