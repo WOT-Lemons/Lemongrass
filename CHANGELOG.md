@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/WOT-Lemons/Lemongrass/compare/v0.11.0...v0.11.1) (2026-06-06)
+
+
+### Bug Fixes
+
+* **laps:** don't write stale class_position on initial live_race push ([2ce05d3](https://github.com/WOT-Lemons/Lemongrass/commit/2ce05d32d52af7c2d5972b506409d8242f08ca16))
+
 ## [0.11.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.10.0...v0.11.0) (2026-06-06)
 
 
