@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.10.0...v0.11.0) (2026-06-06)
+
+
+### Features
+
+* **laps:** add class tag and class_position field to influx lap writes ([5dcd7fb](https://github.com/WOT-Lemons/Lemongrass/commit/5dcd7fbbd8b0b332d4bdc29d1621b9327d3eb896))
+
 ## [0.10.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.9.1...v0.10.0) (2026-05-30)
 
 
