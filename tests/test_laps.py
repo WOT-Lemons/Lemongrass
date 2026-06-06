@@ -385,7 +385,7 @@ class TestLiveClassWiring:
         _, kwargs = mock_push.call_args
         assert kwargs.get('class_name') == 'A'
 
-    def test_live_race_class_positions_only_has_last_lap(self):
+    def test_live_race_does_not_write_class_positions(self):
         ctx = self._make_ctx()
         two_laps = [
             {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
@@ -401,7 +401,7 @@ class TestLiveClassWiring:
                     _mod.live_race(ctx, opts)
         args, kwargs = mock_push.call_args
         assert args[1] == two_laps
-        assert kwargs.get('class_positions') == {2: 2}
+        assert kwargs.get('class_positions') is None
 
     def test_live_race_skips_influx_when_no_laps(self):
         ctx = self._make_ctx()

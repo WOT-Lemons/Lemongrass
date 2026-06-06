@@ -239,12 +239,8 @@ def live_race(ctx, opts):
     print(UNDERLINE)
 
     if opts.network_mode and laps:
-        class_name, class_position = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
-        class_positions = (
-            {int(laps[-1]['Lap']): class_position}
-            if class_position is not None else None
-        )
-        push_influx(ctx, laps, False, class_name=class_name, class_positions=class_positions)
+        class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
+        push_influx(ctx, laps, False, class_name=class_name, class_positions=None)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -557,9 +553,15 @@ def _resolve_class_live(client, race_id, car_number):
             break
 
     if tracked is None:
+        logging.warning("_resolve_class_live: car %s not found in session competitors", car_number)
         return None, None
 
     class_id = tracked['ClassID']
+    logging.debug(
+        "_resolve_class_live: car=%s overall_pos=%s class_id=%r classes=%s",
+        car_number, tracked.get('Position'), class_id,
+        {k: v.get('Description') for k, v in classes.items()},
+    )
     class_name = (
         classes.get(class_id, {}).get('Description', class_id)
         .replace(' ', '_').replace(',', '').replace('=', '')
@@ -575,11 +577,20 @@ def _resolve_class_live(client, race_id, car_number):
         if competitor['Number'] == car_number or competitor['ClassID'] != class_id:
             continue
         try:
-            if int(competitor['Position']) < tracked_pos:
+            comp_pos = int(competitor['Position'])
+            if comp_pos < tracked_pos:
+                logging.debug(
+                    "_resolve_class_live: same-class car %s at pos %s counts as ahead",
+                    competitor['Number'], comp_pos,
+                )
                 class_position += 1
         except (ValueError, TypeError):
             pass
 
+    logging.info(
+        "_resolve_class_live: car=%s class=%r overall_pos=%s class_pos=%s",
+        car_number, class_name, tracked_pos, class_position,
+    )
     return class_name, class_position
 
 
