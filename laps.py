@@ -29,6 +29,14 @@ UNDERLINE = "-" * 80
 
 
 @dataclass
+class RaceMetadata:
+    """Race-level metadata resolved once at startup."""
+    race_name: str
+    track_name: str
+    series_name: str | None
+
+
+@dataclass
 class RaceContext:
     """Fixed context for a run: race identity, API client, and optional InfluxDB handle."""
     race_id: str
@@ -47,14 +55,6 @@ class RaceOptions:
     save_file: bool = False
     selected_class: str | None = None
     interval: int = 30
-
-
-@dataclass
-class RaceMetadata:
-    """Race-level metadata resolved once at startup."""
-    race_name: str
-    track_name: str
-    series_name: str | None
 
 
 def _build_parser():
@@ -145,7 +145,7 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
             )
             print(UNDERLINE)
 
-        metadata = _resolve_race_metadata(race_details, client)
+        metadata = _resolve_race_metadata(race_details, client) if opts.network_mode else None
 
         if opts.selected_class:
             logging.info("Sorting results for class %s.", opts.selected_class.upper())
@@ -225,7 +225,7 @@ def live_race(ctx, opts):
 
     # Make name
     competitor_details['Name'] = (
-        competitor_details['FirstName'] + competitor_details['LastName'])
+        competitor_details['FirstName'] + ' ' + competitor_details['LastName'])
 
     competitor_name = f"{competitor_details.get('FirstName', '')} {competitor_details.get('LastName', '')}".strip() or None
     car_info = competitor_details.get('AdditionalData') or None
@@ -499,9 +499,9 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
 
         point = (
             Point(f"laps{ctx.race_id}")
-            .tag("race_name", meta.race_name if meta else None)
-            .tag("track_name", meta.track_name if meta else None)
-            .tag("series_name", meta.series_name if meta else None)
+            .tag("race_name", meta.race_name if meta is not None else None)
+            .tag("track_name", meta.track_name if meta is not None else None)
+            .tag("series_name", meta.series_name if meta is not None else None)
             .tag("competitor_name", competitor_name)
             .tag("car_info", car_info)
             .tag("class", class_name)

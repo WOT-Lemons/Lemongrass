@@ -303,6 +303,26 @@ class TestPushInfluxClassInfo:
         assert any('epoch' in r.message.lower() and r.levelno == logging.WARNING
                    for r in caplog.records)
 
+    def test_includes_competitor_name_tag_when_provided(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False, competitor_name='Jane Doe')
+        assert 'competitor_name=Jane\\ Doe' in self._record(write_api)
+
+    def test_omits_competitor_name_tag_when_none(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert 'competitor_name' not in self._record(write_api)
+
+    def test_includes_car_info_tag_when_provided(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False, car_info='2005/Toy/Celica')
+        assert 'car_info=2005/Toy/Celica' in self._record(write_api)
+
+    def test_omits_car_info_tag_when_none(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert 'car_info' not in self._record(write_api)
+
 
 class TestOldRaceClassWiring:
     def _session_details(self, car_number='42', cat_id='1', cat_name='A'):
