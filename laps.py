@@ -36,6 +36,7 @@ class RaceContext:
     client: object
     write_api: object
     start_epoc: int
+    metadata: RaceMetadata | None = None
 
 
 @dataclass
@@ -144,6 +145,8 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
             )
             print(UNDERLINE)
 
+        metadata = _resolve_race_metadata(race_details, client)
+
         if opts.selected_class:
             logging.info("Sorting results for class %s.", opts.selected_class.upper())
 
@@ -154,14 +157,14 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
 
         if not opts.network_mode:
             return _run_race(
-                RaceContext(race_id, car_number, client, None, start_epoc), opts, response)
+                RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata), opts, response)
 
         with InfluxDBClient(
             url='https://influxdb.focism.com', token=influx_token, org='focism'
         ) as influx_client:
             write_api = influx_client.write_api(write_options=SYNCHRONOUS)
             return _run_race(
-                RaceContext(race_id, car_number, client, write_api, start_epoc), opts, response)
+                RaceContext(race_id, car_number, client, write_api, start_epoc, metadata=metadata), opts, response)
 
 
 def _run_race(ctx, opts, response):
