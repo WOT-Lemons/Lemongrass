@@ -484,7 +484,6 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
     if not monitor_mode:
         logging.info("Writing laps to influx...")
 
-    meta = ctx.metadata
     write_success = True
     for lap in laps:
         h, m, s = lap['TotalTime'].split(':')
