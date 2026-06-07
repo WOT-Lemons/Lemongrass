@@ -99,18 +99,17 @@ class TestResolveClassHistorical:
         class_name, _ = _mod._resolve_class_historical('42', sd)
         assert class_name == 'A'
 
-    def test_class_name_spaces_replaced_with_underscores(self):
+    def test_class_name_spaces_preserved(self):
         sd = self._session('42', '1')
         sd['Session']['Categories']['1']['Name'] = 'Super Street'
         class_name, _ = _mod._resolve_class_historical('42', sd)
-        assert class_name == 'Super_Street'
+        assert class_name == 'Super Street'
 
-    def test_class_name_special_chars_stripped(self):
+    def test_class_name_special_chars_preserved(self):
         sd = self._session('42', '1')
         sd['Session']['Categories']['1']['Name'] = 'GT3,Pro=Am'
         class_name, _ = _mod._resolve_class_historical('42', sd)
-        assert ',' not in class_name
-        assert '=' not in class_name
+        assert class_name == 'GT3,Pro=Am'
 
     def test_only_car_in_class_is_always_position_1(self):
         sd = self._session('42', '1')
@@ -234,13 +233,12 @@ class TestResolveClassLive:
         assert class_name is None
         assert class_pos is None
 
-    def test_class_name_special_chars_stripped(self):
+    def test_class_name_special_chars_preserved(self):
         client = self._make_client('42', 'classA', 1)
         client.live.get_session.return_value['Session']['Classes']['classA']['Description'] = (
             'GT3,Pro=Am')
         class_name, _ = _mod._resolve_class_live(client, '999', '42')
-        assert ',' not in class_name
-        assert '=' not in class_name
+        assert class_name == 'GT3,Pro=Am'
 
 
 class TestPushInfluxClassInfo:
@@ -254,7 +252,8 @@ class TestPushInfluxClassInfo:
         return ctx, write_api
 
     def _record(self, write_api):
-        return write_api.write.call_args[1]['record'][0]
+        point = write_api.write.call_args[1]['record']
+        return point.to_line_protocol()
 
     def test_includes_class_tag_when_provided(self):
         ctx, write_api = self._ctx()
@@ -270,7 +269,7 @@ class TestPushInfluxClassInfo:
     def test_includes_class_position_field_when_provided(self):
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 2})
-        assert 'class_position=2' in self._record(write_api)
+        assert 'class_position=2i' in self._record(write_api)
 
     def test_omits_class_tag_when_not_provided(self):
         ctx, write_api = self._ctx()

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from operator import itemgetter
 
 import pandas
-from influxdb_client import InfluxDBClient
+from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from race_monitor import RaceMonitorClient
 
@@ -454,7 +454,8 @@ def refresh_competitor(ctx):
     return laps
 
 
-def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None, start_epoc=None):
+def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
+                class_name=None, class_positions=None, start_epoc=None):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
     effective_epoc = start_epoc if start_epoc is not None else ctx.start_epoc
@@ -467,38 +468,44 @@ def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None, 
     if not monitor_mode:
         logging.info("Writing laps to influx...")
 
-    current_driver = "Driver" + str(ctx.car_number)
-    tag_str = (
-        f"class={class_name},driver={current_driver}"
-        if class_name else f"driver={current_driver}"
-    )
-
+    meta = ctx.metadata
     write_success = True
     for lap in laps:
         h, m, s = lap['TotalTime'].split(':')
         s, ms = s.split('.')
         lap_finish_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
         time_lap_completed_ms = start_epoc_ms + lap_finish_ms
-        lap_timestamp = str(time_lap_completed_ms).replace(".", '')
 
         h, m, s = lap['LapTime'].split(':')
         s, ms = s.split('.')
         lap_time_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
 
         lap_num = int(lap['Lap'])
-        field_str = (
-            f"lap_no={lap_num},lap_time={lap_time_ms},"
-            f"position={lap['Position']},flag_status=\"{lap['FlagStatus']}\""
+
+        point = (
+            Point(f"laps{ctx.race_id}")
+            .tag("race_name", meta.race_name if meta else None)
+            .tag("track_name", meta.track_name if meta else None)
+            .tag("series_name", meta.series_name if meta else None)
+            .tag("competitor_name", competitor_name)
+            .tag("car_info", car_info)
+            .tag("class", class_name)
+            .tag("driver", f"Driver{ctx.car_number}")
+            .field("lap_no", lap_num)
+            .field("lap_time", lap_time_ms)
+            .field("position", int(lap['Position']))
+            .field("flag_status", lap['FlagStatus'])
+            .time(time_lap_completed_ms, WritePrecision.MS)
         )
+
         if class_positions is not None:
             class_pos = class_positions.get(lap_num)
             if class_pos is not None:
-                field_str += f",class_position={class_pos}"
+                point = point.field("class_position", class_pos)
 
-        data = [f"laps{ctx.race_id},{tag_str} {field_str} {lap_timestamp}"]
-        logging.debug(data)
+        logging.debug(point.to_line_protocol())
         try:
-            ctx.write_api.write(bucket='laps_252/autogen', record=data, write_precision='ms')
+            ctx.write_api.write(bucket='laps_252/autogen', record=point)
             logging.debug("Lap %s written to influx.", lap['Lap'])
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Writing lap failed: %s", e)
@@ -534,7 +541,6 @@ def _resolve_class_historical(car_number, session_details):
     class_name = (
         categories.get(tracked_category, {})
         .get('Name', tracked_category)
-        .replace(' ', '_').replace(',', '').replace('=', '')
     )
 
     class_lap_positions = defaultdict(list)
@@ -580,10 +586,7 @@ def _resolve_class_live(client, race_id, car_number):
         car_number, tracked.get('Position'), class_id,
         {k: v.get('Description') for k, v in classes.items()},
     )
-    class_name = (
-        classes.get(class_id, {}).get('Description', class_id)
-        .replace(' ', '_').replace(',', '').replace('=', '')
-    )
+    class_name = classes.get(class_id, {}).get('Description', class_id)
 
     try:
         tracked_pos = int(tracked['Position'])
