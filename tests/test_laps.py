@@ -693,7 +693,8 @@ class TestLiveClassWiring:
         with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
             with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
                 with patch.object(_mod, 'push_influx') as mock_push:
-                    _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
+                    with patch.object(_mod, 'push_influx_race'):
+                        _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
         laps_arg = mock_push.call_args[0][1]
         assert laps_arg == [new_laps[-1]]
 
@@ -714,7 +715,8 @@ class TestLiveClassWiring:
         with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
             with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)) as mock_resolve:
                 with patch.object(_mod, 'push_influx'):
-                    _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
+                    with patch.object(_mod, 'push_influx_race'):
+                        _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
         mock_resolve.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
 
     def test_live_race_passes_competitor_name_to_push_influx(self):
@@ -756,12 +758,100 @@ class TestLiveClassWiring:
         with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
             with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
                 with patch.object(_mod, 'push_influx') as mock_push:
-                    _mod.monitor_routine(ctx, existing_laps, opts,
-                                         competitor_name='Jane Doe', car_info='2005/Toy/Celica',
-                                         _stop_event=mock_stop)
+                    with patch.object(_mod, 'push_influx_race'):
+                        _mod.monitor_routine(ctx, existing_laps, opts,
+                                             competitor_name='Jane Doe', car_info='2005/Toy/Celica',
+                                             _stop_event=mock_stop)
         _, kwargs = mock_push.call_args
         assert kwargs.get('competitor_name') == 'Jane Doe'
         assert kwargs.get('car_info') == '2005/Toy/Celica'
+
+
+class TestMonitorRoutineEpocRecheck:
+    # A lap that is already in the laps list — refresh_competitor returns it so the
+    # "new lap" branch never executes, keeping tests focused on the recheck logic.
+    _existing_lap = {
+        'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+        'FlagStatus': '0', 'TotalTime': '0:01:30.000',
+    }
+
+    def _make_ctx(self, start_epoc=0):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), start_epoc)
+        ctx.delete_api = MagicMock()
+        ctx.metadata = _mod.RaceMetadata(
+            race_name='Test', track_name='Track', series_name=None, end_time_epoc=0)
+        ctx.client.race.details.return_value = {'Successful': False}
+        return ctx
+
+    def _stop_after(self, n):
+        stop = MagicMock()
+        stop.wait.side_effect = [False] * n + [True]
+        return stop
+
+    def test_rechecks_race_details_each_iteration_when_start_epoc_zero(self):
+        ctx = self._make_ctx(start_epoc=0)
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
+            with patch.object(_mod, 'push_influx_race'):
+                _mod.monitor_routine(ctx, [self._existing_lap], opts,
+                                     _stop_event=self._stop_after(1))
+        ctx.client.race.details.assert_called_once_with(ctx.race_id)
+
+    def test_does_not_recheck_when_start_epoc_nonzero(self):
+        ctx = self._make_ctx(start_epoc=1000)
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
+            _mod.monitor_routine(ctx, [self._existing_lap], opts,
+                                 _stop_event=self._stop_after(1))
+        ctx.client.race.details.assert_not_called()
+
+    def test_does_not_recheck_when_not_network_mode(self):
+        ctx = self._make_ctx(start_epoc=0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+        with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
+            _mod.monitor_routine(ctx, [self._existing_lap], opts,
+                                 _stop_event=self._stop_after(1))
+        ctx.client.race.details.assert_not_called()
+
+    def test_updates_ctx_start_epoc_when_api_returns_nonzero(self):
+        ctx = self._make_ctx(start_epoc=0)
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        ctx.client.race.details.return_value = {
+            'Successful': True,
+            'Race': {'StartDateEpoc': 5000, 'EndDateEpoc': 9000, 'Name': '', 'Track': ''},
+        }
+        with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
+            with patch.object(_mod, 'push_influx_race'):
+                _mod.monitor_routine(ctx, [self._existing_lap], opts,
+                                     _stop_event=self._stop_after(1))
+        assert ctx.start_epoc == 5000
+
+    def test_calls_push_influx_race_with_updated_timestamp(self):
+        ctx = self._make_ctx(start_epoc=0)
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        ctx.client.race.details.return_value = {
+            'Successful': True,
+            'Race': {'StartDateEpoc': 5000, 'EndDateEpoc': 9000, 'Name': '', 'Track': ''},
+        }
+        with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
+            with patch.object(_mod, 'push_influx_race') as mock_race:
+                _mod.monitor_routine(ctx, [self._existing_lap], opts,
+                                     _stop_event=self._stop_after(1))
+        mock_race.assert_called_once_with(ctx, 5000 * 1000)
+
+    def test_stops_rechecking_once_start_epoc_set(self):
+        ctx = self._make_ctx(start_epoc=0)
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        ctx.client.race.details.return_value = {
+            'Successful': True,
+            'Race': {'StartDateEpoc': 5000, 'EndDateEpoc': 9000, 'Name': '', 'Track': ''},
+        }
+        with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
+            with patch.object(_mod, 'push_influx_race'):
+                _mod.monitor_routine(ctx, [self._existing_lap], opts,
+                                     _stop_event=self._stop_after(2))
+        # First iteration sets epoc; second iteration skips the re-check
+        assert ctx.client.race.details.call_count == 1
 
 
 class TestResolveRaceMetadata:

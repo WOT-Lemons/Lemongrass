@@ -447,6 +447,14 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
 
     stop = _stop_event if _stop_event is not None else threading.Event()
     while not stop.wait(timeout=opts.interval):
+        if opts.network_mode and ctx.start_epoc == 0:
+            race_details = ctx.client.race.details(ctx.race_id)
+            if race_details.get('Successful'):
+                new_epoc = race_details['Race'].get('StartDateEpoc', 0)
+                if new_epoc != 0:
+                    ctx.start_epoc = new_epoc
+                    push_influx_race(ctx, ctx.start_epoc * 1000)
+
         current_competitor_lap_times = refresh_competitor(ctx)
         if current_competitor_lap_times[-1] not in laps:
             current_competitor_lap_time_df = pandas.json_normalize(
