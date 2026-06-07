@@ -21,11 +21,19 @@ from dataclasses import dataclass
 from operator import itemgetter
 
 import pandas
-from influxdb_client import InfluxDBClient
+from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from race_monitor import RaceMonitorClient
 
 UNDERLINE = "-" * 80
+
+
+@dataclass
+class RaceMetadata:
+    """Race-level metadata resolved once at startup."""
+    race_name: str
+    track_name: str
+    series_name: str | None
 
 
 @dataclass
@@ -36,6 +44,7 @@ class RaceContext:
     client: object
     write_api: object
     start_epoc: int
+    metadata: RaceMetadata | None = None
 
 
 @dataclass
@@ -136,6 +145,8 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
             )
             print(UNDERLINE)
 
+        metadata = _resolve_race_metadata(race_details, client) if opts.network_mode else None
+
         if opts.selected_class:
             logging.info("Sorting results for class %s.", opts.selected_class.upper())
 
@@ -146,14 +157,14 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
 
         if not opts.network_mode:
             return _run_race(
-                RaceContext(race_id, car_number, client, None, start_epoc), opts, response)
+                RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata), opts, response)
 
         with InfluxDBClient(
             url='https://influxdb.focism.com', token=influx_token, org='focism'
         ) as influx_client:
             write_api = influx_client.write_api(write_options=SYNCHRONOUS)
             return _run_race(
-                RaceContext(race_id, car_number, client, write_api, start_epoc), opts, response)
+                RaceContext(race_id, car_number, client, write_api, start_epoc, metadata=metadata), opts, response)
 
 
 def _run_race(ctx, opts, response):
@@ -214,7 +225,10 @@ def live_race(ctx, opts):
 
     # Make name
     competitor_details['Name'] = (
-        competitor_details['FirstName'] + competitor_details['LastName'])
+        competitor_details['FirstName'] + ' ' + competitor_details['LastName'])
+
+    competitor_name = f"{competitor_details.get('FirstName', '')} {competitor_details.get('LastName', '')}".strip() or None
+    car_info = competitor_details.get('AdditionalData') or None
 
     print(UNDERLINE)
     # Print competitor detail block
@@ -243,7 +257,8 @@ def live_race(ctx, opts):
         # so any position we compute now is stale. monitor_routine owns class_position writes.
         class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
         logging.info("Car %s: class %r", ctx.car_number, class_name)
-        push_influx(ctx, laps, False, class_name=class_name, class_positions=None)
+        push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
+                    class_name=class_name, class_positions=None)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -251,7 +266,7 @@ def live_race(ctx, opts):
         write_csv(filename, laps)
 
     if opts.monitor_mode:
-        monitor_routine(ctx, laps, opts)
+        monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info)
 
 
 def old_race(ctx, opts):
@@ -268,6 +283,8 @@ def old_race(ctx, opts):
     laps = []
     competitor_details = {}
     competitor_missing = True
+    competitor_name = None
+    car_info = None
 
     for session_id in session_ids_for_race:
         logging.debug("Getting session details for %s including lap times.", session_id)
@@ -279,6 +296,11 @@ def old_race(ctx, opts):
             if competitor['Number'] == ctx.car_number:
                 competitor_missing = False
                 competitor_details = competitor
+                competitor_name = (
+                    f"{competitor.get('FirstName', '')} {competitor.get('LastName', '')}".strip()
+                    or None
+                )
+                car_info = competitor.get('AdditionalData') or None
                 session_laps = competitor['LapTimes'].copy()
                 laps = laps + [dict(lap) for lap in session_laps]
 
@@ -291,6 +313,8 @@ def old_race(ctx, opts):
             class_name, class_positions = _resolve_class_historical(ctx.car_number, session_details)
             push_influx(
                 ctx, influx_laps, False,
+                competitor_name=competitor_name,
+                car_info=car_info,
                 class_name=class_name, class_positions=class_positions,
                 start_epoc=session_details['Session'].get('SessionStartDateEpoc'))
 
@@ -401,7 +425,7 @@ def write_csv(filename, competitor_lap_times):
         writer.writerows(competitor_lap_times)
 
 
-def monitor_routine(ctx, laps, opts, _stop_event=None):
+def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None):
     """Monitor mode: poll for new laps and display/push as they arrive."""
     logging.info("Monitoring car %s...", ctx.car_number)
     print(UNDERLINE)
@@ -426,6 +450,8 @@ def monitor_routine(ctx, laps, opts, _stop_event=None):
                     {new_lap_num: class_position} if class_position is not None else None)
                 push_influx(
                     ctx, [current_competitor_lap_times[-1]], True,
+                    competitor_name=competitor_name,
+                    car_info=car_info,
                     class_name=class_name, class_positions=class_positions)
 
 
@@ -443,7 +469,8 @@ def refresh_competitor(ctx):
     return laps
 
 
-def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None, start_epoc=None):
+def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
+                class_name=None, class_positions=None, start_epoc=None):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
     effective_epoc = start_epoc if start_epoc is not None else ctx.start_epoc
@@ -456,38 +483,44 @@ def push_influx(ctx, laps, monitor_mode, class_name=None, class_positions=None, 
     if not monitor_mode:
         logging.info("Writing laps to influx...")
 
-    current_driver = "Driver" + str(ctx.car_number)
-    tag_str = (
-        f"class={class_name},driver={current_driver}"
-        if class_name else f"driver={current_driver}"
-    )
-
+    meta = ctx.metadata
     write_success = True
     for lap in laps:
         h, m, s = lap['TotalTime'].split(':')
         s, ms = s.split('.')
         lap_finish_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
         time_lap_completed_ms = start_epoc_ms + lap_finish_ms
-        lap_timestamp = str(time_lap_completed_ms).replace(".", '')
 
         h, m, s = lap['LapTime'].split(':')
         s, ms = s.split('.')
         lap_time_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
 
         lap_num = int(lap['Lap'])
-        field_str = (
-            f"lap_no={lap_num},lap_time={lap_time_ms},"
-            f"position={lap['Position']},flag_status=\"{lap['FlagStatus']}\""
+
+        point = (
+            Point(f"laps{ctx.race_id}")
+            .tag("race_name", meta.race_name if meta is not None else None)
+            .tag("track_name", meta.track_name if meta is not None else None)
+            .tag("series_name", meta.series_name if meta is not None else None)
+            .tag("competitor_name", competitor_name)
+            .tag("car_info", car_info)
+            .tag("class", class_name)
+            .tag("driver", f"Driver{ctx.car_number}")
+            .field("lap_no", lap_num)
+            .field("lap_time", lap_time_ms)
+            .field("position", int(lap['Position']))
+            .field("flag_status", lap['FlagStatus'])
+            .time(time_lap_completed_ms, WritePrecision.MS)
         )
+
         if class_positions is not None:
             class_pos = class_positions.get(lap_num)
             if class_pos is not None:
-                field_str += f",class_position={class_pos}"
+                point = point.field("class_position", class_pos)
 
-        data = [f"laps{ctx.race_id},{tag_str} {field_str} {lap_timestamp}"]
-        logging.debug(data)
+        logging.debug(point.to_line_protocol())
         try:
-            ctx.write_api.write(bucket='laps_252/autogen', record=data, write_precision='ms')
+            ctx.write_api.write(bucket='laps_252/autogen', record=point)
             logging.debug("Lap %s written to influx.", lap['Lap'])
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Writing lap failed: %s", e)
@@ -523,7 +556,6 @@ def _resolve_class_historical(car_number, session_details):
     class_name = (
         categories.get(tracked_category, {})
         .get('Name', tracked_category)
-        .replace(' ', '_').replace(',', '').replace('=', '')
     )
 
     class_lap_positions = defaultdict(list)
@@ -569,10 +601,7 @@ def _resolve_class_live(client, race_id, car_number):
         car_number, tracked.get('Position'), class_id,
         {k: v.get('Description') for k, v in classes.items()},
     )
-    class_name = (
-        classes.get(class_id, {}).get('Description', class_id)
-        .replace(' ', '_').replace(',', '').replace('=', '')
-    )
+    class_name = classes.get(class_id, {}).get('Description', class_id)
 
     try:
         tracked_pos = int(tracked['Position'])
@@ -599,6 +628,31 @@ def _resolve_class_live(client, race_id, car_number):
         car_number, class_name, tracked_pos, class_position,
     )
     return class_name, class_position
+
+
+def _resolve_race_metadata(race_details, client):
+    """Resolve race-level metadata from race details and a single series lookup."""
+    if not race_details.get('Successful'):
+        return RaceMetadata(race_name='', track_name='', series_name=None)
+    race = race_details['Race']
+    series_id = race.get('SeriesID')
+    series_name = None
+    if series_id is not None:
+        try:
+            resp = client.common.current_races(series_id=series_id)
+            if resp.get('Races'):
+                series_name = resp['Races'][0]['SeriesName']
+            else:
+                resp = client.common.past_races(series_id=series_id, max_results=1)
+                if resp.get('Races'):
+                    series_name = resp['Races'][0]['SeriesName']
+        except Exception:  # pylint: disable=broad-exception-caught
+            logging.warning("Failed to resolve series name for series_id=%s", series_id)
+    return RaceMetadata(
+        race_name=race['Name'],
+        track_name=race['Track'],
+        series_name=series_name,
+    )
 
 
 if __name__ == '__main__':

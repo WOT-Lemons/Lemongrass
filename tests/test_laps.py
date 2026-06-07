@@ -99,18 +99,17 @@ class TestResolveClassHistorical:
         class_name, _ = _mod._resolve_class_historical('42', sd)
         assert class_name == 'A'
 
-    def test_class_name_spaces_replaced_with_underscores(self):
+    def test_class_name_spaces_preserved(self):
         sd = self._session('42', '1')
         sd['Session']['Categories']['1']['Name'] = 'Super Street'
         class_name, _ = _mod._resolve_class_historical('42', sd)
-        assert class_name == 'Super_Street'
+        assert class_name == 'Super Street'
 
-    def test_class_name_special_chars_stripped(self):
+    def test_class_name_special_chars_preserved(self):
         sd = self._session('42', '1')
         sd['Session']['Categories']['1']['Name'] = 'GT3,Pro=Am'
         class_name, _ = _mod._resolve_class_historical('42', sd)
-        assert ',' not in class_name
-        assert '=' not in class_name
+        assert class_name == 'GT3,Pro=Am'
 
     def test_only_car_in_class_is_always_position_1(self):
         sd = self._session('42', '1')
@@ -234,13 +233,12 @@ class TestResolveClassLive:
         assert class_name is None
         assert class_pos is None
 
-    def test_class_name_special_chars_stripped(self):
+    def test_class_name_special_chars_preserved(self):
         client = self._make_client('42', 'classA', 1)
         client.live.get_session.return_value['Session']['Classes']['classA']['Description'] = (
             'GT3,Pro=Am')
         class_name, _ = _mod._resolve_class_live(client, '999', '42')
-        assert ',' not in class_name
-        assert '=' not in class_name
+        assert class_name == 'GT3,Pro=Am'
 
 
 class TestPushInfluxClassInfo:
@@ -254,7 +252,8 @@ class TestPushInfluxClassInfo:
         return ctx, write_api
 
     def _record(self, write_api):
-        return write_api.write.call_args[1]['record'][0]
+        point = write_api.write.call_args[1]['record']
+        return point.to_line_protocol()
 
     def test_includes_class_tag_when_provided(self):
         ctx, write_api = self._ctx()
@@ -270,7 +269,7 @@ class TestPushInfluxClassInfo:
     def test_includes_class_position_field_when_provided(self):
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 2})
-        assert 'class_position=2' in self._record(write_api)
+        assert 'class_position=2i' in self._record(write_api)
 
     def test_omits_class_tag_when_not_provided(self):
         ctx, write_api = self._ctx()
@@ -303,6 +302,26 @@ class TestPushInfluxClassInfo:
             _mod.push_influx(ctx, self._laps(), False)
         assert any('epoch' in r.message.lower() and r.levelno == logging.WARNING
                    for r in caplog.records)
+
+    def test_includes_competitor_name_tag_when_provided(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False, competitor_name='Jane Doe')
+        assert 'competitor_name=Jane\\ Doe' in self._record(write_api)
+
+    def test_omits_competitor_name_tag_when_none(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert 'competitor_name' not in self._record(write_api)
+
+    def test_includes_car_info_tag_when_provided(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False, car_info='2005/Toy/Celica')
+        assert 'car_info=2005/Toy/Celica' in self._record(write_api)
+
+    def test_omits_car_info_tag_when_none(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert 'car_info' not in self._record(write_api)
 
 
 class TestOldRaceClassWiring:
@@ -393,6 +412,47 @@ class TestOldRaceClassWiring:
             with patch.object(_mod, 'print_rankings'):
                 _mod.old_race(ctx, opts)
         mock_resolve.assert_not_called()
+
+    def test_passes_competitor_name_to_push_influx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('competitor_name') == 'Jane Doe'
+
+    def test_passes_car_info_to_push_influx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        session = self._session_details()
+        session['Session']['SortedCompetitors'][0]['AdditionalData'] = '2005/Toy/Celica'
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = session
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('car_info') == '2005/Toy/Celica'
+
+    def test_competitor_name_none_when_both_name_fields_empty(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        session = self._session_details()
+        session['Session']['SortedCompetitors'][0]['FirstName'] = ''
+        session['Session']['SortedCompetitors'][0]['LastName'] = ''
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = session
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('competitor_name') is None
 
 
 class TestLiveClassWiring:
@@ -514,3 +574,120 @@ class TestLiveClassWiring:
                 with patch.object(_mod, 'push_influx'):
                     _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
         mock_resolve.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
+
+    def test_live_race_passes_competitor_name_to_push_influx(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.live_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('competitor_name') == 'Jane Doe'
+
+    def test_live_race_passes_car_info_to_push_influx(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.live.get_racer.return_value['Details']['Competitor']['AdditionalData'] = '2005/Toy/Celica'
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.live_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('car_info') == '2005/Toy/Celica'
+
+    def test_monitor_routine_forwards_competitor_name_and_car_info_to_push_influx(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        existing_laps = [
+            {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
+        ]
+        new_laps = existing_laps + [
+            {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
+        ]
+        mock_stop = MagicMock()
+        mock_stop.wait.side_effect = [False, True]
+        with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
+            with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    _mod.monitor_routine(ctx, existing_laps, opts,
+                                         competitor_name='Jane Doe', car_info='2005/Toy/Celica',
+                                         _stop_event=mock_stop)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('competitor_name') == 'Jane Doe'
+        assert kwargs.get('car_info') == '2005/Toy/Celica'
+
+
+class TestResolveRaceMetadata:
+    def _race_details(self, series_id=145):
+        return {
+            'Successful': True,
+            'Race': {
+                'ID': 166153,
+                'Name': 'The Sausage Fest 2026',
+                'SeriesID': series_id,
+                'Track': 'Road America',
+            }
+        }
+
+    def _client_with_series(self, series_name='24 Hours of Lemons'):
+        client = MagicMock()
+        client.common.current_races.return_value = {
+            'Successful': True,
+            'Races': [{'SeriesName': series_name}],
+        }
+        return client
+
+    def test_race_name_extracted(self):
+        meta = _mod._resolve_race_metadata(self._race_details(), self._client_with_series())
+        assert meta.race_name == 'The Sausage Fest 2026'
+
+    def test_track_name_extracted(self):
+        meta = _mod._resolve_race_metadata(self._race_details(), self._client_with_series())
+        assert meta.track_name == 'Road America'
+
+    def test_series_name_from_current_races(self):
+        client = self._client_with_series('24 Hours of Lemons')
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=145), client)
+        assert meta.series_name == '24 Hours of Lemons'
+        client.common.current_races.assert_called_once_with(series_id=145)
+
+    def test_series_name_falls_back_to_past_races(self):
+        client = MagicMock()
+        client.common.current_races.return_value = {'Successful': True, 'Races': []}
+        client.common.past_races.return_value = {
+            'Successful': True,
+            'Races': [{'SeriesName': '24 Hours of Lemons'}],
+        }
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=145), client)
+        assert meta.series_name == '24 Hours of Lemons'
+        client.common.past_races.assert_called_once_with(series_id=145, max_results=1)
+
+    def test_series_name_none_when_series_id_is_none(self):
+        client = MagicMock()
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=None), client)
+        assert meta.series_name is None
+        client.common.current_races.assert_not_called()
+
+    def test_series_name_none_when_both_lookups_empty(self):
+        client = MagicMock()
+        client.common.current_races.return_value = {'Successful': True, 'Races': []}
+        client.common.past_races.return_value = {'Successful': True, 'Races': []}
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=145), client)
+        assert meta.series_name is None
+
+    def test_series_name_none_when_lookup_raises(self):
+        client = MagicMock()
+        client.common.current_races.side_effect = Exception('API error')
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=145), client)
+        assert meta.series_name is None
+
+    def test_returns_empty_metadata_when_unsuccessful(self):
+        client = MagicMock()
+        meta = _mod._resolve_race_metadata({'Successful': False}, client)
+        assert meta.race_name == ''
+        assert meta.track_name == ''
+        assert meta.series_name is None
+        client.common.current_races.assert_not_called()
