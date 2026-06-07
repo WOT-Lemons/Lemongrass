@@ -34,6 +34,7 @@ class RaceMetadata:
     race_name: str
     track_name: str
     series_name: str | None
+    end_time_epoc: int
 
 
 @dataclass
@@ -633,7 +634,7 @@ def _resolve_class_live(client, race_id, car_number):
 def _resolve_race_metadata(race_details, client):
     """Resolve race-level metadata from race details and a single series lookup."""
     if not race_details.get('Successful'):
-        return RaceMetadata(race_name='', track_name='', series_name=None)
+        return RaceMetadata(race_name='', track_name='', series_name=None, end_time_epoc=0)
     race = race_details['Race']
     series_id = race.get('SeriesID')
     series_name = None
@@ -652,6 +653,7 @@ def _resolve_race_metadata(race_details, client):
         race_name=race['Name'],
         track_name=race['Track'],
         series_name=series_name,
+        end_time_epoc=race.get('EndDateEpoc', 0),
     )
 
 

@@ -629,6 +629,7 @@ class TestResolveRaceMetadata:
                 'Name': 'The Sausage Fest 2026',
                 'SeriesID': series_id,
                 'Track': 'Road America',
+                'EndDateEpoc': 1749132000,
             }
         }
 
@@ -691,3 +692,11 @@ class TestResolveRaceMetadata:
         assert meta.track_name == ''
         assert meta.series_name is None
         client.common.current_races.assert_not_called()
+
+    def test_end_time_epoc_extracted(self):
+        meta = _mod._resolve_race_metadata(self._race_details(), self._client_with_series())
+        assert meta.end_time_epoc == 1749132000
+
+    def test_end_time_epoc_zero_when_unsuccessful(self):
+        meta = _mod._resolve_race_metadata({'Successful': False}, MagicMock())
+        assert meta.end_time_epoc == 0
