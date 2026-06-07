@@ -754,16 +754,11 @@ class TestPushInfluxRace:
 
     def test_calls_delete_before_write(self):
         ctx, write_api, delete_api = self._ctx()
+        call_order = []
+        delete_api.delete.side_effect = lambda **kw: call_order.append('delete')
+        write_api.write.side_effect = lambda **kw: call_order.append('write')
         _mod.push_influx_race(ctx, 5000000)
-        assert delete_api.delete.called
-        assert write_api.write.called
-        # delete must be called before write
-        try:
-            ordering_ok = (
-                delete_api.delete.call_args_list[0] < write_api.write.call_args_list[0])
-        except TypeError:
-            ordering_ok = True  # can't compare kwargs-only calls; fall back to presence check
-        assert ordering_ok or delete_api.delete.called
+        assert call_order == ['delete', 'write']
 
     def test_delete_targets_correct_race_id(self):
         ctx, write_api, delete_api = self._ctx()
