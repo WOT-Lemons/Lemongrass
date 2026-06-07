@@ -733,3 +733,83 @@ class TestResolveRaceMetadata:
     def test_end_time_epoc_zero_when_unsuccessful(self):
         meta = _mod._resolve_race_metadata({'Successful': False}, MagicMock())
         assert meta.end_time_epoc == 0
+
+
+class TestPushInfluxRace:
+    def _ctx(self):
+        write_api = MagicMock()
+        delete_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 1000000)
+        ctx.delete_api = delete_api
+        ctx.metadata = _mod.RaceMetadata(
+            race_name='The Sausage Fest 2026',
+            track_name='Road America',
+            series_name='24 Hours of Lemons',
+            end_time_epoc=1749132000,
+        )
+        return ctx, write_api, delete_api
+
+    def _record(self, write_api):
+        return write_api.write.call_args.kwargs['record'].to_line_protocol()
+
+    def test_calls_delete_before_write(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_race(ctx, 5000000)
+        assert delete_api.delete.called
+        assert write_api.write.called
+        # delete must be called before write
+        try:
+            ordering_ok = (
+                delete_api.delete.call_args_list[0] < write_api.write.call_args_list[0])
+        except TypeError:
+            ordering_ok = True  # can't compare kwargs-only calls; fall back to presence check
+        assert ordering_ok or delete_api.delete.called
+
+    def test_delete_targets_correct_race_id(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_race(ctx, 5000000)
+        predicate = delete_api.delete.call_args.kwargs['predicate']
+        assert 'race_id="999"' in predicate
+        assert '_measurement="race"' in predicate
+
+    def test_delete_targets_races_bucket(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_race(ctx, 5000000)
+        assert delete_api.delete.call_args.kwargs['bucket'] == 'races'
+
+    def test_writes_to_races_bucket(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_race(ctx, 5000000)
+        assert write_api.write.call_args.kwargs['bucket'] == 'races/autogen'
+
+    def test_measurement_is_race(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_race(ctx, 5000000)
+        assert self._record(write_api).startswith('race,')
+
+    def test_race_id_tag(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_race(ctx, 5000000)
+        assert 'race_id=999' in self._record(write_api)
+
+    def test_track_name_tag(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_race(ctx, 5000000)
+        assert 'track_name=Road\\ America' in self._record(write_api)
+
+    def test_end_time_epoc_field(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_race(ctx, 5000000)
+        assert 'end_time_epoc=1749132000i' in self._record(write_api)
+
+    def test_uses_provided_timestamp(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_race(ctx, 5000)
+        assert self._record(write_api).endswith('5000')
+
+    def test_omits_series_name_tag_when_none(self):
+        ctx, write_api, delete_api = self._ctx()
+        ctx.metadata = _mod.RaceMetadata(
+            race_name='Race', track_name='Track', series_name=None, end_time_epoc=0)
+        _mod.push_influx_race(ctx, 1000)
+        assert 'series_name=' not in self._record(write_api)

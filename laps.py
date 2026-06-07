@@ -533,6 +533,27 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
     print(UNDERLINE)
 
 
+def push_influx_race(ctx, timestamp_ms):
+    """Write one race metadata point to the races bucket, replacing any prior point."""
+    ctx.delete_api.delete(
+        start='1970-01-01T00:00:00Z',
+        stop='2030-01-01T00:00:00Z',
+        predicate=f'_measurement="race" AND race_id="{ctx.race_id}"',
+        bucket='races',
+    )
+    meta = ctx.metadata
+    point = (
+        Point("race")
+        .tag("race_id", ctx.race_id)
+        .tag("race_name", meta.race_name)
+        .tag("track_name", meta.track_name)
+        .tag("series_name", meta.series_name)
+        .field("end_time_epoc", meta.end_time_epoc)
+        .time(timestamp_ms, WritePrecision.MS)
+    )
+    ctx.write_api.write(bucket='races/autogen', record=point)
+
+
 def _resolve_class_historical(car_number, session_details):
     """Return (class_name, {lap_num: class_position}) for the tracked car."""
     session = session_details['Session']
