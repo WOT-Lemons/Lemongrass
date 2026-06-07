@@ -514,3 +514,76 @@ class TestLiveClassWiring:
                 with patch.object(_mod, 'push_influx'):
                     _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
         mock_resolve.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
+
+
+class TestResolveRaceMetadata:
+    def _race_details(self, series_id=145):
+        return {
+            'Successful': True,
+            'Race': {
+                'ID': 166153,
+                'Name': 'The Sausage Fest 2026',
+                'SeriesID': series_id,
+                'Track': 'Road America',
+            }
+        }
+
+    def _client_with_series(self, series_name='24 Hours of Lemons'):
+        client = MagicMock()
+        client.common.current_races.return_value = {
+            'Successful': True,
+            'Races': [{'SeriesName': series_name}],
+        }
+        return client
+
+    def test_race_name_extracted(self):
+        meta = _mod._resolve_race_metadata(self._race_details(), self._client_with_series())
+        assert meta.race_name == 'The Sausage Fest 2026'
+
+    def test_track_name_extracted(self):
+        meta = _mod._resolve_race_metadata(self._race_details(), self._client_with_series())
+        assert meta.track_name == 'Road America'
+
+    def test_series_name_from_current_races(self):
+        client = self._client_with_series('24 Hours of Lemons')
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=145), client)
+        assert meta.series_name == '24 Hours of Lemons'
+        client.common.current_races.assert_called_once_with(series_id=145)
+
+    def test_series_name_falls_back_to_past_races(self):
+        client = MagicMock()
+        client.common.current_races.return_value = {'Successful': True, 'Races': []}
+        client.common.past_races.return_value = {
+            'Successful': True,
+            'Races': [{'SeriesName': '24 Hours of Lemons'}],
+        }
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=145), client)
+        assert meta.series_name == '24 Hours of Lemons'
+        client.common.past_races.assert_called_once_with(series_id=145, max_results=1)
+
+    def test_series_name_none_when_series_id_is_none(self):
+        client = MagicMock()
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=None), client)
+        assert meta.series_name is None
+        client.common.current_races.assert_not_called()
+
+    def test_series_name_none_when_both_lookups_empty(self):
+        client = MagicMock()
+        client.common.current_races.return_value = {'Successful': True, 'Races': []}
+        client.common.past_races.return_value = {'Successful': True, 'Races': []}
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=145), client)
+        assert meta.series_name is None
+
+    def test_series_name_none_when_lookup_raises(self):
+        client = MagicMock()
+        client.common.current_races.side_effect = Exception('API error')
+        meta = _mod._resolve_race_metadata(self._race_details(series_id=145), client)
+        assert meta.series_name is None
+
+    def test_returns_empty_metadata_when_unsuccessful(self):
+        client = MagicMock()
+        meta = _mod._resolve_race_metadata({'Successful': False}, client)
+        assert meta.race_name == ''
+        assert meta.track_name == ''
+        assert meta.series_name is None
+        client.common.current_races.assert_not_called()

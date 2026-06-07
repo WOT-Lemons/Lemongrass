@@ -48,6 +48,14 @@ class RaceOptions:
     interval: int = 30
 
 
+@dataclass
+class RaceMetadata:
+    """Race-level metadata resolved once at startup."""
+    race_name: str
+    track_name: str
+    series_name: str | None
+
+
 def _build_parser():
     """Build and return the argument parser."""
     parser = argparse.ArgumentParser(description='Interact with lap data')
@@ -599,6 +607,31 @@ def _resolve_class_live(client, race_id, car_number):
         car_number, class_name, tracked_pos, class_position,
     )
     return class_name, class_position
+
+
+def _resolve_race_metadata(race_details, client):
+    """Resolve race-level metadata from race details and a single series lookup."""
+    if not race_details.get('Successful'):
+        return RaceMetadata(race_name='', track_name='', series_name=None)
+    race = race_details['Race']
+    series_id = race.get('SeriesID')
+    series_name = None
+    if series_id is not None:
+        try:
+            resp = client.common.current_races(series_id=series_id)
+            if resp.get('Races'):
+                series_name = resp['Races'][0]['SeriesName']
+            else:
+                resp = client.common.past_races(series_id=series_id, max_results=1)
+                if resp.get('Races'):
+                    series_name = resp['Races'][0]['SeriesName']
+        except Exception:  # pylint: disable=broad-exception-caught
+            logging.warning("Failed to resolve series name for series_id=%s", series_id)
+    return RaceMetadata(
+        race_name=race['Name'],
+        track_name=race['Track'],
+        series_name=series_name,
+    )
 
 
 if __name__ == '__main__':
