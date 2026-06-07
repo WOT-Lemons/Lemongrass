@@ -46,6 +46,7 @@ class RaceContext:
     write_api: object
     start_epoc: int
     metadata: RaceMetadata | None = None
+    delete_api: object = None
 
 
 @dataclass
@@ -164,8 +165,10 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
             url='https://influxdb.focism.com', token=influx_token, org='focism'
         ) as influx_client:
             write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+            delete_api = influx_client.delete_api()
             return _run_race(
-                RaceContext(race_id, car_number, client, write_api, start_epoc, metadata=metadata), opts, response)
+                RaceContext(race_id, car_number, client, write_api, start_epoc,
+                            metadata=metadata, delete_api=delete_api), opts, response)
 
 
 def _run_race(ctx, opts, response):
