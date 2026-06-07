@@ -391,8 +391,9 @@ class TestOldRaceClassWiring:
             _mod, '_resolve_class_historical', return_value=('A', {1: 1})
         ) as mock_resolve:
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.old_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
         mock_resolve.assert_called_once_with('42', self._session_details())
 
     def test_passes_class_name_to_push_influx(self):
@@ -402,8 +403,9 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = self._session_details()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.old_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('class_name') == 'A'
 
@@ -417,8 +419,9 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = session
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.old_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('start_epoc') == 5555
 
@@ -431,8 +434,9 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = session
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.old_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('start_epoc') is None
 
@@ -453,8 +457,9 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = self._session_details()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.old_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('competitor_name') == 'Jane Doe'
 
@@ -467,8 +472,9 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = session
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.old_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('car_info') == '2005/Toy/Celica'
 
@@ -482,10 +488,54 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = session
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.old_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('competitor_name') is None
+
+    def test_old_race_calls_push_influx_race_once_across_multiple_sessions(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}, {'ID': 2}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race') as mock_race:
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
+        assert mock_race.call_count == 1
+
+    def test_old_race_push_influx_race_timestamp_uses_start_epoc(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 5000)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race') as mock_race:
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
+        assert mock_race.call_args.args[1] == 5000 * 1000
+
+    def test_old_race_push_influx_race_not_called_when_not_network_mode(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'push_influx_race') as mock_race:
+            with patch.object(_mod, 'print_rankings'):
+                _mod.old_race(ctx, opts)
+        mock_race.assert_not_called()
+
+    def test_old_race_push_influx_race_not_called_when_car_not_found(self):
+        ctx = _mod.RaceContext('999', '99', MagicMock(), MagicMock(), 1000)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details(car_number='42')
+        with patch.object(_mod, 'push_influx_race') as mock_race:
+            _mod.old_race(ctx, opts)
+        mock_race.assert_not_called()
 
 
 class TestLiveClassWiring:
@@ -516,8 +566,9 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)) as mock_resolve:
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.live_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.live_race(ctx, opts)
         mock_resolve.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
 
     def test_live_race_passes_class_name_to_push_influx(self):
@@ -525,8 +576,9 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 2)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.live_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('class_name') == 'A'
 
@@ -535,8 +587,9 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=(None, None)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.live_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('class_name') is None
         assert kwargs.get('class_positions') is None
@@ -553,8 +606,9 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 2)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.live_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.live_race(ctx, opts)
         args, kwargs = mock_push.call_args
         assert args[1] == two_laps
         assert kwargs.get('class_positions') is None
@@ -564,9 +618,64 @@ class TestLiveClassWiring:
         ctx.client.live.get_racer.return_value['Details']['Laps'] = []
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, 'push_influx') as mock_push:
+            with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.live_race(ctx, opts)
+        mock_push.assert_not_called()
+
+    def test_live_race_calls_push_influx_race_in_network_mode(self):
+        ctx = self._make_ctx()
+        ctx.start_epoc = 1000
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race') as mock_race:
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.live_race(ctx, opts)
+        mock_race.assert_called_once()
+
+    def test_live_race_push_influx_race_timestamp_uses_start_epoc(self):
+        ctx = self._make_ctx()
+        ctx.start_epoc = 1000
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race') as mock_race:
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.live_race(ctx, opts)
+        assert mock_race.call_args.args[1] == 1000 * 1000
+
+    def test_live_race_push_influx_race_timestamp_uses_wall_clock_when_start_epoc_zero(self):
+        ctx = self._make_ctx()
+        ctx.start_epoc = 0
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race') as mock_race:
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.live_race(ctx, opts)
+        assert mock_race.called
+        assert mock_race.call_args.args[1] > 0
+
+    def test_live_race_push_influx_race_called_even_when_no_laps(self):
+        ctx = self._make_ctx()
+        ctx.start_epoc = 1000
+        ctx.client.live.get_racer.return_value['Details']['Laps'] = []
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx') as mock_push:
+            with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.live_race(ctx, opts)
+        mock_push.assert_not_called()
+        mock_race.assert_called_once()
+
+    def test_live_race_push_influx_race_not_called_when_not_network_mode(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=False)
+        with patch.object(_mod, 'push_influx_race') as mock_race:
             with patch.object(_mod, 'print_rankings'):
                 _mod.live_race(ctx, opts)
-        mock_push.assert_not_called()
+        mock_race.assert_not_called()
 
     def test_monitor_routine_push_influx_receives_only_new_lap(self):
         ctx = self._make_ctx()
@@ -613,8 +722,9 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.live_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('competitor_name') == 'Jane Doe'
 
@@ -624,8 +734,9 @@ class TestLiveClassWiring:
         ctx.client.live.get_racer.return_value['Details']['Competitor']['AdditionalData'] = '2005/Toy/Celica'
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'print_rankings'):
-                    _mod.live_race(ctx, opts)
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('car_info') == '2005/Toy/Celica'
 

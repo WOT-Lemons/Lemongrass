@@ -256,13 +256,17 @@ def live_race(ctx, opts):
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
-    if opts.network_mode and laps:
-        # class_position intentionally discarded: historical laps were completed before launch
-        # so any position we compute now is stale. monitor_routine owns class_position writes.
-        class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
-        logging.info("Car %s: class %r", ctx.car_number, class_name)
-        push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
-                    class_name=class_name, class_positions=None)
+    if opts.network_mode:
+        race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+        push_influx_race(ctx, race_ts_ms)
+        if laps:
+            # class_position intentionally discarded: historical laps were completed before
+            # launch so any position we compute now is stale. monitor_routine owns
+            # class_position writes.
+            class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
+            logging.info("Car %s: class %r", ctx.car_number, class_name)
+            push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
+                        class_name=class_name, class_positions=None)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -325,6 +329,9 @@ def old_race(ctx, opts):
     if competitor_missing:
         logging.info('Car %s not found', ctx.car_number)
         return
+
+    if opts.network_mode:
+        push_influx_race(ctx, ctx.start_epoc * 1000)
 
     print_rankings(sorted_competitors, False, opts.selected_class)
 
