@@ -499,14 +499,12 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
         lap_num = int(lap['Lap'])
 
         point = (
-            Point(f"laps{ctx.race_id}")
-            .tag("race_name", meta.race_name if meta is not None else None)
-            .tag("track_name", meta.track_name if meta is not None else None)
-            .tag("series_name", meta.series_name if meta is not None else None)
+            Point("lap")
+            .tag("race_id", ctx.race_id)
             .tag("competitor_name", competitor_name)
             .tag("car_info", car_info)
             .tag("class", class_name)
-            .tag("driver", f"Driver{ctx.car_number}")
+            .tag("car_number", ctx.car_number)
             .field("lap_no", lap_num)
             .field("lap_time", lap_time_ms)
             .field("position", int(lap['Position']))
@@ -521,7 +519,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
 
         logging.debug(point.to_line_protocol())
         try:
-            ctx.write_api.write(bucket='laps_252/autogen', record=point)
+            ctx.write_api.write(bucket='laps/autogen', record=point)
             logging.debug("Lap %s written to influx.", lap['Lap'])
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Writing lap failed: %s", e)

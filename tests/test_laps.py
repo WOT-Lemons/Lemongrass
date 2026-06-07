@@ -260,11 +260,11 @@ class TestPushInfluxClassInfo:
         _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 2})
         assert 'class=A' in self._record(write_api)
 
-    def test_class_tag_before_driver_tag(self):
+    def test_class_tag_before_car_number_tag(self):
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 1})
         record = self._record(write_api)
-        assert record.index('class=') < record.index('driver=')
+        assert record.index('car_number=') < record.index('class=')
 
     def test_includes_class_position_field_when_provided(self):
         ctx, write_api = self._ctx()
@@ -322,6 +322,39 @@ class TestPushInfluxClassInfo:
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False)
         assert 'car_info' not in self._record(write_api)
+
+    def test_measurement_is_lap(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert self._record(write_api).startswith('lap,')
+
+    def test_race_id_tag_present(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert 'race_id=999' in self._record(write_api)
+
+    def test_car_number_tag_replaces_driver(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        record = self._record(write_api)
+        assert 'car_number=42' in record
+        assert 'driver=' not in record
+
+    def test_race_metadata_tags_absent_from_lap(self):
+        ctx, write_api = self._ctx()
+        ctx.metadata = _mod.RaceMetadata(
+            race_name='Test Race', track_name='Road America',
+            series_name='Lemons', end_time_epoc=9999)
+        _mod.push_influx(ctx, self._laps(), False)
+        record = self._record(write_api)
+        assert 'race_name=' not in record
+        assert 'track_name=' not in record
+        assert 'series_name=' not in record
+
+    def test_bucket_is_laps(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert write_api.write.call_args.kwargs['bucket'] == 'laps/autogen'
 
 
 class TestOldRaceClassWiring:
