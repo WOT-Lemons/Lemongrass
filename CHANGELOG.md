@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.11.2...v0.12.0) (2026-06-07)
+
+
+### Features
+
+* **laps:** enrich InfluxDB lap writes with race and competitor metadata ([a2c9277](https://github.com/WOT-Lemons/Lemongrass/commit/a2c9277ba1c98406d2cffd637bbd7a6986e985de))
+
 ## [0.11.2](https://github.com/WOT-Lemons/Lemongrass/compare/v0.11.1...v0.11.2) (2026-06-06)
 
 
