@@ -514,6 +514,50 @@ class TestLiveClassWiring:
                     _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
         mock_resolve.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
 
+    def test_live_race_passes_competitor_name_to_push_influx(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.live_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('competitor_name') == 'Jane Doe'
+
+    def test_live_race_passes_car_info_to_push_influx(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.live.get_racer.return_value['Details']['Competitor']['AdditionalData'] = '2005/Toy/Celica'
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.live_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('car_info') == '2005/Toy/Celica'
+
+    def test_monitor_routine_forwards_competitor_name_and_car_info_to_push_influx(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        existing_laps = [
+            {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
+        ]
+        new_laps = existing_laps + [
+            {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
+        ]
+        mock_stop = MagicMock()
+        mock_stop.wait.side_effect = [False, True]
+        with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
+            with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    _mod.monitor_routine(ctx, existing_laps, opts,
+                                         competitor_name='Jane Doe', car_info='2005/Toy/Celica',
+                                         _stop_event=mock_stop)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('competitor_name') == 'Jane Doe'
+        assert kwargs.get('car_info') == '2005/Toy/Celica'
+
 
 class TestResolveRaceMetadata:
     def _race_details(self, series_id=145):

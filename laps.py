@@ -227,6 +227,9 @@ def live_race(ctx, opts):
     competitor_details['Name'] = (
         competitor_details['FirstName'] + competitor_details['LastName'])
 
+    competitor_name = f"{competitor_details.get('FirstName', '')} {competitor_details.get('LastName', '')}".strip() or None
+    car_info = competitor_details.get('AdditionalData') or None
+
     print(UNDERLINE)
     # Print competitor detail block
     print(
@@ -254,7 +257,8 @@ def live_race(ctx, opts):
         # so any position we compute now is stale. monitor_routine owns class_position writes.
         class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
         logging.info("Car %s: class %r", ctx.car_number, class_name)
-        push_influx(ctx, laps, False, class_name=class_name, class_positions=None)
+        push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
+                    class_name=class_name, class_positions=None)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -262,7 +266,7 @@ def live_race(ctx, opts):
         write_csv(filename, laps)
 
     if opts.monitor_mode:
-        monitor_routine(ctx, laps, opts)
+        monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info)
 
 
 def old_race(ctx, opts):
@@ -412,7 +416,7 @@ def write_csv(filename, competitor_lap_times):
         writer.writerows(competitor_lap_times)
 
 
-def monitor_routine(ctx, laps, opts, _stop_event=None):
+def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None):
     """Monitor mode: poll for new laps and display/push as they arrive."""
     logging.info("Monitoring car %s...", ctx.car_number)
     print(UNDERLINE)
@@ -437,6 +441,8 @@ def monitor_routine(ctx, laps, opts, _stop_event=None):
                     {new_lap_num: class_position} if class_position is not None else None)
                 push_influx(
                     ctx, [current_competitor_lap_times[-1]], True,
+                    competitor_name=competitor_name,
+                    car_info=car_info,
                     class_name=class_name, class_positions=class_positions)
 
 
