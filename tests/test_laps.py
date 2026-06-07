@@ -393,6 +393,47 @@ class TestOldRaceClassWiring:
                 _mod.old_race(ctx, opts)
         mock_resolve.assert_not_called()
 
+    def test_passes_competitor_name_to_push_influx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('competitor_name') == 'Jane Doe'
+
+    def test_passes_car_info_to_push_influx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        session = self._session_details()
+        session['Session']['SortedCompetitors'][0]['AdditionalData'] = '2005/Toy/Celica'
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = session
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('car_info') == '2005/Toy/Celica'
+
+    def test_competitor_name_none_when_both_name_fields_empty(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        session = self._session_details()
+        session['Session']['SortedCompetitors'][0]['FirstName'] = ''
+        session['Session']['SortedCompetitors'][0]['LastName'] = ''
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = session
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('competitor_name') is None
+
 
 class TestLiveClassWiring:
     def _make_ctx(self):

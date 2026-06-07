@@ -283,6 +283,8 @@ def old_race(ctx, opts):
     laps = []
     competitor_details = {}
     competitor_missing = True
+    competitor_name = None
+    car_info = None
 
     for session_id in session_ids_for_race:
         logging.debug("Getting session details for %s including lap times.", session_id)
@@ -294,6 +296,11 @@ def old_race(ctx, opts):
             if competitor['Number'] == ctx.car_number:
                 competitor_missing = False
                 competitor_details = competitor
+                competitor_name = (
+                    f"{competitor.get('FirstName', '')} {competitor.get('LastName', '')}".strip()
+                    or None
+                )
+                car_info = competitor.get('AdditionalData') or None
                 session_laps = competitor['LapTimes'].copy()
                 laps = laps + [dict(lap) for lap in session_laps]
 
@@ -306,6 +313,8 @@ def old_race(ctx, opts):
             class_name, class_positions = _resolve_class_historical(ctx.car_number, session_details)
             push_influx(
                 ctx, influx_laps, False,
+                competitor_name=competitor_name,
+                car_info=car_info,
                 class_name=class_name, class_positions=class_positions,
                 start_epoc=session_details['Session'].get('SessionStartDateEpoc'))
 
