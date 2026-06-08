@@ -260,7 +260,7 @@ class TestPushInfluxClassInfo:
         _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 2})
         assert 'class=A' in self._record(write_api)
 
-    def test_class_tag_before_car_number_tag(self):
+    def test_car_number_tag_before_class_tag(self):
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 1})
         record = self._record(write_api)
@@ -354,7 +354,7 @@ class TestPushInfluxClassInfo:
     def test_bucket_is_laps(self):
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False)
-        assert write_api.write.call_args.kwargs['bucket'] == 'laps/autogen'
+        assert write_api.write.call_args.kwargs['bucket'] == 'laps'
 
 
 class TestOldRaceClassWiring:
@@ -976,7 +976,7 @@ class TestPushInfluxRace:
     def test_writes_to_races_bucket(self):
         ctx, write_api, delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000000)
-        assert write_api.write.call_args.kwargs['bucket'] == 'races/autogen'
+        assert write_api.write.call_args.kwargs['bucket'] == 'races'
 
     def test_measurement_is_race(self):
         ctx, write_api, delete_api = self._ctx()
@@ -1002,6 +1002,16 @@ class TestPushInfluxRace:
         ctx, write_api, delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000)
         assert self._record(write_api).endswith('5000')
+
+    def test_exception_during_delete_is_logged_not_raised(self):
+        ctx, write_api, delete_api = self._ctx()
+        delete_api.delete.side_effect = Exception("network error")
+        _mod.push_influx_race(ctx, 5000000)  # must not raise
+
+    def test_exception_during_write_is_logged_not_raised(self):
+        ctx, write_api, delete_api = self._ctx()
+        write_api.write.side_effect = Exception("network error")
+        _mod.push_influx_race(ctx, 5000000)  # must not raise
 
     def test_omits_series_name_tag_when_none(self):
         ctx, write_api, delete_api = self._ctx()
