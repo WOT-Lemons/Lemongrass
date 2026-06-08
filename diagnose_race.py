@@ -37,15 +37,21 @@ def epoc_to_str(epoc):
 
 
 def diagnose_api(client, race_id, car_number):
-    """Print race metadata and per-session lap counts from the RaceMonitor API."""
+    """Print race metadata and per-session lap counts from the RaceMonitor API.
+
+    Returns (start_epoc, end_epoc) from race details, or (0, 0) if unavailable.
+    """
     print(f'\n=== RaceMonitor API: race {race_id}, car {car_number} ===')
 
+    start_epoc, end_epoc = 0, 0
     race_details = client.race.details(race_id)
     if race_details.get('Successful'):
         race = race_details['Race']
+        start_epoc = race.get('StartDateEpoc', 0)
+        end_epoc = race.get('EndDateEpoc', 0)
         print(f"Race name:       {race['Name']}")
-        print(f"StartDateEpoc:   {epoc_to_str(race.get('StartDateEpoc'))}")
-        print(f"EndDateEpoc:     {epoc_to_str(race.get('EndDateEpoc'))}")
+        print(f"StartDateEpoc:   {epoc_to_str(start_epoc)}")
+        print(f"EndDateEpoc:     {epoc_to_str(end_epoc)}")
 
     sessions_resp = client.results.sessions_for_race(race_id)
     sessions = sessions_resp.get('Sessions', [])
@@ -69,15 +75,23 @@ def diagnose_api(client, race_id, car_number):
               f"  car {car_number} laps={len(car_laps)}")
 
     print(f"\nTotal laps for car {car_number} across all sessions: {total_laps}")
+    return start_epoc, end_epoc
 
 
-def diagnose_influx(query_api, race_id, car_number):
+def diagnose_influx(query_api, race_id, car_number, start_epoc=0, end_epoc=0):
     """Print stored lap count, time range, and all lap numbers from InfluxDB."""
     print(f'\n=== InfluxDB: race {race_id}, car {car_number} ===')
 
+    range_start = (datetime.fromtimestamp(start_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                   if start_epoc else EPOCH_START)
+    if not end_epoc:
+        print(f"  Warning: end_time_epoc not set for race {race_id}, using now() as range stop")
+    range_stop = (datetime.fromtimestamp(end_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                  if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+
     tables = query_api.query(
         f'from(bucket: "laps")\n'
-        f'  |> range(start: {EPOCH_START})\n'
+        f'  |> range(start: {range_start}, stop: {range_stop})\n'
         f'  |> filter(fn: (r) => r._measurement == "lap"\n'
         f'      and r.race_id == "{race_id}"\n'
         f'      and r.car_number == "{car_number}"\n'
@@ -112,10 +126,10 @@ def main():
         print("INFLUX_TELEMETRY_TOKEN not set"); sys.exit(1)
 
     with RaceMonitorClient(api_token=rm_token) as client:
-        diagnose_api(client, race_id, car_number)
+        start_epoc, end_epoc = diagnose_api(client, race_id, car_number)
 
     with InfluxDBClient(url=INFLUX_URL, token=influx_token, org=INFLUX_ORG) as influx:
-        diagnose_influx(influx.query_api(), race_id, car_number)
+        diagnose_influx(influx.query_api(), race_id, car_number, start_epoc, end_epoc)
 
 
 if __name__ == '__main__':

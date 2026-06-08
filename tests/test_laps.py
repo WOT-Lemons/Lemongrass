@@ -518,6 +518,19 @@ class TestOldRaceClassWiring:
                         _mod.old_race(ctx, opts)
         assert mock_race.call_args.args[1] == 5000 * 1000
 
+    def test_old_race_push_influx_race_uses_wall_clock_when_start_epoc_zero(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race') as mock_race:
+                    with patch.object(_mod, 'print_rankings'):
+                        with patch.object(_mod.time, 'time', return_value=12345.0):
+                            _mod.old_race(ctx, opts)
+        assert mock_race.call_args.args[1] == 12345000
+
     def test_old_race_push_influx_race_not_called_when_not_network_mode(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
         opts = _mod.RaceOptions(network_mode=False)
@@ -839,6 +852,19 @@ class TestMonitorRoutineEpocRecheck:
                                      _stop_event=self._stop_after(1))
         mock_race.assert_called_once_with(ctx, 5000 * 1000)
 
+    def test_updates_metadata_end_time_epoc_when_api_returns_epoc(self):
+        ctx = self._make_ctx(start_epoc=0)
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        ctx.client.race.details.return_value = {
+            'Successful': True,
+            'Race': {'StartDateEpoc': 5000, 'EndDateEpoc': 9000, 'Name': '', 'Track': ''},
+        }
+        with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
+            with patch.object(_mod, 'push_influx_race'):
+                _mod.monitor_routine(ctx, [self._existing_lap], opts,
+                                     _stop_event=self._stop_after(1))
+        assert ctx.metadata.end_time_epoc == 9000
+
     def test_stops_rechecking_once_start_epoc_set(self):
         ctx = self._make_ctx(start_epoc=0)
         opts = _mod.RaceOptions(network_mode=True, interval=30)
@@ -1019,3 +1045,10 @@ class TestPushInfluxRace:
             race_name='Race', track_name='Track', series_name=None, end_time_epoc=0)
         _mod.push_influx_race(ctx, 1000)
         assert 'series_name=' not in self._record(write_api)
+
+    def test_metadata_none_skips_delete_and_write(self):
+        ctx, write_api, delete_api = self._ctx()
+        ctx.metadata = None
+        _mod.push_influx_race(ctx, 1000)
+        delete_api.delete.assert_not_called()
+        write_api.write.assert_not_called()

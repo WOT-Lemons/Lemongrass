@@ -24,11 +24,11 @@ Usage:
 
 Required environment variables:
     RACEMONITOR_TOKEN      — RaceMonitor API token (always required)
-    INFLUX_TELEMETRY_TOKEN — InfluxDB write token (required for --validate)
+    INFLUX_TELEMETRY_TOKEN — InfluxDB token (read-only sufficient for --validate;
+                             full backfill requires write access via laps.py)
 """
 
 import argparse
-import importlib.util
 import logging
 import os
 import pathlib
@@ -38,15 +38,10 @@ from datetime import datetime, timezone
 
 from race_monitor import RaceMonitorClient
 
-_migrate = importlib.util.spec_from_file_location(
-    "migrate", pathlib.Path(__file__).parent / "migrate.py")
-_migrate_mod = importlib.util.module_from_spec(_migrate)
-_migrate.loader.exec_module(_migrate_mod)
-validate_migration = _migrate_mod.validate_migration
-
 LEMONS_SEARCH_TERMS = ['Real Hoopties', 'GP du Lac', 'Halloween Hoop']
 DEFAULT_CAR_NUMBER = '252'
 DEFAULT_START_YEAR = 2021
+EPOCH_START = '1970-01-01T00:00:00Z'
 
 
 class _OverrideAction(argparse.Action):
@@ -102,8 +97,69 @@ def resolve_car_number(race_id, default, overrides):
     return overrides.get(str(race_id), default)
 
 
+def validate_backfill(pairs, query_api):
+    """Check every race has metadata and every expected car has laps; show counts."""
+    by_race = {}
+    for race_id, car_number in pairs:
+        by_race.setdefault(race_id, []).append(car_number)
+
+    all_ok = True
+    for race_id, expected_cars in sorted(by_race.items()):
+        race_tables = query_api.query(
+            f'from(bucket: "races")\n'
+            f'  |> range(start: {EPOCH_START})\n'
+            f'  |> filter(fn: (r) => r._measurement == "race"\n'
+            f'      and r.race_id == "{race_id}")\n'
+            f'  |> filter(fn: (r) => r._field == "end_time_epoc")\n'
+            f'  |> first()'
+        )
+        race_records = [r for t in race_tables for r in t.records]
+        if not race_records:
+            logging.warning("race %s: metadata MISSING", race_id)
+            all_ok = False
+            continue
+
+        race_name = race_records[0].values.get('race_name', 'unknown')
+        range_start = race_records[0].get_time().strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_epoc = race_records[0].get_value()
+        if not end_epoc:
+            logging.warning("race %s: end_time_epoc=0 in races bucket, using now() as range stop",
+                            race_id)
+        range_stop = (datetime.fromtimestamp(end_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                      if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+
+        lap_tables = query_api.query(
+            f'from(bucket: "laps")\n'
+            f'  |> range(start: {range_start}, stop: {range_stop})\n'
+            f'  |> filter(fn: (r) => r._measurement == "lap"\n'
+            f'      and r.race_id == "{race_id}"\n'
+            f'      and r._field == "lap_no")\n'
+            f'  |> group(columns: ["car_number"])\n'
+            f'  |> count()'
+        )
+        actual = {r.values['car_number']: r.values['_value']
+                  for t in lap_tables for r in t.records}
+
+        missing = sorted(set(expected_cars) - set(actual))
+        if missing:
+            logging.warning("race %s (%s): MISSING cars %s | have: %s",
+                            race_id, race_name, missing,
+                            [f'{c}={actual[c]}laps' for c in sorted(actual)])
+            all_ok = False
+        else:
+            logging.info("race %s (%s): OK | cars: %s",
+                         race_id, race_name,
+                         [f'{c}={actual[c]}laps' for c in sorted(actual)])
+
+    return all_ok
+
+
+_LAPS_PY = str(pathlib.Path(__file__).parent / 'laps.py')
+
+
 def run_backfill(races, default_car, overrides, dry_run=False):
     """Run laps.py -n for each race, using per-race car number overrides where set."""
+    failures = []
     for race in races:
         race_id = str(race['ID'])
         car_number = resolve_car_number(race_id, default_car, overrides)
@@ -114,11 +170,15 @@ def run_backfill(races, default_car, overrides, dry_run=False):
         logging.info("Backfilling race %s (%s) car %s",
                      race_id, race['Name'], car_number)
         result = subprocess.run(
-            [sys.executable, 'laps.py', '-n', race_id, car_number],
+            [sys.executable, _LAPS_PY, '-n', race_id, car_number],
             capture_output=False,
         )
         if result.returncode != 0:
             logging.error("Backfill failed for race %s car %s", race_id, car_number)
+            failures.append((race_id, car_number))
+    if failures:
+        logging.error("%d race(s) failed: %s", len(failures), failures)
+    return failures
 
 
 def main():
@@ -145,10 +205,12 @@ def main():
             pairs = build_pairs(races, args.car_number, args.overrides)
             with InfluxDBClient(url='https://influxdb.focism.com',
                                 token=influx_token, org='focism') as influx_client:
-                ok = validate_migration(pairs, influx_client.query_api())
+                ok = validate_backfill(pairs, influx_client.query_api())
             sys.exit(0 if ok else 1)
 
-        run_backfill(races, args.car_number, args.overrides, dry_run=args.dry_run)
+        failures = run_backfill(races, args.car_number, args.overrides, dry_run=args.dry_run)
+        if failures:
+            sys.exit(1)
 
 
 if __name__ == '__main__':

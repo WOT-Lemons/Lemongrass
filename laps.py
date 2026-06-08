@@ -332,7 +332,8 @@ def old_race(ctx, opts):
         return
 
     if opts.network_mode:
-        push_influx_race(ctx, ctx.start_epoc * 1000)
+        race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+        push_influx_race(ctx, race_ts_ms)
 
     print_rankings(sorted_competitors, False, opts.selected_class)
 
@@ -454,6 +455,9 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 new_epoc = race_details['Race'].get('StartDateEpoc', 0)
                 if new_epoc != 0:
                     ctx.start_epoc = new_epoc
+                    if ctx.metadata is not None:
+                        ctx.metadata.end_time_epoc = race_details['Race'].get(
+                            'EndDateEpoc', ctx.metadata.end_time_epoc)
                     push_influx_race(ctx, ctx.start_epoc * 1000)
 
         current_competitor_lap_times = refresh_competitor(ctx)
@@ -551,10 +555,13 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
 
 def push_influx_race(ctx, timestamp_ms):
     """Write one race metadata point to the races bucket, replacing any prior point."""
+    if ctx.metadata is None:
+        logging.warning("push_influx_race called with no metadata for race %s", ctx.race_id)
+        return
     try:
         ctx.delete_api.delete(
             start='1970-01-01T00:00:00Z',
-            stop=datetime.now(timezone.utc).isoformat(),
+            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="race" AND race_id="{ctx.race_id}"',
             bucket='races',
         )
