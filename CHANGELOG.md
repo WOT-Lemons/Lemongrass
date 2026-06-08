@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.12.0...v0.13.0) (2026-06-08)
+
+
+### Features
+
+* **laps:** InfluxDB schema redesign with laps/races buckets and historical backfill ([2c6e3c0](https://github.com/WOT-Lemons/Lemongrass/commit/2c6e3c0a3cfd2befc4cec04cdc5c9b78f45e25fe))
+
 ## [0.12.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.11.2...v0.12.0) (2026-06-07)
 
 
