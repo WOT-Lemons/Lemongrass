@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from operator import itemgetter
 
 import pandas
@@ -34,6 +35,7 @@ class RaceMetadata:
     race_name: str
     track_name: str
     series_name: str | None
+    end_time_epoc: int
 
 
 @dataclass
@@ -45,6 +47,7 @@ class RaceContext:
     write_api: object
     start_epoc: int
     metadata: RaceMetadata | None = None
+    delete_api: object = None
 
 
 @dataclass
@@ -163,8 +166,10 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
             url='https://influxdb.focism.com', token=influx_token, org='focism'
         ) as influx_client:
             write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+            delete_api = influx_client.delete_api()
             return _run_race(
-                RaceContext(race_id, car_number, client, write_api, start_epoc, metadata=metadata), opts, response)
+                RaceContext(race_id, car_number, client, write_api, start_epoc,
+                            metadata=metadata, delete_api=delete_api), opts, response)
 
 
 def _run_race(ctx, opts, response):
@@ -252,13 +257,17 @@ def live_race(ctx, opts):
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
-    if opts.network_mode and laps:
-        # class_position intentionally discarded: historical laps were completed before launch
-        # so any position we compute now is stale. monitor_routine owns class_position writes.
-        class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
-        logging.info("Car %s: class %r", ctx.car_number, class_name)
-        push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
-                    class_name=class_name, class_positions=None)
+    if opts.network_mode:
+        race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+        push_influx_race(ctx, race_ts_ms)
+        if laps:
+            # class_position intentionally discarded: historical laps were completed before
+            # launch so any position we compute now is stale. monitor_routine owns
+            # class_position writes.
+            class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
+            logging.info("Car %s: class %r", ctx.car_number, class_name)
+            push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
+                        class_name=class_name, class_positions=None)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -321,6 +330,10 @@ def old_race(ctx, opts):
     if competitor_missing:
         logging.info('Car %s not found', ctx.car_number)
         return
+
+    if opts.network_mode:
+        race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+        push_influx_race(ctx, race_ts_ms)
 
     print_rankings(sorted_competitors, False, opts.selected_class)
 
@@ -436,6 +449,17 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
 
     stop = _stop_event if _stop_event is not None else threading.Event()
     while not stop.wait(timeout=opts.interval):
+        if opts.network_mode and ctx.start_epoc == 0:
+            race_details = ctx.client.race.details(ctx.race_id)
+            if race_details.get('Successful'):
+                new_epoc = race_details['Race'].get('StartDateEpoc', 0)
+                if new_epoc != 0:
+                    ctx.start_epoc = new_epoc
+                    if ctx.metadata is not None:
+                        ctx.metadata.end_time_epoc = race_details['Race'].get(
+                            'EndDateEpoc', ctx.metadata.end_time_epoc)
+                    push_influx_race(ctx, ctx.start_epoc * 1000)
+
         current_competitor_lap_times = refresh_competitor(ctx)
         if current_competitor_lap_times[-1] not in laps:
             current_competitor_lap_time_df = pandas.json_normalize(
@@ -483,7 +507,6 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
     if not monitor_mode:
         logging.info("Writing laps to influx...")
 
-    meta = ctx.metadata
     write_success = True
     for lap in laps:
         h, m, s = lap['TotalTime'].split(':')
@@ -498,14 +521,12 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
         lap_num = int(lap['Lap'])
 
         point = (
-            Point(f"laps{ctx.race_id}")
-            .tag("race_name", meta.race_name if meta is not None else None)
-            .tag("track_name", meta.track_name if meta is not None else None)
-            .tag("series_name", meta.series_name if meta is not None else None)
+            Point("lap")
+            .tag("race_id", ctx.race_id)
             .tag("competitor_name", competitor_name)
             .tag("car_info", car_info)
             .tag("class", class_name)
-            .tag("driver", f"Driver{ctx.car_number}")
+            .tag("car_number", ctx.car_number)
             .field("lap_no", lap_num)
             .field("lap_time", lap_time_ms)
             .field("position", int(lap['Position']))
@@ -520,7 +541,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
 
         logging.debug(point.to_line_protocol())
         try:
-            ctx.write_api.write(bucket='laps_252/autogen', record=point)
+            ctx.write_api.write(bucket='laps', record=point)
             logging.debug("Lap %s written to influx.", lap['Lap'])
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Writing lap failed: %s", e)
@@ -530,6 +551,33 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
         logging.info('All lap data written successfully')
 
     print(UNDERLINE)
+
+
+def push_influx_race(ctx, timestamp_ms):
+    """Write one race metadata point to the races bucket, replacing any prior point."""
+    if ctx.metadata is None:
+        logging.warning("push_influx_race called with no metadata for race %s", ctx.race_id)
+        return
+    try:
+        ctx.delete_api.delete(
+            start='1970-01-01T00:00:00Z',
+            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            predicate=f'_measurement="race" AND race_id="{ctx.race_id}"',
+            bucket='races',
+        )
+        meta = ctx.metadata
+        point = (
+            Point("race")
+            .tag("race_id", ctx.race_id)
+            .tag("race_name", meta.race_name)
+            .tag("track_name", meta.track_name)
+            .tag("series_name", meta.series_name)
+            .field("end_time_epoc", meta.end_time_epoc)
+            .time(timestamp_ms, WritePrecision.MS)
+        )
+        ctx.write_api.write(bucket='races', record=point)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.error("Writing race failed: %s", e)
 
 
 def _resolve_class_historical(car_number, session_details):
@@ -633,7 +681,7 @@ def _resolve_class_live(client, race_id, car_number):
 def _resolve_race_metadata(race_details, client):
     """Resolve race-level metadata from race details and a single series lookup."""
     if not race_details.get('Successful'):
-        return RaceMetadata(race_name='', track_name='', series_name=None)
+        return RaceMetadata(race_name='', track_name='', series_name=None, end_time_epoc=0)
     race = race_details['Race']
     series_id = race.get('SeriesID')
     series_name = None
@@ -652,6 +700,7 @@ def _resolve_race_metadata(race_details, client):
         race_name=race['Name'],
         track_name=race['Track'],
         series_name=series_name,
+        end_time_epoc=race.get('EndDateEpoc', 0),
     )
 
 
