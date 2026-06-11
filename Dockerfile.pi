@@ -4,7 +4,7 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --group pi
 
-FROM python:3.14-slim-trixie@sha256:4701f9885ba369bf50a80ae4b5e1f637be3aa961dbb9b676d295e98fb2c01075
+FROM python:3.14-slim-trixie@sha256:3d784532785b0538e7aafa9e39b42aafab2708c70a9ee168c3077c8a838f5323
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
