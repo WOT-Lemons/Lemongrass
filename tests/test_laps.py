@@ -585,6 +585,29 @@ class TestOldRaceClassWiring:
                             _mod.old_race(ctx, opts)
         mock_del.assert_called_once_with(ctx)
 
+    def test_delete_fires_on_first_session_that_has_the_car(self):
+        # Car 42 is absent from session 1 (which holds car 99) and present in
+        # session 2. The delete must fire while processing session 2, not before.
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}]}
+        ctx.client.results.session_details.side_effect = [
+            self._session_details(car_number='99'),
+            self._session_details(car_number='42'),
+        ]
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        with patch.object(_mod, '_resolve_class_historical',
+                                          return_value=('A', {1: 1})):
+                            _mod.old_race(ctx, opts)
+        # Only session 2 yields laps, so exactly one delete and one push occur.
+        mock_del.assert_called_once_with(ctx)
+        mock_push.assert_called_once()
+
     def test_no_delete_when_competitor_missing(self):
         ctx = _mod.RaceContext('999', '77', MagicMock(), MagicMock(), 0)
         ctx.delete_api = MagicMock()
