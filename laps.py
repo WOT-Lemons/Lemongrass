@@ -4,10 +4,15 @@
 #
 # Last tested with Python 3.12 on 2026-04-05
 #
-# TODO:
-#   When in live race mode timestamps are tagging with an offset different than the historical view.
-#   If this time offset can be adjusted it would be preferable to store the data in live view
-#   format over the weekend.
+# Timestamp anchoring (design decision):
+#   Live mode anchors lap timestamps on Race['StartDateEpoc']; the historical view anchors on
+#   SessionStartDateEpoc, so the two disagree by up to ~35 min. Aligning the live anchor was
+#   ruled out: the live API never exposes SessionStartDateEpoc, and the live feed's cumulative
+#   offset differs from historical, so even the same anchor would not produce matching points.
+#   Instead, historical is treated as the source of truth: a post-race network-mode run
+#   (old_race) deletes the tracked car's lap points and rewrites the complete historical set
+#   (correct timestamps + class_position on every lap) via delete_existing_laps. Live/monitor
+#   writes are the during-race approximation; the backfill makes the final record authoritative.
 
 import argparse
 import csv
