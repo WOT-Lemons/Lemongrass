@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.14.0...v0.15.0) (2026-06-15)
+
+
+### Features
+
+* **influx:** batch point writes to reduce HTTP requests ([#105](https://github.com/WOT-Lemons/Lemongrass/issues/105)) ([1f09656](https://github.com/WOT-Lemons/Lemongrass/commit/1f09656fb21df903e4fb7bb41931df9fb745517b))
+
 ## [0.14.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.13.0...v0.14.0) (2026-06-15)
 
 
