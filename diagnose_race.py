@@ -121,9 +121,11 @@ def main():
     influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
 
     if not rm_token:
-        print("RACEMONITOR_TOKEN not set"); sys.exit(1)
+        print("RACEMONITOR_TOKEN not set")
+        sys.exit(1)
     if not influx_token:
-        print("INFLUX_TELEMETRY_TOKEN not set"); sys.exit(1)
+        print("INFLUX_TELEMETRY_TOKEN not set")
+        sys.exit(1)
 
     with RaceMonitorClient(api_token=rm_token) as client:
         start_epoc, end_epoc = diagnose_api(client, race_id, car_number)

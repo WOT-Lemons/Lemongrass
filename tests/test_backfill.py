@@ -3,8 +3,6 @@ import pathlib
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 _spec = importlib.util.spec_from_file_location(
     "backfill",
     pathlib.Path(__file__).parent.parent / "backfill.py",

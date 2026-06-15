@@ -2,12 +2,15 @@
 # -*- coding: utf-8 -*-
 """Interact with the RaceMonitor lap timing system."""
 #
-# Last tested with Python 3.12 on 2026-04-05
-#
-# TODO:
-#   When in live race mode timestamps are tagging with an offset different than the historical view.
-#   If this time offset can be adjusted it would be preferable to store the data in live view
-#   format over the weekend.
+# Timestamp anchoring (design decision):
+#   Live mode anchors lap timestamps on Race['StartDateEpoc']; the historical view anchors on
+#   SessionStartDateEpoc, so the two disagree by up to ~35 min. Aligning the live anchor was
+#   ruled out: the live API never exposes SessionStartDateEpoc, and the live feed's cumulative
+#   offset differs from historical, so even the same anchor would not produce matching points.
+#   Instead, historical is treated as the source of truth: a post-race network-mode run
+#   (old_race) deletes the tracked car's lap points and rewrites the complete historical set
+#   (correct timestamps + class_position on every lap) via delete_existing_laps. Live/monitor
+#   writes are the during-race approximation; the backfill makes the final record authoritative.
 
 import argparse
 import csv
@@ -294,6 +297,7 @@ def old_race(ctx, opts):
     competitor_missing = True
     competitor_name = None
     car_info = None
+    deleted = False
 
     for session_id in session_ids_for_race:
         logging.debug("Getting session details for %s including lap times.", session_id)
@@ -319,6 +323,9 @@ def old_race(ctx, opts):
                 {**lap, 'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus']))}
                 for lap in session_laps
             ]
+            if not deleted:
+                delete_existing_laps(ctx)
+                deleted = True
             class_name, class_positions = _resolve_class_historical(ctx.car_number, session_details)
             push_influx(
                 ctx, influx_laps, False,
@@ -578,6 +585,22 @@ def push_influx_race(ctx, timestamp_ms):
         ctx.write_api.write(bucket='races', record=point)
     except Exception as e:  # pylint: disable=broad-exception-caught
         logging.error("Writing race failed: %s", e)
+
+
+def delete_existing_laps(ctx):
+    """Delete all lap points for the tracked car so a backfill can replace them."""
+    try:
+        ctx.delete_api.delete(
+            start='1970-01-01T00:00:00Z',
+            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            predicate=(
+                f'_measurement="lap" AND race_id="{ctx.race_id}" '
+                f'AND car_number="{ctx.car_number}"'
+            ),
+            bucket='laps',
+        )
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.error("Deleting existing laps failed: %s", e)
 
 
 def _resolve_class_historical(car_number, session_details):

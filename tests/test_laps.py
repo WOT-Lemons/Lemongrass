@@ -550,6 +550,90 @@ class TestOldRaceClassWiring:
             _mod.old_race(ctx, opts)
         mock_race.assert_not_called()
 
+    def test_deletes_existing_laps_before_push(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        order = []
+        with patch.object(_mod, 'delete_existing_laps',
+                          side_effect=lambda c: order.append('delete')) as mock_del:
+            with patch.object(_mod, 'push_influx',
+                              side_effect=lambda *a, **k: order.append('push')):
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        with patch.object(_mod, '_resolve_class_historical',
+                                          return_value=('A', {1: 1})):
+                            _mod.old_race(ctx, opts)
+        mock_del.assert_called_once_with(ctx)
+        assert order == ['delete', 'push']
+
+    def test_delete_fires_once_across_multiple_sessions(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        with patch.object(_mod, '_resolve_class_historical',
+                                          return_value=('A', {1: 1})):
+                            _mod.old_race(ctx, opts)
+        mock_del.assert_called_once_with(ctx)
+
+    def test_delete_fires_on_first_session_that_has_the_car(self):
+        # Car 42 is absent from session 1 (which holds car 99) and present in
+        # session 2. The delete must fire while processing session 2, not before.
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}]}
+        ctx.client.results.session_details.side_effect = [
+            self._session_details(car_number='99'),
+            self._session_details(car_number='42'),
+        ]
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        with patch.object(_mod, '_resolve_class_historical',
+                                          return_value=('A', {1: 1})):
+                            _mod.old_race(ctx, opts)
+        # Only session 2 yields laps, so exactly one delete and one push occur.
+        mock_del.assert_called_once_with(ctx)
+        mock_push.assert_called_once()
+
+    def test_no_delete_when_competitor_missing(self):
+        ctx = _mod.RaceContext('999', '77', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        # session contains car 42 only; tracked car 77 is absent
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
+        mock_del.assert_not_called()
+
+    def test_no_delete_when_not_network_mode(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=False)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        mock_del.assert_not_called()
+
 
 class TestLiveClassWiring:
     def _make_ctx(self):
@@ -1052,3 +1136,30 @@ class TestPushInfluxRace:
         _mod.push_influx_race(ctx, 1000)
         delete_api.delete.assert_not_called()
         write_api.write.assert_not_called()
+
+
+class TestDeleteExistingLaps:
+    def _ctx(self):
+        delete_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = delete_api
+        return ctx, delete_api
+
+    def test_predicate_targets_measurement_race_and_car(self):
+        ctx, delete_api = self._ctx()
+        _mod.delete_existing_laps(ctx)
+        predicate = delete_api.delete.call_args.kwargs['predicate']
+        assert '_measurement="lap"' in predicate
+        assert 'race_id="999"' in predicate
+        assert 'car_number="42"' in predicate
+
+    def test_targets_laps_bucket(self):
+        ctx, delete_api = self._ctx()
+        _mod.delete_existing_laps(ctx)
+        assert delete_api.delete.call_args.kwargs['bucket'] == 'laps'
+
+    def test_delete_failure_is_swallowed_and_logged(self, caplog):
+        ctx, delete_api = self._ctx()
+        delete_api.delete.side_effect = Exception("network error")
+        _mod.delete_existing_laps(ctx)  # must not raise
+        assert "Deleting existing laps failed" in caplog.text
