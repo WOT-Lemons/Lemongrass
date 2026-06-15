@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.13.0...v0.14.0) (2026-06-15)
+
+
+### Features
+
+* **laps:** delete-and-replace car laps on historical backfill ([#103](https://github.com/WOT-Lemons/Lemongrass/issues/103)) ([8ea247b](https://github.com/WOT-Lemons/Lemongrass/commit/8ea247b3f4fc7bfe857209e8c25833c2bbbf3483))
+
 ## [0.13.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.12.0...v0.13.0) (2026-06-08)
 
 
