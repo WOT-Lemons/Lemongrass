@@ -252,8 +252,23 @@ class TestPushInfluxClassInfo:
         return ctx, write_api
 
     def _record(self, write_api):
-        point = write_api.write.call_args[1]['record']
-        return point.to_line_protocol()
+        record = write_api.write.call_args[1]['record']
+        points = record if isinstance(record, list) else [record]
+        return points[0].to_line_protocol()
+
+    def test_multiple_laps_written_in_single_batch(self):
+        ctx, write_api = self._ctx()
+        laps = [
+            {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
+             'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'},
+            {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '2',
+             'FlagStatus': 'Green', 'TotalTime': '0:03:01.000'},
+        ]
+        _mod.push_influx(ctx, laps, False)
+        write_api.write.assert_called_once()
+        record = write_api.write.call_args[1]['record']
+        assert isinstance(record, list)
+        assert len(record) == 2
 
     def test_includes_class_tag_when_provided(self):
         ctx, write_api = self._ctx()
