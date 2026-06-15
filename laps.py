@@ -2,8 +2,6 @@
 # -*- coding: utf-8 -*-
 """Interact with the RaceMonitor lap timing system."""
 #
-# Last tested with Python 3.12 on 2026-04-05
-#
 # Timestamp anchoring (design decision):
 #   Live mode anchors lap timestamps on Race['StartDateEpoc']; the historical view anchors on
 #   SessionStartDateEpoc, so the two disagree by up to ~35 min. Aligning the live anchor was
