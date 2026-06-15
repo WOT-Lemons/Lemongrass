@@ -294,6 +294,7 @@ def old_race(ctx, opts):
     competitor_missing = True
     competitor_name = None
     car_info = None
+    deleted = False
 
     for session_id in session_ids_for_race:
         logging.debug("Getting session details for %s including lap times.", session_id)
@@ -319,6 +320,9 @@ def old_race(ctx, opts):
                 {**lap, 'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus']))}
                 for lap in session_laps
             ]
+            if not deleted:
+                delete_existing_laps(ctx)
+                deleted = True
             class_name, class_positions = _resolve_class_historical(ctx.car_number, session_details)
             push_influx(
                 ctx, influx_laps, False,

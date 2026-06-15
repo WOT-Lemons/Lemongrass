@@ -550,6 +550,67 @@ class TestOldRaceClassWiring:
             _mod.old_race(ctx, opts)
         mock_race.assert_not_called()
 
+    def test_deletes_existing_laps_before_push(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        order = []
+        with patch.object(_mod, 'delete_existing_laps',
+                          side_effect=lambda c: order.append('delete')) as mock_del:
+            with patch.object(_mod, 'push_influx',
+                              side_effect=lambda *a, **k: order.append('push')):
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        with patch.object(_mod, '_resolve_class_historical',
+                                          return_value=('A', {1: 1})):
+                            _mod.old_race(ctx, opts)
+        mock_del.assert_called_once_with(ctx)
+        assert order == ['delete', 'push']
+
+    def test_delete_fires_once_across_multiple_sessions(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        with patch.object(_mod, '_resolve_class_historical',
+                                          return_value=('A', {1: 1})):
+                            _mod.old_race(ctx, opts)
+        mock_del.assert_called_once_with(ctx)
+
+    def test_no_delete_when_competitor_missing(self):
+        ctx = _mod.RaceContext('999', '77', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        # session contains car 42 only; tracked car 77 is absent
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
+        mock_del.assert_not_called()
+
+    def test_no_delete_when_not_network_mode(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=False)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        mock_del.assert_not_called()
+
 
 class TestLiveClassWiring:
     def _make_ctx(self):
