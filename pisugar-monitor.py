@@ -83,19 +83,30 @@ def exec_command(command, token=None):
         return raw
 
 
-def send_value(write_api, measurement, value, tags=None):
-    """Write a single measurement point to InfluxDB."""
-    ts = datetime.now(timezone.utc)
+def build_point(measurement, value, tags=None):
+    """Build a single InfluxDB measurement point."""
     point = Point(measurement)
     for k, v in (tags or {}).items():
         point = point.tag(k, v)
-    point = point.field("value", value).time(ts)
+    point = point.field("value", value).time(datetime.now(timezone.utc))
     logger.debug(point)
+    return point
+
+
+def write_points(write_api, points):
+    """Write all points to InfluxDB in a single request.
+
+    The batch is atomic: if one point is rejected (e.g. a malformed PiSugar
+    response yields a non-numeric value for a normally-float field), all six
+    readings for this tick are dropped. We don't re-queue on failure because
+    the 0.5s loop re-reads fresh values next iteration -- a stale battery
+    reading has no value worth preserving.
+    """
     try:
-        write_api.write(bucket='stats_252/autogen', record=point)
-        logger.info("Wrote %s: %s", measurement, value)
+        write_api.write(bucket='stats_252/autogen', record=points)
+        logger.info("Wrote %d points to InfluxDB", len(points))
     except Exception:  # pylint: disable=broad-exception-caught
-        logger.exception("Failed to write %s to InfluxDB", measurement)
+        logger.exception("Failed to write %d points to InfluxDB", len(points))
 
 
 def main():
@@ -140,12 +151,14 @@ def main():
                 plugged = exec_command("get battery_power_plugged", pisugar_token)
                 voltage = exec_command("get battery_v", pisugar_token)
                 temperature = exec_command("get temperature", pisugar_token)
-                send_value(write_api, "pisugar-battery-charging", charging, device_tags)
-                send_value(write_api, "pisugar-battery-current", current, device_tags)
-                send_value(write_api, "pisugar-battery-level", level, device_tags)
-                send_value(write_api, "pisugar-battery-power-plugged", plugged, device_tags)
-                send_value(write_api, "pisugar-battery-voltage", voltage, device_tags)
-                send_value(write_api, "pisugar-temperature", temperature, device_tags)
+                write_points(write_api, [
+                    build_point("pisugar-battery-charging", charging, device_tags),
+                    build_point("pisugar-battery-current", current, device_tags),
+                    build_point("pisugar-battery-level", level, device_tags),
+                    build_point("pisugar-battery-power-plugged", plugged, device_tags),
+                    build_point("pisugar-battery-voltage", voltage, device_tags),
+                    build_point("pisugar-temperature", temperature, device_tags),
+                ])
             except urllib.error.HTTPError as e:
                 if e.code == 401 and username and password:
                     logger.warning("PiSugar token expired, re-authenticating")

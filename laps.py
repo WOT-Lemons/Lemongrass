@@ -22,7 +22,6 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from operator import itemgetter
 
 import pandas
 from influxdb_client import InfluxDBClient, Point, WritePrecision
@@ -192,33 +191,7 @@ def live_race(ctx, opts):
     """Called if a race ID is live."""
     ctx.client.live.get_session(ctx.race_id)
 
-    list_of_competitors = []
-
-    # for competitor in competitors:
-    #    list_of_competitors.append(competitors[competitor])
-
-    for competitor in list_of_competitors:
-        for key, value in competitor.items():
-            try:
-                if key == 'Position':
-                    competitor[key] = int(value)
-            except ValueError:
-                value = None
-
-    # Remove competitors (LOSERS) with no position
-    list_of_competitors = [racer for racer in list_of_competitors if racer['Number'] != '']
-
-    for item in list_of_competitors:
-        print(item)
-        if item['Position'] == '':
-            print("Dirty data")
-            list_of_competitors.remove(item)
-            break
-
-    sorted_competitors = sorted(
-        list_of_competitors, key=lambda k: int(itemgetter('Position')(k)))
-
-    print_rankings(sorted_competitors, True, opts.selected_class)
+    print_rankings([], True, opts.selected_class)
 
     competitor_details = {}
     laps = []
@@ -514,7 +487,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
     if not monitor_mode:
         logging.info("Writing laps to influx...")
 
-    write_success = True
+    points = []
     for lap in laps:
         h, m, s = lap['TotalTime'].split(':')
         s, ms = s.split('.')
@@ -547,15 +520,20 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
                 point = point.field("class_position", class_pos)
 
         logging.debug(point.to_line_protocol())
-        try:
-            ctx.write_api.write(bucket='laps', record=point)
-            logging.debug("Lap %s written to influx.", lap['Lap'])
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.error("Writing lap failed: %s", e)
-            write_success = False
+        points.append(point)
 
-    if write_success and not monitor_mode:
-        logging.info('All lap data written successfully')
+    if points:
+        # One atomic write per session/backfill call. No re-queue on failure
+        # (unlike telem.py's flush loop): this is a one-shot push, and the
+        # backfill path deletes-and-replaces a car's laps wholesale, so the
+        # recovery for a failed write is to re-run, not to retry in-place.
+        try:
+            ctx.write_api.write(bucket='laps', record=points)
+            logging.debug("Wrote %d laps to influx.", len(points))
+            if not monitor_mode:
+                logging.info('All lap data written successfully')
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("Writing %d laps failed: %s", len(points), e)
 
     print(UNDERLINE)
 
