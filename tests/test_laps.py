@@ -1052,3 +1052,30 @@ class TestPushInfluxRace:
         _mod.push_influx_race(ctx, 1000)
         delete_api.delete.assert_not_called()
         write_api.write.assert_not_called()
+
+
+class TestDeleteExistingLaps:
+    def _ctx(self):
+        delete_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = delete_api
+        return ctx, delete_api
+
+    def test_predicate_targets_measurement_race_and_car(self):
+        ctx, delete_api = self._ctx()
+        _mod.delete_existing_laps(ctx)
+        predicate = delete_api.delete.call_args.kwargs['predicate']
+        assert '_measurement="lap"' in predicate
+        assert 'race_id="999"' in predicate
+        assert 'car_number="42"' in predicate
+
+    def test_targets_laps_bucket(self):
+        ctx, delete_api = self._ctx()
+        _mod.delete_existing_laps(ctx)
+        assert delete_api.delete.call_args.kwargs['bucket'] == 'laps'
+
+    def test_delete_failure_is_swallowed_and_logged(self, caplog):
+        ctx, delete_api = self._ctx()
+        delete_api.delete.side_effect = Exception("network error")
+        _mod.delete_existing_laps(ctx)  # must not raise
+        assert "Deleting existing laps failed" in caplog.text

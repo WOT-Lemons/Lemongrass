@@ -580,6 +580,22 @@ def push_influx_race(ctx, timestamp_ms):
         logging.error("Writing race failed: %s", e)
 
 
+def delete_existing_laps(ctx):
+    """Delete all lap points for the tracked car so a backfill can replace them."""
+    try:
+        ctx.delete_api.delete(
+            start='1970-01-01T00:00:00Z',
+            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            predicate=(
+                f'_measurement="lap" AND race_id="{ctx.race_id}" '
+                f'AND car_number="{ctx.car_number}"'
+            ),
+            bucket='laps',
+        )
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.error("Deleting existing laps failed: %s", e)
+
+
 def _resolve_class_historical(car_number, session_details):
     """Return (class_name, {lap_num: class_position}) for the tracked car."""
     session = session_details['Session']
