@@ -473,9 +473,7 @@ def print_rankings(sorted_competitors, _race_live, selected_class, categories):
             sorted_competitors_df.groupby('Class').cumcount() + 1)
         sorted_competitors_df = sorted_competitors_df[
             ['Overall Pos.', '#', 'Class', 'Class Pos.', 'Name', 'Laps', 'Transponder']]
-        sorted_competitors_df = sorted_competitors_df.reset_index(drop=True)
-        sorted_competitors_df.index += 1
-        print(sorted_competitors_df.to_string(index=True))
+        print(sorted_competitors_df.to_string(index=False))
     else:
         logging.info("Current overall rankings.")
         print(UNDERLINE)
