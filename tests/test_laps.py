@@ -162,7 +162,7 @@ class TestResolveClassHistorical:
 
 
 class TestResolveClassLive:
-    def _make_client(self, car_number, class_id, car_position, others=None):
+    def _make_session(self, car_number, class_id, car_position, others=None):
         """others: list of (car_number, class_id, position)."""
         competitors = {
             'r1': {
@@ -181,8 +181,7 @@ class TestResolveClassLive:
                 'Laps': '', 'TotalTime': '', 'BestPosition': '',
                 'BestLap': '', 'BestLapTime': '', 'LastLapTime': '',
             }
-        client = MagicMock()
-        client.live.get_session.return_value = {
+        return {
             'Successful': True,
             'Session': {
                 'RunNumber': '', 'SessionName': '', 'TrackName': '',
@@ -192,53 +191,75 @@ class TestResolveClassLive:
                 'Competitors': competitors,
             },
         }
-        return client
 
     def test_returns_class_name(self):
-        client = self._make_client('42', 'classA', 3)
-        client.live.get_session.return_value['Session']['Classes']['classA']['Description'] = 'A'
-        class_name, _ = _mod._resolve_class_live(client, '999', '42')
+        session = self._make_session('42', 'classA', 3)
+        session['Session']['Classes']['classA']['Description'] = 'A'
+        class_name, _ = _mod._resolve_class_live(session, '42')
         assert class_name == 'A'
 
     def test_only_car_in_class_is_position_1(self):
-        client = self._make_client('42', 'classA', 3)
-        _, class_pos = _mod._resolve_class_live(client, '999', '42')
+        session = self._make_session('42', 'classA', 3)
+        _, class_pos = _mod._resolve_class_live(session, '42')
         assert class_pos == 1
 
     def test_tracked_car_ahead_in_class(self):
-        client = self._make_client('42', 'classA', 3, others=[('99', 'classA', 5)])
-        _, class_pos = _mod._resolve_class_live(client, '999', '42')
+        session = self._make_session('42', 'classA', 3, others=[('99', 'classA', 5)])
+        _, class_pos = _mod._resolve_class_live(session, '42')
         assert class_pos == 1
 
     def test_tracked_car_behind_in_class(self):
-        client = self._make_client('42', 'classA', 5, others=[('99', 'classA', 1)])
-        _, class_pos = _mod._resolve_class_live(client, '999', '42')
+        session = self._make_session('42', 'classA', 5, others=[('99', 'classA', 1)])
+        _, class_pos = _mod._resolve_class_live(session, '42')
         assert class_pos == 2
 
     def test_different_class_not_counted(self):
-        client = self._make_client('42', 'classA', 5, others=[('99', 'classB', 1)])
-        _, class_pos = _mod._resolve_class_live(client, '999', '42')
+        session = self._make_session('42', 'classA', 5, others=[('99', 'classB', 1)])
+        _, class_pos = _mod._resolve_class_live(session, '42')
         assert class_pos == 1
 
     def test_car_not_found_returns_none_none(self):
-        client = self._make_client('42', 'classA', 3)
-        class_name, class_pos = _mod._resolve_class_live(client, '999', '99')
+        session = self._make_session('42', 'classA', 3)
+        class_name, class_pos = _mod._resolve_class_live(session, '99')
         assert class_name is None
         assert class_pos is None
 
     def test_api_failure_returns_none_none(self):
-        client = MagicMock()
-        client.live.get_session.return_value = {'Successful': False}
-        class_name, class_pos = _mod._resolve_class_live(client, '999', '42')
+        class_name, class_pos = _mod._resolve_class_live({'Successful': False}, '42')
         assert class_name is None
         assert class_pos is None
 
     def test_class_name_special_chars_preserved(self):
-        client = self._make_client('42', 'classA', 1)
-        client.live.get_session.return_value['Session']['Classes']['classA']['Description'] = (
-            'GT3,Pro=Am')
-        class_name, _ = _mod._resolve_class_live(client, '999', '42')
+        session = self._make_session('42', 'classA', 1)
+        session['Session']['Classes']['classA']['Description'] = 'GT3,Pro=Am'
+        class_name, _ = _mod._resolve_class_live(session, '42')
         assert class_name == 'GT3,Pro=Am'
+
+
+class TestTimeToMs:
+    def test_three_part_with_hours(self):
+        assert _mod._time_to_ms('1:23:45.678') == 1 * 3600000 + 23 * 60000 + 45 * 1000 + 678
+
+    def test_three_part_zero_padded_hours(self):
+        assert _mod._time_to_ms('0:01:30.000') == 90000
+
+    def test_two_part_under_an_hour(self):
+        assert _mod._time_to_ms('45:30.000') == 45 * 60000 + 30 * 1000
+
+    def test_two_part_single_digit_minute(self):
+        assert _mod._time_to_ms('1:30.000') == 90000
+
+    def test_missing_milliseconds(self):
+        assert _mod._time_to_ms('45:30') == 45 * 60000 + 30 * 1000
+
+    def test_unparseable_value_returns_zero(self):
+        assert _mod._time_to_ms('3$H') == 0
+
+    def test_unparseable_value_logs_warning(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            _mod._time_to_ms('3$H')
+        assert '3$H' in caplog.text
 
 
 class TestPushInfluxClassInfo:
@@ -370,6 +391,266 @@ class TestPushInfluxClassInfo:
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False)
         assert write_api.write.call_args.kwargs['bucket'] == 'laps'
+
+    def test_schema_version_field_present(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert f'schema_version={_mod.SCHEMA_VERSION}i' in self._record(write_api)
+
+    def test_handles_times_without_hours_component(self):
+        ctx, write_api = self._ctx()  # start_epoc=0
+        laps = [{'Lap': '1', 'LapTime': '1:30.000', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '45:30.000'}]
+        _mod.push_influx(ctx, laps, False)
+        record = self._record(write_api)
+        assert 'lap_time=90000i' in record
+        # TotalTime 45:30.000 = 2730000 ms; start_epoc=0 → timestamp 2730000
+        assert record.endswith('2730000')
+
+
+class TestSkipIfCompleteArg:
+    def test_default_is_false(self):
+        args = _mod._build_parser().parse_args(['12345', '42'])
+        assert args.skip_if_complete is False
+
+    def test_flag_sets_true(self):
+        args = _mod._build_parser().parse_args(['12345', '42', '--skip-if-complete'])
+        assert args.skip_if_complete is True
+
+
+class TestOldRaceSkip:
+    def _session_details(self):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [{
+                    'Number': '42', 'Category': '1', 'ID': 1, 'SessionID': 1,
+                    'RaceID': 999, 'FirstName': 'Jane', 'LastName': 'Doe',
+                    'Position': '1', 'Laps': '1', 'LastLapTime': '',
+                    'BestPosition': '1', 'BestLap': '1',
+                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+                    'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+                    'LapTimes': [
+                        {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                         'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+                    ],
+                }],
+            },
+        }
+
+    def _ctx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        return ctx
+
+    def test_skips_writes_when_complete_and_current(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts', return_value=(1, 1)):
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    with patch.object(_mod, 'push_influx_race') as mock_race:
+                        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+                            with patch.object(_mod, 'print_rankings'):
+                                _mod.old_race(ctx, opts)
+        mock_push.assert_not_called()
+        mock_race.assert_called_once()
+        mock_del.assert_not_called()
+
+    def test_logs_skip_message_when_complete(self, caplog):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts', return_value=(1, 1)):
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx'):
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            with caplog.at_level(logging.INFO):
+                                _mod.old_race(ctx, opts)
+        assert any('SKIP' in r.message and '999' in r.message for r in caplog.records)
+
+    def test_writes_when_laps_incomplete(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts', return_value=(0, 0)):
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_push.assert_called_once()
+
+    def test_writes_when_laps_stale_schema(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts', return_value=(1, 0)):
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_push.assert_called_once()
+
+    def test_does_not_query_counts_when_skip_disabled(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=False)
+        with patch.object(_mod, 'existing_lap_counts') as mock_counts:
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_counts.assert_not_called()
+        mock_push.assert_called_once()
+
+
+class TestExistingLapCounts:
+    def _query_api(self, lap_no_count=0, current_count=0):
+        """Mock query_api returning lap_no count for the first query and
+        current-schema_version count for the second."""
+        responses = iter([lap_no_count, current_count])
+
+        def fake_query(flux):
+            count = next(responses)
+            table = MagicMock()
+            if count is None:
+                table.records = []
+            else:
+                rec = MagicMock()
+                rec.get_value.return_value = count
+                table.records = [rec]
+            return [table]
+
+        api = MagicMock()
+        api.query.side_effect = fake_query
+        return api
+
+    def _ctx(self, query_api):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.query_api = query_api
+        return ctx
+
+    def test_returns_total_and_current_counts(self):
+        ctx = self._ctx(self._query_api(lap_no_count=10, current_count=10))
+        assert _mod.existing_lap_counts(ctx) == (10, 10)
+
+    def test_current_less_than_total_when_some_laps_unstamped(self):
+        ctx = self._ctx(self._query_api(lap_no_count=10, current_count=4))
+        assert _mod.existing_lap_counts(ctx) == (10, 4)
+
+    def test_returns_zero_when_no_laps(self):
+        ctx = self._ctx(self._query_api(lap_no_count=None, current_count=None))
+        assert _mod.existing_lap_counts(ctx) == (0, 0)
+
+    def test_total_query_filters_lap_no_field(self):
+        ctx = self._ctx(self._query_api(lap_no_count=1, current_count=1))
+        _mod.existing_lap_counts(ctx)
+        total_flux = ctx.query_api.query.call_args_list[0].args[0]
+        assert '_field == "lap_no"' in total_flux
+        assert 'race_id == "999"' in total_flux
+        assert 'car_number == "42"' in total_flux
+
+    def test_current_query_filters_on_schema_version_value(self):
+        ctx = self._ctx(self._query_api(lap_no_count=1, current_count=1))
+        _mod.existing_lap_counts(ctx)
+        current_flux = ctx.query_api.query.call_args_list[1].args[0]
+        assert '_field == "schema_version"' in current_flux
+        assert f'_value == {_mod.SCHEMA_VERSION}' in current_flux
+
+
+class TestOldRacePrintsClass:
+    def _session_details(self):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+                'Categories': {'1': {'ID': '1', 'Name': 'B-Class'}},
+                'SortedCompetitors': [{
+                    'Number': '42', 'Category': '1', 'ID': 1, 'SessionID': 1,
+                    'RaceID': 999, 'FirstName': 'Jane', 'LastName': 'Doe',
+                    'Position': '1', 'Laps': '1', 'LastLapTime': '',
+                    'BestPosition': '1', 'BestLap': '1',
+                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+                    'Transponder': 'T123', 'Nationality': '', 'AdditionalData': '',
+                    'LapTimes': [
+                        {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                         'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+                    ],
+                }],
+            },
+        }
+
+    def test_prints_class_name(self, capsys):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'print_rankings'):
+            _mod.old_race(ctx, opts)
+        assert 'Class: B-Class' in capsys.readouterr().out
+
+
+class TestLiveRace:
+    def _session_response(self, class_desc='A'):
+        return {
+            'Successful': True,
+            'Session': {
+                'RunNumber': '', 'SessionName': '', 'TrackName': '', 'TrackLength': '',
+                'CurrentTime': '', 'SessionTime': '', 'TimeToGo': '', 'LapsToGo': '',
+                'FlagStatus': '', 'SortMode': '',
+                'Classes': {'classA': {'ClassID': 'classA', 'Description': class_desc}},
+                'Competitors': {
+                    'r1': {
+                        'RacerID': 'r1', 'Number': '42', 'ClassID': 'classA',
+                        'Position': '1', 'Transponder': 'T123', 'FirstName': 'Jane',
+                        'LastName': 'Doe', 'Nationality': '', 'AdditionalData': '',
+                        'Laps': '1', 'TotalTime': '', 'BestPosition': '1',
+                        'BestLap': '1', 'BestLapTime': '', 'LastLapTime': '',
+                    },
+                },
+            },
+        }
+
+    def _racer_response(self):
+        return {
+            'Successful': True,
+            'Details': {
+                'Laps': [{'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                          'FlagStatus': 0, 'TotalTime': '0:01:30.000'}],
+                'Competitor': {
+                    'Number': '42', 'FirstName': 'Jane', 'LastName': 'Doe',
+                    'Transponder': 'T123', 'ClassID': 'classA', 'AdditionalData': '',
+                    'Position': '1', 'Laps': '1', 'BestPosition': '1', 'BestLap': '1',
+                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+                },
+            },
+        }
+
+    def _ctx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.client.live.get_session.return_value = self._session_response()
+        ctx.client.live.get_racer.return_value = self._racer_response()
+        return ctx
+
+    def test_prints_class_name(self, capsys):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=False)
+        with patch.object(_mod, 'print_rankings'):
+            _mod.live_race(ctx, opts)
+        assert 'Class: A' in capsys.readouterr().out
+
+    def test_network_mode_calls_get_session_once(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'print_rankings'):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race'):
+                    _mod.live_race(ctx, opts)
+        assert ctx.client.live.get_session.call_count == 1
 
 
 class TestOldRaceClassWiring:
@@ -681,7 +962,8 @@ class TestLiveClassWiring:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
-        mock_resolve.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
+        mock_resolve.assert_called_once_with(
+            ctx.client.live.get_session.return_value, ctx.car_number)
 
     def test_live_race_passes_class_name_to_push_influx(self):
         ctx = self._make_ctx()
@@ -829,7 +1111,8 @@ class TestLiveClassWiring:
                 with patch.object(_mod, 'push_influx'):
                     with patch.object(_mod, 'push_influx_race'):
                         _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
-        mock_resolve.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
+        mock_resolve.assert_called_once_with(
+            ctx.client.live.get_session.return_value, ctx.car_number)
 
     def test_live_race_passes_competitor_name_to_push_influx(self):
         ctx = self._make_ctx()

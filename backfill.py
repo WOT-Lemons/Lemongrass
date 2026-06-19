@@ -10,8 +10,13 @@ Usage:
     # Preview what would be backfilled (no writes)
     uv run python backfill.py --dry-run
 
-    # Run the backfill (default car 252, from 2021 onwards)
+    # Run the backfill (default car 252, from 2017 onwards). Races whose laps are
+    # already complete and written under the current schema version are skipped.
     uv run python backfill.py
+
+    # Force a re-backfill of every race, even ones already complete and current
+    # (e.g. after bumping SCHEMA_VERSION in laps.py to migrate historical data)
+    uv run python backfill.py --force
 
     # Override car number for a specific race (e.g. 2022 Hoopties used car 253)
     uv run python backfill.py --override 120037:253
@@ -40,7 +45,7 @@ from race_monitor import RaceMonitorClient
 
 LEMONS_SEARCH_TERMS = ['Real Hoopties', 'GP du Lac', 'Halloween Hoop']
 DEFAULT_CAR_NUMBER = '252'
-DEFAULT_START_YEAR = 2021
+DEFAULT_START_YEAR = 2017
 EPOCH_START = '1970-01-01T00:00:00Z'
 
 
@@ -69,6 +74,9 @@ def _build_parser():
                         help=f'Default car number (default: {DEFAULT_CAR_NUMBER})')
     parser.add_argument('--validate', dest='validate', action='store_true', default=False,
                         help='Check that every backfilled race has data in the new buckets')
+    parser.add_argument('--force', dest='force', action='store_true', default=False,
+                        help='Re-backfill every race even if its laps are already complete and '
+                             'current; by default complete races are skipped')
     return parser
 
 
@@ -157,22 +165,27 @@ def validate_backfill(pairs, query_api):
 _LAPS_PY = str(pathlib.Path(__file__).parent / 'laps.py')
 
 
-def run_backfill(races, default_car, overrides, dry_run=False):
-    """Run laps.py -n for each race, using per-race car number overrides where set."""
+def run_backfill(races, default_car, overrides, dry_run=False, force=False):
+    """Run laps.py -n for each race, using per-race car number overrides where set.
+
+    Unless force is set, passes --skip-if-complete so laps.py skips races whose
+    laps are already complete and written under the current schema version.
+    """
     failures = []
     for race in races:
         race_id = str(race['ID'])
         car_number = resolve_car_number(race_id, default_car, overrides)
+        cmd = [sys.executable, _LAPS_PY, '-n']
+        if not force:
+            cmd.append('--skip-if-complete')
+        cmd += [race_id, car_number]
         if dry_run:
             logging.info("Would backfill race %s (%s) car %s",
                          race_id, race['Name'], car_number)
             continue
         logging.info("Backfilling race %s (%s) car %s",
                      race_id, race['Name'], car_number)
-        result = subprocess.run(
-            [sys.executable, _LAPS_PY, '-n', race_id, car_number],
-            capture_output=False,
-        )
+        result = subprocess.run(cmd, capture_output=False)
         if result.returncode != 0:
             logging.error("Backfill failed for race %s car %s", race_id, car_number)
             failures.append((race_id, car_number))
@@ -208,7 +221,8 @@ def main():
                 ok = validate_backfill(pairs, influx_client.query_api())
             sys.exit(0 if ok else 1)
 
-        failures = run_backfill(races, args.car_number, args.overrides, dry_run=args.dry_run)
+        failures = run_backfill(races, args.car_number, args.overrides,
+                                dry_run=args.dry_run, force=args.force)
         if failures:
             sys.exit(1)
 
