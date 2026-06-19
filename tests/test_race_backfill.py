@@ -1,14 +1,8 @@
-import importlib.util
 import pathlib
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-_spec = importlib.util.spec_from_file_location(
-    "backfill",
-    pathlib.Path(__file__).parent.parent / "backfill.py",
-)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+import lemongrass.race_backfill as _mod
 
 
 def _make_race(id, name, start_epoc):

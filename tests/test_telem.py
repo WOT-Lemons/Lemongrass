@@ -1,15 +1,8 @@
 # pylint: disable=missing-module-docstring,missing-class-docstring
 # pylint: disable=missing-function-docstring,too-few-public-methods
-import importlib.util
-import pathlib
 from unittest.mock import MagicMock, patch
 
-_spec = importlib.util.spec_from_file_location(
-    "telem",
-    pathlib.Path(__file__).parent.parent / "telem.py",
-)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+import lemongrass.telem as _mod
 
 
 class _Cmd:
