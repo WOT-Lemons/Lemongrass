@@ -45,11 +45,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
+          # Login so buildx imagetools can inspect multi-arch manifests
+          echo "$GH_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+          # Collect all digests referenced by tagged manifest lists (platform images, attestations).
+          # sort -u deduplicates tags so aliases (1.0.0, 1.0, 1, latest) don't trigger redundant calls.
+          referenced_digests=""
+          while IFS= read -r tag; do
+            digests=$(docker buildx imagetools inspect \
+              "ghcr.io/wot-lemons/${{ matrix.package }}:$tag" \
+              --raw | jq -r '.manifests[]?.digest // empty')
+            referenced_digests="$referenced_digests"$'\n'"$digests"
+          done < <(gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
+            --jq '[.[] | .metadata.container.tags[]] | .[]' | sort -u)
+
+          # Delete only untagged versions not referenced by any tagged manifest
           gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
-            --jq '.[] | select(.metadata.container.tags | length == 0) | .id' | \
-          while read version_id; do
-            gh api --method DELETE /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions/$version_id
-            echo "Deleted untagged ${{ matrix.package }} version $version_id"
+            --jq '.[] | select(.metadata.container.tags | length == 0) | "\(.id) \(.name)"' | \
+          while read -r version_id digest; do
+            if echo "$referenced_digests" | grep -qF "$digest"; then
+              echo "Skipping ${{ matrix.package }} $digest (referenced by a tagged manifest)"
+            else
+              gh api --method DELETE "/orgs/wot-lemons/packages/container/${{ matrix.package }}/versions/$version_id"
+              echo "Deleted untagged ${{ matrix.package }} version $version_id ($digest)"
+            fi
           done
 
       - name: Delete ${{ matrix.package }} PR images for closed PRs

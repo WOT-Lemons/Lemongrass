@@ -37,13 +37,14 @@ jobs:
       id-token: write
     with:
       output: image
-      push: ${{ github.event_name != 'pull_request' }}
+      push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       platforms: linux/amd64,linux/arm64
       cache: true
       cache-mode: max
       sbom: true
       meta-images: ghcr.io/wot-lemons/lemongrass
       meta-tags: |
+        type=ref,event=pr
         type=semver,pattern={{version}}
         type=semver,pattern={{major}}.{{minor}}
         type=semver,pattern={{major}}
