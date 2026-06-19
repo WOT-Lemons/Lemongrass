@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.16.0...v0.17.0) (2026-06-19)
+
+
+### Features
+
+* **rankings:** show class and class position in rankings and competitor summary ([f2c41f8](https://github.com/WOT-Lemons/Lemongrass/commit/f2c41f80205c3ccd587be50618711fdff16b1a40))
+
 ## [0.16.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.15.0...v0.16.0) (2026-06-19)
 
 
