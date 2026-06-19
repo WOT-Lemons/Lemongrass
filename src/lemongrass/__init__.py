@@ -1,1 +1,1 @@
-"""Lemongrass motorsport lap timing tool."""
+"""Lemongrass - 24 Hours of Lemons telemetry."""
