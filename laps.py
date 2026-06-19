@@ -541,12 +541,19 @@ def _time_to_ms(value):
     Accepts variable precision: 'H:MM:SS.mmm', 'MM:SS.mmm', or 'SS.mmm', with the
     fractional '.mmm' part optional. RaceMonitor omits the hours component when a
     value is under an hour, so we right-align the colon-separated parts.
+
+    Returns 0 for unparseable values; the API occasionally returns garbage for
+    invalid or pit laps.
     """
-    parts = value.split(':')
-    sec, _, ms = parts[-1].partition('.')
-    hours = int(parts[-3]) if len(parts) >= 3 else 0
-    minutes = int(parts[-2]) if len(parts) >= 2 else 0
-    return hours * 3600000 + minutes * 60000 + int(sec) * 1000 + int(ms or 0)
+    try:
+        parts = value.split(':')
+        sec, _, ms = parts[-1].partition('.')
+        hours = int(parts[-3]) if len(parts) >= 3 else 0
+        minutes = int(parts[-2]) if len(parts) >= 2 else 0
+        return hours * 3600000 + minutes * 60000 + int(sec) * 1000 + int(ms or 0)
+    except (ValueError, AttributeError):
+        logging.warning("unparseable lap time %r; writing 0 ms", value)
+        return 0
 
 
 def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,

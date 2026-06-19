@@ -252,6 +252,15 @@ class TestTimeToMs:
     def test_missing_milliseconds(self):
         assert _mod._time_to_ms('45:30') == 45 * 60000 + 30 * 1000
 
+    def test_unparseable_value_returns_zero(self):
+        assert _mod._time_to_ms('3$H') == 0
+
+    def test_unparseable_value_logs_warning(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            _mod._time_to_ms('3$H')
+        assert '3$H' in caplog.text
+
 
 class TestPushInfluxClassInfo:
     def _laps(self):
