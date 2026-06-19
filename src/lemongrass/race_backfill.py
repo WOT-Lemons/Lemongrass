@@ -36,7 +36,6 @@ Required environment variables:
 import argparse
 import logging
 import os
-import pathlib
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -162,9 +161,6 @@ def validate_backfill(pairs, query_api):
     return all_ok
 
 
-_LAPS_PY = str(pathlib.Path(__file__).parent / 'laps.py')
-
-
 def run_backfill(races, default_car, overrides, dry_run=False, force=False):
     """Run laps.py -n for each race, using per-race car number overrides where set.
 
@@ -175,7 +171,7 @@ def run_backfill(races, default_car, overrides, dry_run=False, force=False):
     for race in races:
         race_id = str(race['ID'])
         car_number = resolve_car_number(race_id, default_car, overrides)
-        cmd = [sys.executable, _LAPS_PY, '-n']
+        cmd = ['laps', '-n']
         if not force:
             cmd.append('--skip-if-complete')
         cmd += [race_id, car_number]

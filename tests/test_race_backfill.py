@@ -1,4 +1,3 @@
-import pathlib
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -118,13 +117,12 @@ class TestRunBackfill:
         assert any('Real Hoopties 2022' in r.message and '253' in r.message
                    for r in caplog.records)
 
-    def test_subprocess_uses_absolute_path_to_laps_py(self):
+    def test_subprocess_invokes_laps_entry_point(self):
         with patch.object(_mod.subprocess, 'run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             _mod.run_backfill(self._races()[:1], default_car='252', overrides={})
-        laps_path = mock_run.call_args.args[0][1]
-        assert pathlib.Path(laps_path).is_absolute()
-        assert laps_path.endswith('laps.py')
+        cmd = mock_run.call_args.args[0]
+        assert cmd[0] == 'laps'
 
     def test_failure_summary_logged_when_any_race_fails(self, caplog):
         import logging
