@@ -218,7 +218,7 @@ def live_race(ctx, opts):
     """Called if a race ID is live."""
     session_response = ctx.client.live.get_session(ctx.race_id)
 
-    print_rankings([], True, opts.selected_class)
+    print_rankings([], True, opts.selected_class, {})
 
     competitor_details = {}
     laps = []
@@ -237,7 +237,7 @@ def live_race(ctx, opts):
 
     competitor_name = f"{competitor_details.get('FirstName', '')} {competitor_details.get('LastName', '')}".strip() or None
     car_info = competitor_details.get('AdditionalData') or None
-    class_name, _ = _resolve_class_live(session_response, ctx.car_number)
+    class_name, class_position = _resolve_class_live(session_response, ctx.car_number)
 
     print(UNDERLINE)
     # Print competitor detail block
@@ -250,6 +250,7 @@ def live_race(ctx, opts):
     print(
         f"Best Position:\t{competitor_details['BestPosition']:>}\n"
         f"Final Position:\t{competitor_details['Position']:>}\n"
+        f"Final Class Position:\t{class_position if class_position is not None else 'N/A':>}\n"
         f"Total Laps:\t{competitor_details['Laps']:>}\n"
         f"Best Lap:\t{competitor_details['BestLap']:>}\n"
         f"Best Lap Time:\t{competitor_details['BestLapTime']:>}\n"
@@ -376,7 +377,20 @@ def old_race(ctx, opts):
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
         push_influx_race(ctx, race_ts_ms)
 
-    print_rankings(sorted_competitors, False, opts.selected_class)
+    print_rankings(sorted_competitors, False, opts.selected_class,
+                   session_details['Session']['Categories'])
+
+    tracked_category = competitor_details.get('Category')
+    try:
+        tracked_pos = int(competitor_details.get('Position', 0))
+        display_class_pos = 1 + sum(
+            1 for c in sorted_competitors
+            if c.get('Category') == tracked_category
+            and c['Number'] != ctx.car_number
+            and int(c.get('Position', 0)) < tracked_pos
+        )
+    except (ValueError, TypeError):
+        display_class_pos = None
 
     print(
         f"Team: {competitor_details['FirstName']:<6}\t"
@@ -387,6 +401,7 @@ def old_race(ctx, opts):
     print(
         f"Best Position:\t{competitor_details['BestPosition']:>}\n"
         f"Final Position:\t{competitor_details['Position']:>}\n"
+        f"Final Class Position:\t{display_class_pos if display_class_pos is not None else 'N/A':>}\n"
         f"Total Laps:\t{competitor_details['Laps']:>}\n"
         f"Best Lap:\t{competitor_details['BestLap']:>}\n"
         f"Best Lap Time:\t{competitor_details['BestLapTime']:>}\n"
@@ -419,7 +434,7 @@ def old_race(ctx, opts):
         write_csv(filename, laps)
 
 
-def print_rankings(sorted_competitors, _race_live, selected_class):
+def print_rankings(sorted_competitors, _race_live, selected_class, categories):
     """Take a dict of sorted competitors and print them in a nice table."""
     print(UNDERLINE)
     list_of_names = []
@@ -437,6 +452,9 @@ def print_rankings(sorted_competitors, _race_live, selected_class):
         else:
             competitor['Name'] = competitor['FirstName']
 
+    category_map = {k: categories.get(k, {}).get('Name', k) for k in
+                    {c.get('Category') for c in sorted_competitors if c.get('Category')}}
+
     if selected_class:
         upper_class = selected_class[1].upper()
         logging.info("Current rankings for class %s.", upper_class)
@@ -444,12 +462,15 @@ def print_rankings(sorted_competitors, _race_live, selected_class):
         sorted_competitors_df = pandas.DataFrame(
             sorted_competitors,
             columns=['Position', 'Number', 'Name', 'Laps', 'Category', 'Transponder'])
-        sorted_competitors_df = sorted_competitors_df.replace(
-            {'Category': {'1': 'A', '2': 'DNQ', '3': 'B', '4': 'C'}})
+        sorted_competitors_df = sorted_competitors_df.replace({'Category': category_map})
         sorted_competitors_df = sorted_competitors_df[
-            sorted_competitors_df['Category'].str.contains(upper_class)]
+            sorted_competitors_df['Category'].str.contains(upper_class, case=False)]
         sorted_competitors_df = sorted_competitors_df.rename(
             columns={'Category': 'Class', 'Number': '#', 'Position': 'Overall Pos.'})
+        sorted_competitors_df = sorted_competitors_df.sort_values(
+            'Overall Pos.', key=pandas.to_numeric, ignore_index=True)
+        sorted_competitors_df = sorted_competitors_df[
+            ['Overall Pos.', '#', 'Class', 'Name', 'Laps', 'Transponder']]
         sorted_competitors_df = sorted_competitors_df.reset_index(drop=True)
         sorted_competitors_df.index += 1
         print(sorted_competitors_df.to_string(index=True))
@@ -458,9 +479,16 @@ def print_rankings(sorted_competitors, _race_live, selected_class):
         print(UNDERLINE)
         sorted_competitors_df = pandas.DataFrame(
             sorted_competitors,
-            columns=['Position', 'Number', 'Name', 'Laps', 'Transponder'])
+            columns=['Position', 'Number', 'Name', 'Laps', 'Category', 'Transponder'])
+        sorted_competitors_df = sorted_competitors_df.replace({'Category': category_map})
         sorted_competitors_df = sorted_competitors_df.rename(
-            columns={'Number': '#', 'Position': 'Pos.'})
+            columns={'Category': 'Class', 'Number': '#', 'Position': 'Pos.'})
+        sorted_competitors_df = sorted_competitors_df.sort_values(
+            'Pos.', key=pandas.to_numeric, ignore_index=True)
+        sorted_competitors_df['Class Pos.'] = (
+            sorted_competitors_df.groupby('Class').cumcount() + 1)
+        sorted_competitors_df = sorted_competitors_df[
+            ['Pos.', '#', 'Class', 'Class Pos.', 'Name', 'Laps', 'Transponder']]
         print(sorted_competitors_df.to_string(index=False))
 
     print(UNDERLINE)
