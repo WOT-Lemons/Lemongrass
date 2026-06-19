@@ -1,0 +1,39 @@
+name: Lock File Check
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/uv-lock-check.yml'
+
+jobs:
+  lock-check:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.head_ref }}
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          uv-version: "0.11.19"
+
+      - name: Sync lock file (release-please PRs)
+        if: startsWith(github.head_ref, 'release-please--')
+        run: |
+          uv lock
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock
+          git diff --staged --quiet && exit 0
+          git commit -m "chore: sync uv.lock"
+          git push
+
+      - name: Verify lock file is up to date
+        if: ${{ !startsWith(github.head_ref, 'release-please--') }}
+        run: uv lock --check
