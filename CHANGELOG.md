@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.15.0...v0.16.0) (2026-06-19)
+
+
+### Features
+
+* **backfill:** skip already-backfilled races; fix lap time parsing; show class ([66d5207](https://github.com/WOT-Lemons/Lemongrass/commit/66d5207feee388cbfb660c38f2b42ce57180fd19))
+
 ## [0.15.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.14.0...v0.15.0) (2026-06-15)
 
 
