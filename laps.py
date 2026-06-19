@@ -216,7 +216,7 @@ def _run_race(ctx, opts, response):
 
 def live_race(ctx, opts):
     """Called if a race ID is live."""
-    ctx.client.live.get_session(ctx.race_id)
+    session_response = ctx.client.live.get_session(ctx.race_id)
 
     print_rankings([], True, opts.selected_class)
 
@@ -237,12 +237,14 @@ def live_race(ctx, opts):
 
     competitor_name = f"{competitor_details.get('FirstName', '')} {competitor_details.get('LastName', '')}".strip() or None
     car_info = competitor_details.get('AdditionalData') or None
+    class_name, _ = _resolve_class_live(session_response, ctx.car_number)
 
     print(UNDERLINE)
     # Print competitor detail block
     print(
         f"Team: {competitor_details['Name']:<6} "
         f"Car Number: {competitor_details['Number']:<4} "
+        f"Class: {class_name} "
         f"Transponder: {competitor_details['Transponder']}"
     )
     print(
@@ -266,8 +268,7 @@ def live_race(ctx, opts):
         if laps:
             # class_position intentionally discarded: historical laps were completed before
             # launch so any position we compute now is stale. monitor_routine owns
-            # class_position writes.
-            class_name, _ = _resolve_class_live(ctx.client, ctx.race_id, ctx.car_number)
+            # class_position writes. class_name was resolved above from session_response.
             logging.info("Car %s: class %r", ctx.car_number, class_name)
             push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
                         class_name=class_name, class_positions=None)
@@ -297,6 +298,7 @@ def old_race(ctx, opts):
     competitor_missing = True
     competitor_name = None
     car_info = None
+    display_class_name = None
     pending_writes = []
 
     # First pass: gather every session's laps for the tracked car. We accumulate
@@ -317,6 +319,11 @@ def old_race(ctx, opts):
                     or None
                 )
                 car_info = competitor.get('AdditionalData') or None
+                category = competitor.get('Category')
+                display_class_name = (
+                    session_details['Session']['Categories']
+                    .get(category, {}).get('Name', category)
+                )
                 session_laps = competitor['LapTimes'].copy()
                 laps = laps + [dict(lap) for lap in session_laps]
 
@@ -372,6 +379,7 @@ def old_race(ctx, opts):
     print(
         f"Team: {competitor_details['FirstName']:<6}\t"
         f"Car Number: {competitor_details['Number']:<4}\t"
+        f"Class: {display_class_name}\t"
         f"Transponder: {competitor_details['Transponder']}"
     )
     print(
@@ -500,7 +508,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             laps.append(current_competitor_lap_times[-1])
             if opts.network_mode:
                 class_name, class_position = _resolve_class_live(
-                    ctx.client, ctx.race_id, ctx.car_number)
+                    ctx.client.live.get_session(ctx.race_id), ctx.car_number)
                 new_lap_num = int(current_competitor_lap_times[-1]['Lap'])
                 class_positions = (
                     {new_lap_num: class_position} if class_position is not None else None)
@@ -525,6 +533,20 @@ def refresh_competitor(ctx):
     return laps
 
 
+def _time_to_ms(value):
+    """Parse a RaceMonitor time string to milliseconds.
+
+    Accepts variable precision: 'H:MM:SS.mmm', 'MM:SS.mmm', or 'SS.mmm', with the
+    fractional '.mmm' part optional. RaceMonitor omits the hours component when a
+    value is under an hour, so we right-align the colon-separated parts.
+    """
+    parts = value.split(':')
+    sec, _, ms = parts[-1].partition('.')
+    hours = int(parts[-3]) if len(parts) >= 3 else 0
+    minutes = int(parts[-2]) if len(parts) >= 2 else 0
+    return hours * 3600000 + minutes * 60000 + int(sec) * 1000 + int(ms or 0)
+
+
 def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
                 class_name=None, class_positions=None, start_epoc=None):
     """Push lap data to InfluxDB."""
@@ -541,14 +563,8 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
 
     points = []
     for lap in laps:
-        h, m, s = lap['TotalTime'].split(':')
-        s, ms = s.split('.')
-        lap_finish_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
-        time_lap_completed_ms = start_epoc_ms + lap_finish_ms
-
-        h, m, s = lap['LapTime'].split(':')
-        s, ms = s.split('.')
-        lap_time_ms = int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
+        time_lap_completed_ms = start_epoc_ms + _time_to_ms(lap['TotalTime'])
+        lap_time_ms = _time_to_ms(lap['LapTime'])
 
         lap_num = int(lap['Lap'])
 
@@ -705,12 +721,15 @@ def _resolve_class_historical(car_number, session_details):
     return class_name, class_positions
 
 
-def _resolve_class_live(client, race_id, car_number):
-    """Return (class_name, class_position) for the tracked car using current session state."""
-    response = client.live.get_session(race_id)
-    if not response['Successful']:
+def _resolve_class_live(session_response, car_number):
+    """Return (class_name, class_position) for the tracked car from a live session.
+
+    Takes the response from ``client.live.get_session`` so the caller can fetch the
+    session once and reuse it.
+    """
+    if not session_response['Successful']:
         return None, None
-    session = response['Session']
+    session = session_response['Session']
     classes = session['Classes']
     competitors = session['Competitors']
 
