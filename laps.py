@@ -352,6 +352,8 @@ def old_race(ctx, opts):
         if opts.skip_if_complete and expected > 0:
             total, current = existing_lap_counts(ctx)
             if total == expected and current == expected:
+                race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+                push_influx_race(ctx, race_ts_ms)
                 logging.info(
                     "SKIP: race %s car %s already complete and current "
                     "(%d laps, schema v%d)",

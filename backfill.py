@@ -10,7 +10,7 @@ Usage:
     # Preview what would be backfilled (no writes)
     uv run python backfill.py --dry-run
 
-    # Run the backfill (default car 252, from 2021 onwards). Races whose laps are
+    # Run the backfill (default car 252, from 2017 onwards). Races whose laps are
     # already complete and written under the current schema version are skipped.
     uv run python backfill.py
 

@@ -449,7 +449,7 @@ class TestOldRaceSkip:
                             with patch.object(_mod, 'print_rankings'):
                                 _mod.old_race(ctx, opts)
         mock_push.assert_not_called()
-        mock_race.assert_not_called()
+        mock_race.assert_called_once()
         mock_del.assert_not_called()
 
     def test_logs_skip_message_when_complete(self, caplog):
