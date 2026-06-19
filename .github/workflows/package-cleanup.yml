@@ -16,7 +16,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        package: [lemongrass-pi, lemongrass-laps]
+        package: [lemongrass]
     steps:
       - name: Delete ${{ matrix.package }} PR image
         env:
@@ -39,7 +39,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        package: [lemongrass-pi, lemongrass-laps]
+        package: [lemongrass]
     steps:
       - name: Delete untagged ${{ matrix.package }} versions
         env:

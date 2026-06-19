@@ -43,25 +43,27 @@ We need a Race ID to get information for. Head to <https://www.race-monitor.com/
 Pull the latest image:
 
 ```shell
-docker pull ghcr.io/wot-lemons/lemongrass-laps:latest
+docker pull ghcr.io/wot-lemons/lemongrass:latest
 ```
 
 ### Live Race
 
-Run it, passing your credentials via an env file (see `.env.sample`).
-
-To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass-laps`.
-
-Generic example:
+**Docker** — pass your credentials via an env file (see `.env.sample`). To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass`.
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass-laps:latest RACE_ID CAR_NUMBER -m -n
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps RACE_ID CAR_NUMBER -m -n
+```
+
+**uv** — if you have the repo cloned and [uv](https://docs.astral.sh/uv/) installed, source your `.env` first (step 2 above) and run:
+
+```shell
+uv run laps RACE_ID CAR_NUMBER -m -n
 ```
 
 Real example:
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass-laps:latest 164732 372 -m -n
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 164732 372 -m -n
 ```
 
 ```plain
@@ -116,19 +118,25 @@ Lap Position      LapTime FlagStatus    TotalTime
 
 You can retrieve info for a completed race too.
 
-Generic example:
+**Docker:**
 
 ```shell
 docker run --rm -it \
   --env-file .env \
-  ghcr.io/wot-lemons/lemongrass-laps:latest \
-  RACE_ID CAR_NUMBER
+  ghcr.io/wot-lemons/lemongrass:latest \
+  laps RACE_ID CAR_NUMBER
+```
+
+**uv:**
+
+```shell
+uv run laps RACE_ID CAR_NUMBER
 ```
 
 Real example:
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass-laps:latest 164732 121
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 164732 121
 ```
 
 ```plain

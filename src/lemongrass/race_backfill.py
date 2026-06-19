@@ -4,39 +4,38 @@
 
 Searches the RaceMonitor API for past Real Hoopties, GP du Lac, and Halloween
 Hoop races and writes lap data for a given car number to the laps/races InfluxDB
-buckets by shelling out to laps.py -n for each race found.
+buckets by invoking `laps -n` for each race found.
 
 Usage:
     # Preview what would be backfilled (no writes)
-    uv run python backfill.py --dry-run
+    uv run race-backfill --dry-run
 
     # Run the backfill (default car 252, from 2017 onwards). Races whose laps are
     # already complete and written under the current schema version are skipped.
-    uv run python backfill.py
+    uv run race-backfill
 
     # Force a re-backfill of every race, even ones already complete and current
-    # (e.g. after bumping SCHEMA_VERSION in laps.py to migrate historical data)
-    uv run python backfill.py --force
+    # (e.g. after bumping SCHEMA_VERSION in laps to migrate historical data)
+    uv run race-backfill --force
 
     # Override car number for a specific race (e.g. 2022 Hoopties used car 253)
-    uv run python backfill.py --override 120037:253
+    uv run race-backfill --override 120037:253
 
     # Validate that backfilled races have data in InfluxDB
-    uv run python backfill.py --validate --override 120037:253
+    uv run race-backfill --validate --override 120037:253
 
     # Backfill from a different year or for a different default car
-    uv run python backfill.py --start-year 2023 --car 82
+    uv run race-backfill --start-year 2023 --car 82
 
 Required environment variables:
     RACEMONITOR_TOKEN      — RaceMonitor API token (always required)
     INFLUX_TELEMETRY_TOKEN — InfluxDB token (read-only sufficient for --validate;
-                             full backfill requires write access via laps.py)
+                             full backfill requires write access via the laps command)
 """
 
 import argparse
 import logging
 import os
-import pathlib
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -162,20 +161,17 @@ def validate_backfill(pairs, query_api):
     return all_ok
 
 
-_LAPS_PY = str(pathlib.Path(__file__).parent / 'laps.py')
-
-
 def run_backfill(races, default_car, overrides, dry_run=False, force=False):
-    """Run laps.py -n for each race, using per-race car number overrides where set.
+    """Run `laps -n` for each race, using per-race car number overrides where set.
 
-    Unless force is set, passes --skip-if-complete so laps.py skips races whose
+    Unless force is set, passes --skip-if-complete so `laps` skips races whose
     laps are already complete and written under the current schema version.
     """
     failures = []
     for race in races:
         race_id = str(race['ID'])
         car_number = resolve_car_number(race_id, default_car, overrides)
-        cmd = [sys.executable, _LAPS_PY, '-n']
+        cmd = ['laps', '-n']
         if not force:
             cmd.append('--skip-if-complete')
         cmd += [race_id, car_number]

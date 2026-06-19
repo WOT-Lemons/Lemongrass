@@ -1,16 +1,8 @@
-# pylint: disable=missing-module-docstring,missing-class-docstring,missing-function-docstring
-import importlib.util
 import logging
-import pathlib
 import threading
 from unittest.mock import MagicMock, mock_open, patch
 
-_spec = importlib.util.spec_from_file_location(
-    "laps",
-    pathlib.Path(__file__).parent.parent / "laps.py",
-)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+import lemongrass.laps as _mod
 
 
 class TestIntervalArg:

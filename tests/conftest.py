@@ -1,4 +1,3 @@
-# pylint: disable=missing-module-docstring
 import sys
 from unittest.mock import MagicMock
 

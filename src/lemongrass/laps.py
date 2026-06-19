@@ -116,7 +116,7 @@ def _build_parser():
     return parser
 
 
-def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-locals
+def main():
     """Parse arguments and orchestrate race data retrieval."""
     args = _build_parser().parse_args()
 
@@ -134,14 +134,14 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-lo
     token = os.environ.get('RACEMONITOR_TOKEN')
     if not token:
         logging.error("RACEMONITOR_TOKEN environment variable not set")
-        sys.exit()
+        sys.exit(1)
 
     influx_token = None
     if args.network_mode:
         influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
         if not influx_token:
             logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-            sys.exit()
+            sys.exit(1)
 
     race_id = str(args.race_id[0])
     car_number = str(args.car_number[0])
@@ -638,7 +638,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
             logging.debug("Wrote %d laps to influx.", len(points))
             if not monitor_mode:
                 logging.info('All lap data written successfully')
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as e:
             logging.error("Writing %d laps failed: %s", len(points), e)
 
     print(UNDERLINE)
@@ -667,7 +667,7 @@ def push_influx_race(ctx, timestamp_ms):
             .time(timestamp_ms, WritePrecision.MS)
         )
         ctx.write_api.write(bucket='races', record=point)
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except Exception as e:
         logging.error("Writing race failed: %s", e)
 
 
@@ -710,7 +710,7 @@ def delete_existing_laps(ctx):
             ),
             bucket='laps',
         )
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except Exception as e:
         logging.error("Deleting existing laps failed: %s", e)
 
 
@@ -831,7 +831,7 @@ def _resolve_race_metadata(race_details, client):
                 resp = client.common.past_races(series_id=series_id, max_results=1)
                 if resp.get('Races'):
                     series_name = resp['Races'][0]['SeriesName']
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             logging.warning("Failed to resolve series name for series_id=%s", series_id)
     return RaceMetadata(
         race_name=race['Name'],

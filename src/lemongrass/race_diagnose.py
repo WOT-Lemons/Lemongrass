@@ -7,10 +7,10 @@ counts, session breakdown, and all stored lap numbers so you can pinpoint
 whether a count mismatch is an API issue or a write issue.
 
 Usage:
-    uv run python diagnose_race.py <race_id> <car_number>
+    uv run race-diagnose <race_id> <car_number>
 
 Example:
-    uv run python diagnose_race.py 144185 252
+    uv run race-diagnose 144185 252
 
 Required environment variables:
     RACEMONITOR_TOKEN      — RaceMonitor API token
