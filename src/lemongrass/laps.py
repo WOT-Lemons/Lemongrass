@@ -134,14 +134,14 @@ def main():
     token = os.environ.get('RACEMONITOR_TOKEN')
     if not token:
         logging.error("RACEMONITOR_TOKEN environment variable not set")
-        sys.exit()
+        sys.exit(1)
 
     influx_token = None
     if args.network_mode:
         influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
         if not influx_token:
             logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-            sys.exit()
+            sys.exit(1)
 
     race_id = str(args.race_id[0])
     car_number = str(args.car_number[0])
