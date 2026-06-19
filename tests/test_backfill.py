@@ -160,6 +160,18 @@ class TestRunBackfill:
             failures = _mod.run_backfill(self._races(), default_car='252', overrides={})
         assert failures == []
 
+    def test_passes_skip_if_complete_by_default(self):
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _mod.run_backfill(self._races()[:1], default_car='252', overrides={})
+        assert '--skip-if-complete' in mock_run.call_args.args[0]
+
+    def test_omits_skip_if_complete_when_forced(self):
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _mod.run_backfill(self._races()[:1], default_car='252', overrides={}, force=True)
+        assert '--skip-if-complete' not in mock_run.call_args.args[0]
+
 
 class TestBuildPairs:
     def test_builds_pairs_from_races(self):
@@ -307,4 +319,12 @@ class TestArgParsing:
     def test_validate_defaults_to_false(self):
         args = _mod._build_parser().parse_args([])
         assert args.validate is False
+
+    def test_force_flag_accepted(self):
+        args = _mod._build_parser().parse_args(['--force'])
+        assert args.force is True
+
+    def test_force_defaults_to_false(self):
+        args = _mod._build_parser().parse_args([])
+        assert args.force is False
 

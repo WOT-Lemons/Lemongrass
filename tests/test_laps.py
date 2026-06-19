@@ -371,6 +371,165 @@ class TestPushInfluxClassInfo:
         _mod.push_influx(ctx, self._laps(), False)
         assert write_api.write.call_args.kwargs['bucket'] == 'laps'
 
+    def test_schema_version_field_present(self):
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False)
+        assert f'schema_version={_mod.SCHEMA_VERSION}i' in self._record(write_api)
+
+
+class TestSkipIfCompleteArg:
+    def test_default_is_false(self):
+        args = _mod._build_parser().parse_args(['12345', '42'])
+        assert args.skip_if_complete is False
+
+    def test_flag_sets_true(self):
+        args = _mod._build_parser().parse_args(['12345', '42', '--skip-if-complete'])
+        assert args.skip_if_complete is True
+
+
+class TestOldRaceSkip:
+    def _session_details(self):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [{
+                    'Number': '42', 'Category': '1', 'ID': 1, 'SessionID': 1,
+                    'RaceID': 999, 'FirstName': 'Jane', 'LastName': 'Doe',
+                    'Position': '1', 'Laps': '1', 'LastLapTime': '',
+                    'BestPosition': '1', 'BestLap': '1',
+                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+                    'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+                    'LapTimes': [
+                        {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                         'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+                    ],
+                }],
+            },
+        }
+
+    def _ctx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        return ctx
+
+    def test_skips_writes_when_complete_and_current(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts', return_value=(1, 1)):
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    with patch.object(_mod, 'push_influx_race') as mock_race:
+                        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+                            with patch.object(_mod, 'print_rankings'):
+                                _mod.old_race(ctx, opts)
+        mock_push.assert_not_called()
+        mock_race.assert_not_called()
+        mock_del.assert_not_called()
+
+    def test_logs_skip_message_when_complete(self, caplog):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts', return_value=(1, 1)):
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx'):
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            with caplog.at_level(logging.INFO):
+                                _mod.old_race(ctx, opts)
+        assert any('SKIP' in r.message and '999' in r.message for r in caplog.records)
+
+    def test_writes_when_laps_incomplete(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts', return_value=(0, 0)):
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_push.assert_called_once()
+
+    def test_writes_when_laps_stale_schema(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts', return_value=(1, 0)):
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_push.assert_called_once()
+
+    def test_does_not_query_counts_when_skip_disabled(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=False)
+        with patch.object(_mod, 'existing_lap_counts') as mock_counts:
+            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_counts.assert_not_called()
+        mock_push.assert_called_once()
+
+
+class TestExistingLapCounts:
+    def _query_api(self, lap_no_count=0, current_count=0):
+        """Mock query_api returning lap_no count for the first query and
+        current-schema_version count for the second."""
+        responses = iter([lap_no_count, current_count])
+
+        def fake_query(flux):
+            count = next(responses)
+            table = MagicMock()
+            if count is None:
+                table.records = []
+            else:
+                rec = MagicMock()
+                rec.get_value.return_value = count
+                table.records = [rec]
+            return [table]
+
+        api = MagicMock()
+        api.query.side_effect = fake_query
+        return api
+
+    def _ctx(self, query_api):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.query_api = query_api
+        return ctx
+
+    def test_returns_total_and_current_counts(self):
+        ctx = self._ctx(self._query_api(lap_no_count=10, current_count=10))
+        assert _mod.existing_lap_counts(ctx) == (10, 10)
+
+    def test_current_less_than_total_when_some_laps_unstamped(self):
+        ctx = self._ctx(self._query_api(lap_no_count=10, current_count=4))
+        assert _mod.existing_lap_counts(ctx) == (10, 4)
+
+    def test_returns_zero_when_no_laps(self):
+        ctx = self._ctx(self._query_api(lap_no_count=None, current_count=None))
+        assert _mod.existing_lap_counts(ctx) == (0, 0)
+
+    def test_total_query_filters_lap_no_field(self):
+        ctx = self._ctx(self._query_api(lap_no_count=1, current_count=1))
+        _mod.existing_lap_counts(ctx)
+        total_flux = ctx.query_api.query.call_args_list[0].args[0]
+        assert '_field == "lap_no"' in total_flux
+        assert 'race_id == "999"' in total_flux
+        assert 'car_number == "42"' in total_flux
+
+    def test_current_query_filters_on_schema_version_value(self):
+        ctx = self._ctx(self._query_api(lap_no_count=1, current_count=1))
+        _mod.existing_lap_counts(ctx)
+        current_flux = ctx.query_api.query.call_args_list[1].args[0]
+        assert '_field == "schema_version"' in current_flux
+        assert f'_value == {_mod.SCHEMA_VERSION}' in current_flux
+
 
 class TestOldRaceClassWiring:
     def _session_details(self, car_number='42', cat_id='1', cat_name='A'):
