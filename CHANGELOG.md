@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.17.0...v1.0.0) (2026-06-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* Docker image renamed from lemongrass-laps/lemongrass-pi to lemongrass. Runtime commands changed from `python <script>.py` to console script names (telem, pisugar-monitor, laps). Consuming repo's docker-compose must be updated before deploying.
+
+### Features
+
+* restructure as src layout with console_scripts and multi-arch Docker image ([5668b1c](https://github.com/WOT-Lemons/Lemongrass/commit/5668b1ca0d7e1f3e742a8b637520e4c0604eec52))
+
 ## [0.17.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.16.0...v0.17.0) (2026-06-19)
 
 
