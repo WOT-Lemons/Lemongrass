@@ -1,4 +1,3 @@
-# pylint: disable=missing-module-docstring,missing-class-docstring,missing-function-docstring
 import base64
 import json
 from unittest.mock import mock_open, patch

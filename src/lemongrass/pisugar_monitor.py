@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# pylint: disable=invalid-name
 """Sends PiSugar measurements to InfluxDB."""
 
 import base64
@@ -53,7 +52,7 @@ def token_expiry(token):
         payload_b64 += '=' * (-len(payload_b64) % 4)
         payload = json.loads(base64.b64decode(payload_b64))
         return payload.get('exp')
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         return None
 
 
@@ -105,7 +104,7 @@ def write_points(write_api, points):
     try:
         write_api.write(bucket='stats_252/autogen', record=points)
         logger.info("Wrote %d points to InfluxDB", len(points))
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         logger.exception("Failed to write %d points to InfluxDB", len(points))
 
 
@@ -141,7 +140,7 @@ def main():
                     logger.info("PiSugar token nearing expiry, refreshing")
                     try:
                         pisugar_token = login(username, password)
-                    except Exception:  # pylint: disable=broad-exception-caught
+                    except Exception:
                         logger.exception("Proactive token refresh failed")
 
             try:
@@ -165,11 +164,11 @@ def main():
                     try:
                         pisugar_token = login(username, password)
                         logger.info("Re-authenticated with pisugar-server")
-                    except Exception:  # pylint: disable=broad-exception-caught
+                    except Exception:
                         logger.exception("Re-authentication failed")
                 else:
                     logger.exception("HTTP error reading from PiSugar")
-            except Exception:  # pylint: disable=broad-exception-caught
+            except Exception:
                 logger.exception("Error reading from PiSugar")
 
             sleep(0.5)

@@ -8,7 +8,7 @@ import os
 import threading
 from time import sleep
 
-import obd  # pylint: disable=import-error
+import obd
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
@@ -93,7 +93,7 @@ def flush_points(write_api):
     try:
         write_api.write(bucket='stats_252/autogen', record=batch)
         logger.info("Flushed %d points to InfluxDB", len(batch))
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except Exception as e:
         logger.error('Failed to write %d points to InfluxDB: %s', len(batch), e)
         with pending_lock:
             pending_points[:0] = batch

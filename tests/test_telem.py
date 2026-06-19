@@ -1,5 +1,3 @@
-# pylint: disable=missing-module-docstring,missing-class-docstring
-# pylint: disable=missing-function-docstring,too-few-public-methods
 from unittest.mock import MagicMock, patch
 
 import lemongrass.telem as _mod
