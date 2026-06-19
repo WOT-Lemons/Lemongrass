@@ -11,7 +11,7 @@ on:
       - .dockerignore
       - pyproject.toml
       - uv.lock
-      - laps.py
+      - src/lemongrass/laps.py
       - .github/workflows/docker-build-laps.yml
   pull_request:
     branches:
@@ -21,7 +21,7 @@ on:
       - .dockerignore
       - pyproject.toml
       - uv.lock
-      - laps.py
+      - src/lemongrass/laps.py
       - .github/workflows/docker-build-laps.yml
 
 concurrency:

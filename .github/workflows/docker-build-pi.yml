@@ -11,8 +11,8 @@ on:
       - .dockerignore
       - pyproject.toml
       - uv.lock
-      - telem.py
-      - pisugar-monitor.py
+      - src/lemongrass/telem.py
+      - src/lemongrass/pisugar_monitor.py
       - .github/workflows/docker-build-pi.yml
   pull_request:
     branches:
@@ -22,8 +22,8 @@ on:
       - .dockerignore
       - pyproject.toml
       - uv.lock
-      - telem.py
-      - pisugar-monitor.py
+      - src/lemongrass/telem.py
+      - src/lemongrass/pisugar_monitor.py
       - .github/workflows/docker-build-pi.yml
 
 concurrency:
