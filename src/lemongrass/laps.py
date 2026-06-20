@@ -155,63 +155,71 @@ def main():
         skip_if_complete=args.skip_if_complete,
     )
 
-    with RaceMonitorClient(api_token=token) as client:
-        race_details = client.race.details(race_id)
+    try:
+        with RaceMonitorClient(api_token=token) as client:
+            race_details = client.race.details(race_id)
 
-        start_epoc = 0
-        if race_details['Successful']:
-            race_name = race_details['Race']['Name']
-            start_epoc = race_details['Race']['StartDateEpoc']
-            logging.debug("StartDateEpoc: %s", start_epoc)
-            start_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_epoc))
-            end_epoc = race_details['Race']['EndDateEpoc']
-            end_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_epoc))
-            race_track = race_details['Race']['Track']
-            print(UNDERLINE)
-            print(f"Race {race_id}")
-            print(
-                f"{race_name}\tStarted: {start_date:>}\n"
-                f"{race_track}\t\t\tEnds: {end_date:>}"
-            )
-            print(UNDERLINE)
+            start_epoc = 0
+            if race_details['Successful']:
+                race_name = race_details['Race']['Name']
+                start_epoc = race_details['Race']['StartDateEpoc']
+                logging.debug("StartDateEpoc: %s", start_epoc)
+                start_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_epoc))
+                end_epoc = race_details['Race']['EndDateEpoc']
+                end_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_epoc))
+                race_track = race_details['Race']['Track']
+                print(UNDERLINE)
+                print(f"Race {race_id}")
+                print(
+                    f"{race_name}\tStarted: {start_date:>}\n"
+                    f"{race_track}\t\t\tEnds: {end_date:>}"
+                )
+                print(UNDERLINE)
 
-        metadata = _resolve_race_metadata(race_details, client) if opts.network_mode else None
+            metadata = _resolve_race_metadata(race_details, client) if opts.network_mode else None
 
-        if opts.selected_class:
-            logging.info("Sorting results for class %s.", opts.selected_class.upper())
+            if opts.selected_class:
+                logging.info("Sorting results for class %s.", opts.selected_class.upper())
 
-        response = client.race.is_live(race_id)
+            response = client.race.is_live(race_id)
 
-        if not response['Successful']:
-            return 1
+            if not response['Successful']:
+                return 1
 
-        if not opts.network_mode:
-            return _run_race(
-                RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata), opts, response)
+            if not opts.network_mode:
+                return _run_race(
+                    RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata), opts, response)
 
-        with InfluxDBClient(
-            url='https://influxdb.focism.com', token=influx_token, org='focism'
-        ) as influx_client:
-            write_api = influx_client.write_api(write_options=SYNCHRONOUS)
-            delete_api = influx_client.delete_api()
-            query_api = influx_client.query_api()
-            return _run_race(
-                RaceContext(race_id, car_number, client, write_api, start_epoc,
-                            metadata=metadata, delete_api=delete_api,
-                            query_api=query_api), opts, response)
+            with InfluxDBClient(
+                url='https://influxdb.focism.com', token=influx_token, org='focism'
+            ) as influx_client:
+                write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+                delete_api = influx_client.delete_api()
+                query_api = influx_client.query_api()
+                return _run_race(
+                    RaceContext(race_id, car_number, client, write_api, start_epoc,
+                                metadata=metadata, delete_api=delete_api,
+                                query_api=query_api), opts, response)
+    except KeyboardInterrupt:
+        logging.info("Interrupted, exiting.")
+        sys.exit(130)
 
 
 def _run_race(ctx, opts, response):
     """Dispatch to live_race or old_race based on race status."""
-    if response['IsLive'] is not True:
-        logging.info("Race %s is not live. Monitor mode disabled.", ctx.race_id)
-        if opts.monitor_mode:
-            return 0
-        old_race(ctx, opts)
-    else:
-        logging.info("Race %s is currently live.", ctx.race_id)
-        live_race(ctx, opts)
-    return 0
+    try:
+        if response['IsLive'] is not True:
+            logging.info("Race %s is not live. Monitor mode disabled.", ctx.race_id)
+            if opts.monitor_mode:
+                return 0
+            old_race(ctx, opts)
+        else:
+            logging.info("Race %s is currently live.", ctx.race_id)
+            live_race(ctx, opts)
+        return 0
+    except KeyboardInterrupt:
+        logging.info("Interrupted, exiting.")
+        sys.exit(130)
 
 
 def live_race(ctx, opts):
@@ -846,4 +854,4 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         logging.info("Interrupted, exiting.")
-        sys.exit(0)
+        sys.exit(130)
