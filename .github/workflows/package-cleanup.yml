@@ -55,7 +55,7 @@ jobs:
           # Delete sha256-<hex> tagged attestation indexes whose subject is no longer present.
           # Runs before the untagged cleanup so the freed inner SBOM blobs are caught in that pass.
           gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
-            --jq '.[] | select(.metadata.container.tags[]? | startswith("sha256-")) | "\(.id) \(.metadata.container.tags[] | select(startswith("sha256-")))"' | \
+            --jq '.[] | select(any(.metadata.container.tags[]?; test("^sha256-[0-9a-f]{64}$"))) | "\(.id) \(first(.metadata.container.tags[] | select(test("^sha256-[0-9a-f]{64}$"))))"' | \
           while read -r version_id tag; do
             subject="sha256:${tag#sha256-}"
             if echo "$all_digests" | grep -qF "$subject"; then
