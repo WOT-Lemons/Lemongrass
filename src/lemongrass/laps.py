@@ -203,15 +203,19 @@ def main():
 
 def _run_race(ctx, opts, response):
     """Dispatch to live_race or old_race based on race status."""
-    if response['IsLive'] is not True:
-        logging.info("Race %s is not live. Monitor mode disabled.", ctx.race_id)
-        if opts.monitor_mode:
-            return 0
-        old_race(ctx, opts)
-    else:
-        logging.info("Race %s is currently live.", ctx.race_id)
-        live_race(ctx, opts)
-    return 0
+    try:
+        if response['IsLive'] is not True:
+            logging.info("Race %s is not live. Monitor mode disabled.", ctx.race_id)
+            if opts.monitor_mode:
+                return 0
+            old_race(ctx, opts)
+        else:
+            logging.info("Race %s is currently live.", ctx.race_id)
+            live_race(ctx, opts)
+        return 0
+    except KeyboardInterrupt:
+        logging.info("Interrupted, exiting.")
+        sys.exit(130)
 
 
 def live_race(ctx, opts):
@@ -846,4 +850,4 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         logging.info("Interrupted, exiting.")
-        sys.exit(0)
+        sys.exit(130)

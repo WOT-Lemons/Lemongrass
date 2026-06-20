@@ -201,26 +201,30 @@ def main():
 
     start_year_epoc = int(datetime(args.start_year, 1, 1, tzinfo=timezone.utc).timestamp())
 
-    with RaceMonitorClient(api_token=token) as client:
-        races = find_matching_races(client, start_year_epoc)
-        logging.info("Found %d matching races", len(races))
+    try:
+        with RaceMonitorClient(api_token=token) as client:
+            races = find_matching_races(client, start_year_epoc)
+            logging.info("Found %d matching races", len(races))
 
-        if args.validate:
-            influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
-            if not influx_token:
-                logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+            if args.validate:
+                influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
+                if not influx_token:
+                    logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+                    sys.exit(1)
+                from influxdb_client import InfluxDBClient
+                pairs = build_pairs(races, args.car_number, args.overrides)
+                with InfluxDBClient(url='https://influxdb.focism.com',
+                                    token=influx_token, org='focism') as influx_client:
+                    ok = validate_backfill(pairs, influx_client.query_api())
+                sys.exit(0 if ok else 1)
+
+            failures = run_backfill(races, args.car_number, args.overrides,
+                                    dry_run=args.dry_run, force=args.force)
+            if failures:
                 sys.exit(1)
-            from influxdb_client import InfluxDBClient
-            pairs = build_pairs(races, args.car_number, args.overrides)
-            with InfluxDBClient(url='https://influxdb.focism.com',
-                                token=influx_token, org='focism') as influx_client:
-                ok = validate_backfill(pairs, influx_client.query_api())
-            sys.exit(0 if ok else 1)
-
-        failures = run_backfill(races, args.car_number, args.overrides,
-                                dry_run=args.dry_run, force=args.force)
-        if failures:
-            sys.exit(1)
+    except KeyboardInterrupt:
+        logging.info("Interrupted, exiting.")
+        sys.exit(130)
 
 
 if __name__ == '__main__':

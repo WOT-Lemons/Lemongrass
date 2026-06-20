@@ -63,55 +63,76 @@ uv run laps RACE_ID CAR_NUMBER -m -n
 Real example:
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 164732 372 -m -n
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 166811 13 -m -n
 ```
 
 ```plain
-2026-05-10 17:31:26,577 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/RaceDetails "HTTP/1.1 200 OK"
+2026-06-19 20:52:41,057 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/RaceDetails "HTTP/1.1 200 OK"
 --------------------------------------------------------------------------------
-Race 164732
-The Sausage Fest 2026 Started: 2026-05-08 14:00:00
-Road America   Ends: 2026-05-10 23:00:00
+Race 166811
+Fast Friday Started: 2026-06-19 16:00:00
+Seekonk Speedway   Ends: 2026-06-20 01:00:00
 --------------------------------------------------------------------------------
-2026-05-10 17:31:26,628 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/IsLive "HTTP/1.1 200 OK"
-2026-05-10 17:31:26,650 - INFO - Race 164732 is currently live.
-2026-05-10 17:31:26,695 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Live/GetSession "HTTP/1.1 200 OK"
+2026-06-19 20:52:41,151 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/IsLive "HTTP/1.1 200 OK"
+2026-06-19 20:52:41,152 - INFO - Race 166811 is currently live.
+2026-06-19 20:52:41,251 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Live/GetSession "HTTP/1.1 200 OK"
 --------------------------------------------------------------------------------
-2026-05-10 17:31:26,700 - INFO - Current overall rankings.
+2026-06-19 20:52:41,252 - INFO - Current overall rankings.
 --------------------------------------------------------------------------------
 Empty DataFrame
-Columns: [Pos., #, Name, Laps, Transponder]
+Columns: [Pos., #, Class, Class Pos., Name, Laps, Transponder]
 Index: []
 --------------------------------------------------------------------------------
-2026-05-10 17:31:26,896 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Live/GetRacer "HTTP/1.1 200 OK"
+2026-06-19 20:52:41,365 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Live/GetRacer "HTTP/1.1 200 OK"
 --------------------------------------------------------------------------------
-Team: Lemonaid Car Number: 372  Transponder: 7150207
+Team: Jacob Burns Car Number: 13   Class: Legends Transponder: 13775638
 Best Position: 2
 Final Position: 1
-Total Laps: 192
-Best Lap: 22
-Best Lap Time: 00:02:45.024
-Total Time: 10:43:15.928
+Final Class Position: 1
+Total Laps: 16
+Best Lap: 6
+Best Lap Time: 00:00:14.165
+Total Time: 00:05:43.405
 --------------------------------------------------------------------------------
 Lap Position      LapTime FlagStatus    TotalTime
- -2       94 00:02:56.397      Green 00:03:58.988
- -1       94 00:03:06.094      Green 00:07:05.082
-  1       81 00:02:49.854      Green 00:12:50.376
-  2       80 00:02:56.454      Green 00:15:46.830
-  3       77 00:02:52.749      Green 00:18:39.579
-  4       74 00:02:56.466      Green 00:21:36.045
-  5       70 00:03:02.744      Green 00:24:38.789
- ...
-190        1 00:02:52.168      Green 10:37:24.996
-191        1 00:02:50.178      Green 10:40:15.174
-192        1 00:03:00.754      Green 10:43:15.928
+  1        8 00:00:14.572      Green 00:00:23.097
+  2        5 00:00:14.458      Green 00:00:37.555
+  3        4 00:00:14.389      Green 00:00:51.944
+  4        3 00:00:14.258      Green 00:01:06.202
+  5        2 00:00:14.313      Green 00:01:20.515
+  6        2 00:00:14.165      Green 00:01:34.680
+  7        2 00:00:14.258      Green 00:01:48.938
+  8        1 00:00:14.391      Green 00:02:03.329
+  9        1 00:00:14.437      Green 00:02:17.766
+ 10        1 00:00:14.299      Green 00:02:32.065
+ 11        1 00:00:14.248      Green 00:02:46.313
+ 12        1 00:00:14.260      Green 00:04:46.328
+ 13        1 00:00:14.194      Green 00:05:00.522
+ 14        1 00:00:14.251      Green 00:05:14.773
+ 15        1 00:00:14.322      Green 00:05:29.095
+ 16        1 00:00:14.310      Green 00:05:43.405
+ 17        1 00:00:14.291      Green 00:05:57.696
 --------------------------------------------------------------------------------
-2026-05-10 17:31:26,915 - INFO - Writing laps to influx...
-2026-05-10 17:31:32,287 - INFO - All lap data written successfully
+2026-06-19 20:52:41,369 - INFO - Monitoring car 13...
 --------------------------------------------------------------------------------
-2026-05-10 17:31:32,288 - INFO - Monitoring car 372...
---------------------------------------------------------------------------------
-2026-05-10 17:32:02,695 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Live/GetRacer "HTTP/1.1 200 OK"
+Lap Position      LapTime FlagStatus    TotalTime
+  1        8 00:00:14.572      Green 00:00:23.097
+  2        5 00:00:14.458      Green 00:00:37.555
+  3        4 00:00:14.389      Green 00:00:51.944
+  4        3 00:00:14.258      Green 00:01:06.202
+  5        2 00:00:14.313      Green 00:01:20.515
+  6        2 00:00:14.165      Green 00:01:34.680
+  7        2 00:00:14.258      Green 00:01:48.938
+  8        1 00:00:14.391      Green 00:02:03.329
+  9        1 00:00:14.437      Green 00:02:17.766
+ 10        1 00:00:14.299      Green 00:02:32.065
+ 11        1 00:00:14.248      Green 00:02:46.313
+ 12        1 00:00:14.260      Green 00:04:46.328
+ 13        1 00:00:14.194      Green 00:05:00.522
+ 14        1 00:00:14.251      Green 00:05:14.773
+ 15        1 00:00:14.322      Green 00:05:29.095
+ 16        1 00:00:14.310      Green 00:05:43.405
+ 17        1 00:00:14.291      Green 00:05:57.696
 ```
 
 ### Completed Race
@@ -136,63 +157,85 @@ uv run laps RACE_ID CAR_NUMBER
 Real example:
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 164732 121
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 166429 852
 ```
 
 ```plain
-2026-05-11 18:45:01,901 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/RaceDetails "HTTP/1.1 200 OK"
+2026-06-19 20:46:17,391 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/RaceDetails "HTTP/1.1 200 OK"
 --------------------------------------------------------------------------------
-Race 164732
-The Sausage Fest 2026	Started: 2026-05-08 10:00:00
-Road America			Ends: 2026-05-10 19:00:00
+Race 166429
+The B.F.E. GP 2026 Started: 2026-06-12 10:00:00
+High Plains Raceway   Ends: 2026-06-14 19:30:00
 --------------------------------------------------------------------------------
-2026-05-11 18:45:01,944 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/IsLive "HTTP/1.1 200 OK"
-2026-05-11 18:45:01,948 - INFO - Race 164732 is not live. Monitor mode disabled.
-2026-05-11 18:45:01,994 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionsForRace "HTTP/1.1 200 OK"
-2026-05-11 18:45:02,056 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-05-11 18:45:02,108 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-05-11 18:45:02,161 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-05-11 18:45:02,164 - INFO - Rate limited: sleeping 59.65s [6/6 slots used over 60s window; oldest request 0.35s ago]
-2026-05-11 18:46:01,913 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-05-11 18:46:02,053 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
+2026-06-19 20:46:17,487 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/IsLive "HTTP/1.1 200 OK"
+2026-06-19 20:46:17,488 - INFO - Race 166429 is not live. Monitor mode disabled.
+2026-06-19 20:46:17,587 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionsForRace "HTTP/1.1 200 OK"
+2026-06-19 20:46:17,692 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
+2026-06-19 20:46:17,797 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
+2026-06-19 20:46:17,945 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
+2026-06-19 20:46:17,948 - INFO - Rate limited: sleeping 59.34s [6/6 slots used over 60s window; oldest request 0.66s ago]
+2026-06-19 20:47:17,422 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
+2026-06-19 20:47:17,570 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
+2026-06-19 20:47:17,794 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
+2026-06-19 20:47:18,090 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
+2026-06-19 20:47:18,314 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
+2026-06-19 20:47:18,626 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
 --------------------------------------------------------------------------------
-2026-05-11 18:46:02,222 - INFO - Current overall rankings.
+2026-06-19 20:47:18,913 - INFO - Current overall rankings.
 --------------------------------------------------------------------------------
-Pos.   #                         Name Laps Transponder
-   1 121        The Patriot race team  259         B-3
-   2  36                        TATAS  257     1070156
-   3   3                Badger Racing  254     4510781
-   4 546           It’s Around Here….  251        B-24
-   5  53            Team Fiery Death!  249        A-17
-   6 223        Adventurers Anonymous  246        B-13
-   7 307       Gutless Cutlass Racing  246        B-15
-   8 770                  Team Mayhem  244        B-26
-   9 123                  Polka Kings  244         B-4
-  10 949         Scheißmeister Racing  243        B-32
+Pos.   # Class  Class Pos.                             Name Laps Transponder
+   1 852     A           1              Rusty Bottom Racing  351        D-34
+   2   4     A           2         Sew So Fast - GC edition  349         C-2
+   3 380     A           3                 Vice City Racing  349        D-20
+   4   6     A           4               Stay Classy Racing  337         C-3
+   5 177     B           1                     DadBodCarMod  336        D-11
+   6  49     B           2             Broken Spokes Racing  334        C-20
+   7 101     A           5            Smokey and the Bandit  333         D-1
+   8  11     A           6          Whiskey + Doughnuts =É.  333      165002
+   9 300     A           7                     World War Zx  331        D-14
+  10 501     A           8            Vistabeam Racing Team  330        D-26
 ...
-  95 248                   3 Gena + 2    7        B-14
-  96 502                     SlowZuki    3        B-20
-  97  83 Dunning-Kruger Effect Racing         13030906
-  98 392              GWOT VET 49 (R)             B-31
-  99 178                  Four Idiots  -22    12947397
+  75 779     B          33     Poorsche Club of America (R)   59        D-31
+  76 333     B          34           Green Beret RacingÉ.II   53        D-19
+  77  73     B          35                      Team HonDuh   23     5632016
+  78  28     A          27             Liquid Mechanics (R)   11     6201404
+  79 150     A          28                       NTD Racing    9         D-8
+  80  35     C          17                         Passhark    8        C-13
+  81  17     C          18                     Haiku Racing              C-6
+  82  72                 1      Enforcement Motorsports (R)             C-25
 --------------------------------------------------------------------------------
-Team:       	Car Number: 121 	Transponder: B-3
-Best Position:	6
-Final Position:	1
-Total Laps:	259
-Best Lap:	154
-Best Lap Time:	00:02:48.657
-Total Time:	14:11:40.349
+Team:        Car Number: 852  Class: A Transponder: D-34
+Best Position: 7
+Final Position: 1
+Final Class Position: 1
+Total Laps: 351
+Best Lap: 214
+Best Lap Time: 00:02:12.483
+Total Time: 14:36:02.587
 --------------------------------------------------------------------------------
 Lap      LapTime Position FlagStatus    TotalTime
-  1 00:03:06.447       12      Green 00:04:13.066
-  2 00:03:04.366       11      Green 00:07:17.432
-  3 00:03:12.643        8      Green 00:10:30.075
+  1 00:02:25.450        6      Green 06:28:04.193
+  2 00:02:24.449        5      Green 06:30:28.642
+  3 00:02:24.332        5      Green 06:32:52.974
+  4 00:02:26.745        5      Green 06:35:19.719
+  5 00:02:23.508        5      Green 06:37:43.227
+  6 00:02:23.444        4      Green 06:40:06.671
+  7 00:02:24.004        3      Green 06:42:30.675
+  8 00:02:43.345        3      Green 06:45:14.020
+  9 00:36:18.582        7      Green 07:21:32.602
+ 10 00:02:23.425        7      Green 07:23:56.027
 ...
-258 00:03:00.218        1      Green 14:08:27.761
-259 00:03:12.588        1     Finish 14:11:40.349
---------------------------------------------------------------------------------
-2026-05-11 18:46:02,229 - INFO - Writing laps to influx...
-2026-05-11 18:46:11,310 - INFO - All lap data written successfully
+340 00:02:21.490        1      Green 14:09:37.216
+341 00:02:26.332        1      Green 14:12:03.478
+342 00:02:26.332        1      Green 14:14:29.810
+343 00:02:24.485        1      Green 14:16:54.224
+344 00:02:24.068        1      Green 14:19:18.222
+345 00:02:21.403        1      Green 14:21:39.553
+346 00:02:27.229        1      Green 14:24:06.782
+347 00:02:28.195        1      Green 14:26:34.906
+348 00:02:24.841        1      Green 14:28:59.674
+349 00:02:20.867        1      Green 14:31:20.472
+350 00:02:21.190        1      Green 14:33:41.592
+351 00:02:21.065        1     Finish 14:36:02.587
 --------------------------------------------------------------------------------
 ```
