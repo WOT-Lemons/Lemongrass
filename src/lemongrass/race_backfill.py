@@ -182,6 +182,9 @@ def run_backfill(races, default_car, overrides, dry_run=False, force=False):
         logging.info("Backfilling race %s (%s) car %s",
                      race_id, race['Name'], car_number)
         result = subprocess.run(cmd, capture_output=False)
+        if result.returncode == 130:
+            logging.info("laps was interrupted; stopping backfill.")
+            break
         if result.returncode != 0:
             logging.error("Backfill failed for race %s car %s", race_id, car_number)
             failures.append((race_id, car_number))
