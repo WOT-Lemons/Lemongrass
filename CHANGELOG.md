@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/WOT-Lemons/Lemongrass/compare/v1.0.0...v1.0.1) (2026-06-20)
+
+
+### Bug Fixes
+
+* handle Ctrl+C gracefully in laps and race-backfill ([32be58e](https://github.com/WOT-Lemons/Lemongrass/commit/32be58e0638f09c037a7669649de2083c280ec89))
+
 ## [1.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v0.17.0...v1.0.0) (2026-06-19)
 
 
