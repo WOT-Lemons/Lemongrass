@@ -3,7 +3,7 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 COPY pyproject.toml uv.lock ./
 COPY src/ src/
-RUN uv sync --frozen --no-dev --group race --group pi
+RUN uv sync --frozen --no-dev --no-editable --group race --group pi
 
 FROM python:3.14-slim-trixie@sha256:44dd04494ee8f3b538294360e7c4b3acb87c8268e4d0a4828a6500b1eff50061
 WORKDIR /app
