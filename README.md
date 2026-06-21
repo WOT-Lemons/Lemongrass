@@ -51,19 +51,26 @@ docker pull ghcr.io/wot-lemons/lemongrass:latest
 **Docker** — pass your credentials via an env file (see `.env.sample`). To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass`.
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps RACE_ID CAR_NUMBER -m -n
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps RACE_ID CAR_NUMBER -m -n
+```
+
+**pip** — install from PyPI and source your `.env` first (step 2 above):
+
+```shell
+pip install lemongrass
+lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
 
 **uv** — if you have the repo cloned and [uv](https://docs.astral.sh/uv/) installed, source your `.env` first (step 2 above) and run:
 
 ```shell
-uv run laps RACE_ID CAR_NUMBER -m -n
+uv run lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
 
 Real example:
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 166811 13 -m -n
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps 166811 13 -m -n
 ```
 
 ```plain
@@ -145,19 +152,25 @@ You can retrieve info for a completed race too.
 docker run --rm -it \
   --env-file .env \
   ghcr.io/wot-lemons/lemongrass:latest \
-  laps RACE_ID CAR_NUMBER
+  lemongrass laps RACE_ID CAR_NUMBER
+```
+
+**pip:**
+
+```shell
+lemongrass laps RACE_ID CAR_NUMBER
 ```
 
 **uv:**
 
 ```shell
-uv run laps RACE_ID CAR_NUMBER
+uv run lemongrass laps RACE_ID CAR_NUMBER
 ```
 
 Real example:
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 166429 852
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps 166429 852
 ```
 
 ```plain
