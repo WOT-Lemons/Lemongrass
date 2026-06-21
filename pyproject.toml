@@ -23,7 +23,7 @@ classifiers = [
 dependencies = [
     "influxdb-client~=1.47",
     "obd~=0.7",
-    "pandas~=2.3",
+    "pandas~=3.0",
     "race-monitor>=0.5.1,<1",
 ]
 
