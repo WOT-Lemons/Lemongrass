@@ -4,6 +4,8 @@ version = "2.0.0"
 requires-python = ">=3.10"
 dependencies = [
     "influxdb-client~=1.47",
+    "obd~=0.7",
+    "pandas~=2.3",
     "race-monitor>=0.5.1,<1",
 ]
 
@@ -19,6 +21,4 @@ line-length = 100
 exclude = [".git", "__pycache__", "build", "dist", ".venv"]
 
 [dependency-groups]
-pi = ["obd~=0.7"]
-race = ["pandas~=2.3"]
 dev = ["pytest>=8"]
