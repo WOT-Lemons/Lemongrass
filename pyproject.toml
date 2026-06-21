@@ -12,11 +12,7 @@ requires = ["uv-build>=0.11.21,<0.12"]
 build-backend = "uv_build"
 
 [project.scripts]
-laps            = "lemongrass.laps:main"
-race-backfill   = "lemongrass.race_backfill:main"
-telem           = "lemongrass.telem:main"
-pisugar-monitor = "lemongrass.pisugar_monitor:main"
-race-diagnose   = "lemongrass.race_diagnose:main"
+lemongrass = "lemongrass.cli:main"
 
 [tool.ruff]
 line-length = 100
