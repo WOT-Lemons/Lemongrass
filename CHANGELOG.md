@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/WOT-Lemons/Lemongrass/compare/v2.0.0...v2.0.1) (2026-06-21)
+
+
+### Bug Fixes
+
+* **deps:** promote pandas and obd to core dependencies ([#126](https://github.com/WOT-Lemons/Lemongrass/issues/126)) ([5c0791b](https://github.com/WOT-Lemons/Lemongrass/commit/5c0791bbee779a9fab781e0b254c320ebfdbaef5))
+
 ## [2.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v1.0.2...v2.0.0) (2026-06-21)
 
 
