@@ -1,13 +1,36 @@
 [project]
 name = "lemongrass"
 version = "2.0.0"
+description = "Telemetry stack for 24 Hours of Lemons"
+readme = "README.md"
 requires-python = ">=3.10"
+authors = [{name = "WOT-Lemons"}]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["race monitor", "racing", "motorsport", "telemetry", "obd2", "obd"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Utilities",
+]
 dependencies = [
     "influxdb-client~=1.47",
     "obd~=0.7",
     "pandas~=2.3",
     "race-monitor>=0.5.1,<1",
 ]
+
+[project.urls]
+Source = "https://github.com/WOT-Lemons/Lemongrass"
+"Bug Tracker" = "https://github.com/WOT-Lemons/Lemongrass/issues"
+Changelog = "https://github.com/WOT-Lemons/Lemongrass/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["uv-build>=0.11.21,<0.12"]
