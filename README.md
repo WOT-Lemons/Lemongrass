@@ -61,10 +61,17 @@ pip install lemongrass
 lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
 
-**uv** — if you have the repo cloned and [uv](https://docs.astral.sh/uv/) installed, source your `.env` first (step 2 above) and run:
+**uv** — install from PyPI as a tool and source your `.env` first (step 2 above):
 
 ```shell
-uv run lemongrass laps RACE_ID CAR_NUMBER -m -n
+uv tool install lemongrass
+lemongrass laps RACE_ID CAR_NUMBER -m -n
+```
+
+Or run ephemerally without installing:
+
+```shell
+uvx lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
 
 Real example:
@@ -164,7 +171,7 @@ lemongrass laps RACE_ID CAR_NUMBER
 **uv:**
 
 ```shell
-uv run lemongrass laps RACE_ID CAR_NUMBER
+lemongrass laps RACE_ID CAR_NUMBER
 ```
 
 Real example:
@@ -252,3 +259,15 @@ Lap      LapTime Position FlagStatus    TotalTime
 351 00:02:21.065        1     Finish 14:36:02.587
 --------------------------------------------------------------------------------
 ```
+
+## Upgrading from v1.x
+
+As of v2.0.0, the individual entry points (`laps`, `telem`, `race-backfill`, `pisugar-monitor`, `race-diagnose`) were replaced by a single `lemongrass` command. If you have the old package installed, update and prefix commands with `lemongrass`:
+
+| Before | After |
+|--------|-------|
+| `laps RACE_ID CAR_NUMBER` | `lemongrass laps RACE_ID CAR_NUMBER` |
+| `telem` | `lemongrass telem` |
+| `race-backfill` | `lemongrass race-backfill` |
+| `pisugar-monitor` | `lemongrass pisugar-monitor` |
+| `race-diagnose` | `lemongrass race-diagnose` |

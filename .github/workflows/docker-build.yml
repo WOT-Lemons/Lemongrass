@@ -3,7 +3,7 @@ name: Build and Push Image
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*'  # every release tag produces a new image; no paths filter is intentional
   pull_request:
     branches:
       - main

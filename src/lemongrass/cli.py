@@ -11,6 +11,11 @@ _COMMANDS = {
 
 
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help"):
+        print("Usage: lemongrass <command> [args]")
+        print(f"Commands: {', '.join(_COMMANDS)}")
+        sys.exit(0)
+
     if len(sys.argv) < 2 or sys.argv[1] not in _COMMANDS:
         print("Usage: lemongrass <command> [args]")
         print(f"Commands: {', '.join(_COMMANDS)}")
