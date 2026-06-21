@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/WOT-Lemons/Lemongrass/compare/v1.0.1...v1.0.2) (2026-06-21)
+
+
+### Bug Fixes
+
+* **docker:** install lemongrass as non-editable wheel in final image ([#121](https://github.com/WOT-Lemons/Lemongrass/issues/121)) ([e579fad](https://github.com/WOT-Lemons/Lemongrass/commit/e579faddec1b96ac1ec276b1f91a566c67e97566))
+
 ## [1.0.1](https://github.com/WOT-Lemons/Lemongrass/compare/v1.0.0...v1.0.1) (2026-06-20)
 
 
