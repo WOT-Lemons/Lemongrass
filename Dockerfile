@@ -10,5 +10,4 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 # No ENTRYPOINT/CMD — the runtime command is supplied by docker-compose (external repo).
-# Use the installed console script names: `laps`, `race-backfill`, `telem`, or `pisugar-monitor`
-# (not the old `python <script>.py` style).
+# Use `lemongrass <command>` — e.g. `lemongrass laps`, `lemongrass telem`, `lemongrass race-backfill`.

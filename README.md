@@ -51,19 +51,33 @@ docker pull ghcr.io/wot-lemons/lemongrass:latest
 **Docker** — pass your credentials via an env file (see `.env.sample`). To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass`.
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps RACE_ID CAR_NUMBER -m -n
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
 
-**uv** — if you have the repo cloned and [uv](https://docs.astral.sh/uv/) installed, source your `.env` first (step 2 above) and run:
+**pip** — install from PyPI and source your `.env` first (step 2 above):
 
 ```shell
-uv run laps RACE_ID CAR_NUMBER -m -n
+pip install lemongrass
+lemongrass laps RACE_ID CAR_NUMBER -m -n
+```
+
+**uv** — install from PyPI as a tool and source your `.env` first (step 2 above):
+
+```shell
+uv tool install lemongrass
+lemongrass laps RACE_ID CAR_NUMBER -m -n
+```
+
+Or run ephemerally without installing:
+
+```shell
+uvx lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
 
 Real example:
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 166811 13 -m -n
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps 166811 13 -m -n
 ```
 
 ```plain
@@ -145,19 +159,25 @@ You can retrieve info for a completed race too.
 docker run --rm -it \
   --env-file .env \
   ghcr.io/wot-lemons/lemongrass:latest \
-  laps RACE_ID CAR_NUMBER
+  lemongrass laps RACE_ID CAR_NUMBER
+```
+
+**pip:**
+
+```shell
+lemongrass laps RACE_ID CAR_NUMBER
 ```
 
 **uv:**
 
 ```shell
-uv run laps RACE_ID CAR_NUMBER
+lemongrass laps RACE_ID CAR_NUMBER
 ```
 
 Real example:
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest laps 166429 852
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps 166429 852
 ```
 
 ```plain
@@ -239,3 +259,15 @@ Lap      LapTime Position FlagStatus    TotalTime
 351 00:02:21.065        1     Finish 14:36:02.587
 --------------------------------------------------------------------------------
 ```
+
+## Upgrading from v1.x
+
+As of v2.0.0, the individual entry points (`laps`, `telem`, `race-backfill`, `pisugar-monitor`, `race-diagnose`) were replaced by a single `lemongrass` command. If you have the old package installed, update and prefix commands with `lemongrass`:
+
+| Before | After |
+|--------|-------|
+| `laps RACE_ID CAR_NUMBER` | `lemongrass laps RACE_ID CAR_NUMBER` |
+| `telem` | `lemongrass telem` |
+| `race-backfill` | `lemongrass race-backfill` |
+| `pisugar-monitor` | `lemongrass pisugar-monitor` |
+| `race-diagnose` | `lemongrass race-diagnose` |
