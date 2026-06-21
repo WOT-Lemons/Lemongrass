@@ -35,7 +35,7 @@ jobs:
       sbom: true
       meta-images: ghcr.io/wot-lemons/lemongrass
       meta-tags: |
-        type=ref,event=pr
+        type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
         type=semver,pattern={{version}}
         type=semver,pattern={{major}}.{{minor}}
         type=semver,pattern={{major}}
