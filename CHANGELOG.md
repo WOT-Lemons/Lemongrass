@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v1.0.2...v2.0.0) (2026-06-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* old entry points removed; use `lemongrass <cmd>` form
+
+### Features
+
+* consolidate CLI to lemongrass dispatcher and add PyPI publishing ([9e5f85a](https://github.com/WOT-Lemons/Lemongrass/commit/9e5f85ad7352fcb03c12116faef0ca83c02103a8))
+
 ## [1.0.2](https://github.com/WOT-Lemons/Lemongrass/compare/v1.0.1...v1.0.2) (2026-06-21)
 
 
