@@ -1442,13 +1442,13 @@ class TestDeleteExistingLaps:
         ctx.delete_api = delete_api
         return ctx, delete_api
 
-    def test_predicate_targets_measurement_race_and_car(self):
+    def test_predicate_targets_measurement_and_race(self):
         ctx, delete_api = self._ctx()
         _mod.delete_existing_laps(ctx)
         predicate = delete_api.delete.call_args.kwargs['predicate']
         assert '_measurement="lap"' in predicate
         assert 'race_id="999"' in predicate
-        assert 'car_number="42"' in predicate
+        assert 'car_number' not in predicate
 
     def test_targets_laps_bucket(self):
         ctx, delete_api = self._ctx()
