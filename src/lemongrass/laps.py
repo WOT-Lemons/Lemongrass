@@ -390,7 +390,13 @@ def old_race(ctx, opts):
                     ctx.race_id, ctx.car_number, total, SCHEMA_VERSION)
                 return
 
-        # Second pass: delete-and-replace the car's laps, then write each session.
+        # Second pass: delete-and-replace the full race, then write all competitors.
+        # The delete covers the entire race (not just one car), so a mid-loop write
+        # failure leaves a partial field until re-backfill. Skipping push_influx_race
+        # on failure keeps the race un-stamped so the next run retries — but note that
+        # skip_if_complete uses only the tracked car's lap count as a completeness proxy.
+        # If the tracked car wrote successfully before a later failure, a future run could
+        # see it as complete and skip the race, leaving other competitors' data missing.
         deleted = False
         all_writes_ok = True
         for write in pending_writes:
@@ -675,9 +681,9 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
         points.append(point)
 
     if points:
-        # One atomic write per session/backfill call. No re-queue on failure
-        # (unlike telem.py's flush loop): this is a one-shot push, and the
-        # backfill path deletes-and-replaces a car's laps wholesale, so the
+        # One push per push_influx call, chunked internally by _write_points_chunked.
+        # No re-queue on failure (unlike telem.py's flush loop): this is a one-shot
+        # push and the backfill path deletes-and-replaces the full race, so the
         # recovery for a failed write is to re-run, not to retry in-place.
         try:
             _write_points_chunked(ctx.write_api, points)
