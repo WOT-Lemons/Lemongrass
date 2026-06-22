@@ -46,7 +46,7 @@ EPOCH_START = '1970-01-01T00:00:00Z'
 # them, rewriting historical data under the new schema. That "rewrite everything"
 # behavior is itself a useful migration tool — bump the version and re-run the
 # backfill to bring all historical races up to the current schema.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _WRITE_BATCH_SIZE = 5000
 
@@ -238,6 +238,12 @@ def live_race(ctx, opts):
     """Called if a race ID is live."""
     session_response = ctx.client.live.get_session(ctx.race_id)
 
+    live_session_id = None
+    live_session_name = None
+    if session_response.get('Successful'):
+        live_session_id = session_response['Session'].get('ID')
+        live_session_name = session_response['Session'].get('Name')
+
     print_rankings([], True, opts.selected_class, {})
 
     competitor_details = {}
@@ -286,13 +292,15 @@ def live_race(ctx, opts):
     if opts.network_mode:
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
         push_influx_race(ctx, race_ts_ms)
+        if live_session_id is not None:
+            push_influx_session(ctx, live_session_id, live_session_name, None)
         if laps:
             # class_position intentionally discarded: historical laps were completed before
             # launch so any position we compute now is stale. monitor_routine owns
             # class_position writes. class_name was resolved above from session_response.
             logging.info("Car %s: class %r", ctx.car_number, class_name)
             push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
-                        class_name=class_name, class_positions=None)
+                        class_name=class_name, class_positions=None, session_id=live_session_id)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -300,7 +308,8 @@ def live_race(ctx, opts):
         write_csv(filename, laps)
 
     if opts.monitor_mode:
-        monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info)
+        monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
+                        session_id=live_session_id)
 
 
 def old_race(ctx, opts):
@@ -323,9 +332,9 @@ def old_race(ctx, opts):
     # First pass: gather every session's laps for the tracked car. We accumulate
     # the write payloads instead of writing inline so the skip check below can see
     # the complete expected lap count before any delete/write happens.
-    for session_id in session_ids_for_race:
-        logging.debug("Getting session details for %s including lap times.", session_id)
-        session_details = ctx.client.results.session_details(session_id, include_lap_times=True)
+    for sid in session_ids_for_race:
+        logging.debug("Getting session details for %s including lap times.", sid)
+        session_details = ctx.client.results.session_details(sid, include_lap_times=True)
         sorted_competitors = [dict(c) for c in session_details['Session']['SortedCompetitors']]
 
         flag_map = {0: "Green", 1: "Yellow", -1: "Finish"}
@@ -344,7 +353,15 @@ def old_race(ctx, opts):
                 laps = laps + [dict(lap) for lap in session_laps]
 
         if opts.network_mode:
+            session_id = session_details['Session']['ID']
+            session_name = session_details['Session'].get('Name', '')
             start_epoc = session_details['Session'].get('SessionStartDateEpoc')
+            session_entry = {
+                'session_id': session_id,
+                'session_name': session_name,
+                'start_epoc': start_epoc,
+                'competitors': [],
+            }
             for competitor in sorted_competitors:
                 comp_laps = competitor.get('LapTimes', [])
                 if not comp_laps:
@@ -365,15 +382,15 @@ def old_race(ctx, opts):
                     for lap in comp_laps
                 ]
                 class_name, class_positions = _resolve_class_historical(comp_number, session_details)
-                pending_writes.append({
+                session_entry['competitors'].append({
                     'influx_laps': influx_laps,
                     'competitor_name': comp_name,
                     'car_info': comp_car_info,
                     'class_name': class_name,
                     'class_positions': class_positions,
-                    'start_epoc': start_epoc,
                     'car_number': comp_number,
                 })
+            pending_writes.append(session_entry)
 
     if competitor_missing:
         logging.info('Car %s not found', ctx.car_number)
@@ -390,10 +407,16 @@ def old_race(ctx, opts):
 
         if opts.dry_run:
             print(UNDERLINE)
-            total_laps = sum(len(w['influx_laps']) for w in pending_writes)
-            for write in pending_writes:
-                print(f"  would write {len(write['influx_laps'])} laps for car {write['car_number']}")
-            print(f"  {len(pending_writes)} competitor(s), {total_laps} laps total")
+            total_laps = sum(
+                len(comp['influx_laps'])
+                for session in pending_writes
+                for comp in session['competitors']
+            )
+            total_competitors = sum(len(s['competitors']) for s in pending_writes)
+            for session in pending_writes:
+                for comp in session['competitors']:
+                    print(f"  would write {len(comp['influx_laps'])} laps for car {comp['car_number']}")
+            print(f"  {total_competitors} competitor(s), {total_laps} laps total")
             print(UNDERLINE)
             return
 
@@ -408,33 +431,32 @@ def old_race(ctx, opts):
                     ctx.race_id, ctx.car_number, total, SCHEMA_VERSION)
                 return
 
-        # Second pass: delete-and-replace the full race, then write all competitors.
-        # The delete covers the entire race (not just one car), so a mid-loop write
-        # failure leaves a partial field until re-backfill. Skipping push_influx_race
-        # on failure keeps the race un-stamped so the next run retries — but note that
-        # skip_if_complete uses only the tracked car's lap count as a completeness proxy.
-        # If the tracked car wrote successfully before a later failure, a future run could
-        # see it as complete and skip the race, leaving other competitors' data missing.
-        all_points = []
-        for write in pending_writes:
-            all_points.extend(_build_lap_points(
-                ctx, write['influx_laps'], write['competitor_name'], write['car_info'],
-                write['class_name'], write['class_positions'], write['start_epoc'],
-                write['car_number']))
-
         delete_existing_laps(ctx)
+        total_competitors = sum(len(s['competitors']) for s in pending_writes)
         logging.info(
-            "Writing %d laps for %d competitors...", len(all_points), len(pending_writes))
+            "Writing %d session(s), %d competitor(s)...",
+            len(pending_writes), total_competitors)
 
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
         try:
-            _write_points_chunked(ctx.write_api, all_points)
+            for session in pending_writes:
+                session_points = []
+                for comp in session['competitors']:
+                    session_points.extend(_build_lap_points(
+                        ctx, comp['influx_laps'], comp['competitor_name'], comp['car_info'],
+                        comp['class_name'], comp['class_positions'], session['start_epoc'],
+                        comp['car_number'], session['session_id']))
+                _write_points_chunked(ctx.write_api, session_points)
             logging.info("All lap data written successfully")
             push_influx_race(ctx, race_ts_ms)
         except Exception as e:
             logging.error("Writing laps failed for race %s: %s", ctx.race_id, e)
-            logging.warning(
-                "Skipping race stamp so next run will re-backfill")
+            logging.warning("Skipping race stamp so next run will re-backfill")
+            return
+
+        for session in pending_writes:
+            push_influx_session(
+                ctx, session['session_id'], session['session_name'], session['start_epoc'])
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
@@ -567,7 +589,8 @@ def write_csv(filename, competitor_lap_times):
         writer.writerows(competitor_lap_times)
 
 
-def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None):
+def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
+                    session_id=None):
     """Monitor mode: poll for new laps and display/push as they arrive."""
     logging.info("Monitoring car %s...", ctx.car_number)
     print(UNDERLINE)
@@ -605,7 +628,8 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     ctx, [current_competitor_lap_times[-1]], True,
                     competitor_name=competitor_name,
                     car_info=car_info,
-                    class_name=class_name, class_positions=class_positions)
+                    class_name=class_name, class_positions=class_positions,
+                    session_id=session_id)
 
 
 def refresh_competitor(ctx):
@@ -653,7 +677,7 @@ def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
 
 
 def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_positions,
-                      start_epoc, car_number):
+                      start_epoc, car_number, session_id=None):
     """Build InfluxDB Point objects for one competitor's laps."""
     effective_epoc = start_epoc if start_epoc is not None else ctx.start_epoc
     if effective_epoc == 0:
@@ -678,6 +702,8 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
             .field("schema_version", SCHEMA_VERSION)
             .time(time_lap_completed_ms, WritePrecision.MS)
         )
+        if session_id is not None:
+            point = point.tag("session_id", str(session_id))
         if class_positions is not None:
             class_pos = class_positions.get(lap_num)
             if class_pos is not None:
@@ -689,7 +715,7 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
 
 def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
                 class_name=None, class_positions=None, start_epoc=None,
-                car_number=None):
+                car_number=None, session_id=None):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
     effective_car_number = car_number if car_number is not None else ctx.car_number
@@ -699,7 +725,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
 
     points = _build_lap_points(
         ctx, laps, competitor_name, car_info, class_name, class_positions,
-        start_epoc, effective_car_number)
+        start_epoc, effective_car_number, session_id)
 
     if points:
         try:
@@ -741,6 +767,29 @@ def push_influx_race(ctx, timestamp_ms):
         ctx.write_api.write(bucket='races', record=point)
     except Exception as e:
         logging.error("Writing race failed: %s", e)
+
+
+def push_influx_session(ctx, session_id, session_name, start_epoc):
+    """Write one session metadata point to the race_sessions bucket, replacing any prior point."""
+    try:
+        ctx.delete_api.delete(
+            start=EPOCH_START,
+            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            predicate=f'_measurement="session" AND session_id="{session_id}"',
+            bucket='race_sessions',
+        )
+        start_epoc_ms = (start_epoc or 0) * 1000
+        point = (
+            Point("session")
+            .tag("race_id", ctx.race_id)
+            .tag("session_id", str(session_id))
+            .field("session_name", session_name or "")
+            .field("start_epoc", start_epoc or 0)
+            .time(start_epoc_ms, WritePrecision.MS)
+        )
+        ctx.write_api.write(bucket='race_sessions', record=point)
+    except Exception as e:
+        logging.error("Writing session failed: %s", e)
 
 
 def existing_lap_counts(ctx):

@@ -406,6 +406,12 @@ class TestPushInfluxClassInfo:
         assert 'car_number=99' in record
         assert 'car_number=42' not in record
 
+    def test_passes_session_id_to_build_lap_points(self):
+        ctx, write_api = self._ctx()
+        with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            _mod.push_influx(ctx, self._laps(), False, session_id=77)
+        assert mock_build.call_args.args[8] == 77
+
 
 class TestSkipIfCompleteArg:
     def test_default_is_false(self):
@@ -1126,6 +1132,88 @@ class TestLiveClassWiring:
         _, kwargs = mock_push.call_args
         assert kwargs.get('car_info') == '2005/Toy/Celica'
 
+    def _session_response_with_id(self, session_id=7, session_name='Day 1', class_desc='A'):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': session_id, 'Name': session_name,
+                'RunNumber': '', 'SessionName': '', 'TrackName': '', 'TrackLength': '',
+                'CurrentTime': '', 'SessionTime': '', 'TimeToGo': '', 'LapsToGo': '',
+                'FlagStatus': '', 'SortMode': '',
+                'Classes': {'classA': {'ClassID': 'classA', 'Description': class_desc}},
+                'Competitors': {
+                    'r1': {
+                        'RacerID': 'r1', 'Number': '42', 'ClassID': 'classA',
+                        'Position': '1', 'Transponder': '', 'FirstName': 'Jane',
+                        'LastName': 'Doe', 'Nationality': '', 'AdditionalData': '',
+                        'Laps': '1', 'TotalTime': '', 'BestPosition': '1',
+                        'BestLap': '1', 'BestLapTime': '', 'LastLapTime': '',
+                    },
+                },
+            },
+        }
+
+    def test_live_race_calls_push_influx_session_in_network_mode(self):
+        ctx = self._make_ctx()
+        ctx.delete_api = MagicMock()
+        ctx.client.live.get_session.return_value = self._session_response_with_id(7, 'Day 1')
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'push_influx_session') as mock_session:
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.live_race(ctx, opts)
+        mock_session.assert_called_once()
+        assert mock_session.call_args.args[1] == 7
+        assert mock_session.call_args.args[2] == 'Day 1'
+
+    def test_live_race_passes_session_id_to_push_influx(self):
+        ctx = self._make_ctx()
+        ctx.delete_api = MagicMock()
+        ctx.client.live.get_session.return_value = self._session_response_with_id(7)
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'push_influx_session'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.live_race(ctx, opts)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('session_id') == 7
+
+    def test_live_race_push_influx_session_not_called_when_not_network_mode(self):
+        ctx = self._make_ctx()
+        ctx.delete_api = MagicMock()
+        ctx.client.live.get_session.return_value = self._session_response_with_id(7)
+        opts = _mod.RaceOptions(network_mode=False)
+        with patch.object(_mod, 'push_influx_session') as mock_session:
+            with patch.object(_mod, 'print_rankings'):
+                _mod.live_race(ctx, opts)
+        mock_session.assert_not_called()
+
+    def test_monitor_routine_passes_session_id_to_push_influx(self):
+        ctx = self._make_ctx()
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        existing_laps = [
+            {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
+        ]
+        new_laps = existing_laps + [
+            {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '3',
+             'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
+        ]
+        mock_stop = MagicMock()
+        mock_stop.wait.side_effect = [False, True]
+        with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
+            with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    with patch.object(_mod, 'push_influx_race'):
+                        _mod.monitor_routine(ctx, existing_laps, opts,
+                                             session_id=55, _stop_event=mock_stop)
+        _, kwargs = mock_push.call_args
+        assert kwargs.get('session_id') == 55
+
     def test_monitor_routine_forwards_competitor_name_and_car_info_to_push_influx(self):
         ctx = self._make_ctx()
         opts = _mod.RaceOptions(network_mode=True, interval=30)
@@ -1425,6 +1513,93 @@ class TestPushInfluxRace:
         write_api.write.assert_not_called()
 
 
+class TestPushInfluxSession:
+    def _ctx(self):
+        write_api = MagicMock()
+        delete_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 1000000)
+        ctx.delete_api = delete_api
+        return ctx, write_api, delete_api
+
+    def _record(self, write_api):
+        return write_api.write.call_args.kwargs['record'].to_line_protocol()
+
+    def test_calls_delete_before_write(self):
+        ctx, write_api, delete_api = self._ctx()
+        call_order = []
+        delete_api.delete.side_effect = lambda **kw: call_order.append('delete')
+        write_api.write.side_effect = lambda **kw: call_order.append('write')
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert call_order == ['delete', 'write']
+
+    def test_delete_targets_correct_session_id(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        predicate = delete_api.delete.call_args.kwargs['predicate']
+        assert 'session_id="42"' in predicate
+        assert '_measurement="session"' in predicate
+
+    def test_delete_targets_race_sessions_bucket(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert delete_api.delete.call_args.kwargs['bucket'] == 'race_sessions'
+
+    def test_writes_to_race_sessions_bucket(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert write_api.write.call_args.kwargs['bucket'] == 'race_sessions'
+
+    def test_measurement_is_session(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert self._record(write_api).startswith('session,')
+
+    def test_race_id_tag(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert 'race_id=999' in self._record(write_api)
+
+    def test_session_id_tag(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert 'session_id=42' in self._record(write_api)
+
+    def test_session_name_field(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert 'session_name="Day 1"' in self._record(write_api)
+
+    def test_start_epoc_field(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert 'start_epoc=1700000000i' in self._record(write_api)
+
+    def test_timestamp_uses_start_epoc_ms(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert self._record(write_api).endswith('1700000000000')
+
+    def test_exception_during_delete_is_logged_not_raised(self, caplog):
+        ctx, write_api, delete_api = self._ctx()
+        delete_api.delete.side_effect = Exception('network error')
+        with caplog.at_level(logging.ERROR):
+            _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
+        assert "Writing session failed" in caplog.text
+
+    def test_exception_during_write_is_logged_not_raised(self, caplog):
+        ctx, write_api, delete_api = self._ctx()
+        write_api.write.side_effect = Exception('network error')
+        with caplog.at_level(logging.ERROR):
+            _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
+        assert "Writing session failed" in caplog.text
+
+    def test_start_epoc_none_writes_zero(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', None)
+        assert 'start_epoc=0i' in self._record(write_api)
+        assert self._record(write_api).endswith('0')
+
+
 class TestDeleteExistingLaps:
     def _ctx(self):
         delete_api = MagicMock()
@@ -1593,6 +1768,82 @@ class TestOldRaceFullField:
                     _mod.old_race(ctx, opts)
         assert not ctx.write_api.write.called
         mock_del.assert_not_called()
+
+    def test_push_influx_session_called_once_per_session(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}, {'ID': 2}]}
+        ctx.client.results.session_details.return_value = self._session_details_two_cars()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx_session') as mock_session:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        assert mock_session.call_count == 2
+
+    def test_push_influx_session_called_with_correct_session_id(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx_session') as mock_session:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        session_ids = {c.args[1] for c in mock_session.call_args_list}
+        assert 1 in session_ids
+
+    def test_push_influx_session_not_called_when_not_network_mode(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
+        ctx.delete_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details_two_cars()
+        opts = _mod.RaceOptions(network_mode=False)
+        with patch.object(_mod, 'push_influx_session') as mock_session:
+            with patch.object(_mod, 'print_rankings'):
+                _mod.old_race(ctx, opts)
+        mock_session.assert_not_called()
+
+    def test_push_influx_session_not_called_when_car_missing(self):
+        ctx = self._ctx(self._session_details_two_cars(), car_number='77')
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_session') as mock_session:
+            _mod.old_race(ctx, opts)
+        mock_session.assert_not_called()
+
+    def test_build_lap_points_receives_session_id(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        for c in mock_build.call_args_list:
+            assert c.args[8] == 1  # session_id from session details ID=1
+
+
+class TestBuildLapPointsSessionId:
+    def _laps(self):
+        return [{'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'}]
+
+    def _build(self, session_id):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        points = _mod._build_lap_points(
+            ctx, self._laps(), 'Jane Doe', None, 'A', None, 0, '42', session_id)
+        return points[0].to_line_protocol()
+
+    def test_session_id_tag_integer(self):
+        assert 'session_id=7' in self._build(7)
+
+    def test_session_id_tag_string(self):
+        assert 'session_id=99' in self._build('99')
+
+    def test_session_id_tag_absent_when_none(self):
+        assert 'session_id' not in self._build(None)
 
 
 class TestWritePointsChunked:
