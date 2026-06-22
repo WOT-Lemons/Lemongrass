@@ -638,7 +638,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             if poll_count % _LIVE_CHECK_INTERVAL == 0:
                 try:
                     live_response = ctx.client.race.is_live(ctx.race_id)
-                    if not live_response.get('IsLive'):
+                    if live_response.get('Successful') and not live_response.get('IsLive'):
                         print("Race has ended.")
                         return MonitorStatus.RACE_ENDED
                 except Exception:
