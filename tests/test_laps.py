@@ -1681,6 +1681,82 @@ class TestOldRaceFullField:
         assert not ctx.write_api.write.called
         mock_del.assert_not_called()
 
+    def test_push_influx_session_called_once_per_session(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}, {'ID': 2}]}
+        ctx.client.results.session_details.return_value = self._session_details_two_cars()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx_session') as mock_session:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        assert mock_session.call_count == 2
+
+    def test_push_influx_session_called_with_correct_session_id(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx_session') as mock_session:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        session_ids = {c.args[1] for c in mock_session.call_args_list}
+        assert 1 in session_ids
+
+    def test_push_influx_session_not_called_when_not_network_mode(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
+        ctx.delete_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details_two_cars()
+        opts = _mod.RaceOptions(network_mode=False)
+        with patch.object(_mod, 'push_influx_session') as mock_session:
+            with patch.object(_mod, 'print_rankings'):
+                _mod.old_race(ctx, opts)
+        mock_session.assert_not_called()
+
+    def test_push_influx_session_not_called_when_car_missing(self):
+        ctx = self._ctx(self._session_details_two_cars(), car_number='77')
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_session') as mock_session:
+            _mod.old_race(ctx, opts)
+        mock_session.assert_not_called()
+
+    def test_build_lap_points_receives_session_id(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        for c in mock_build.call_args_list:
+            assert c.args[8] == 1  # session_id from session details ID=1
+
+
+class TestBuildLapPointsSessionId:
+    def _laps(self):
+        return [{'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'}]
+
+    def _build(self, session_id):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        points = _mod._build_lap_points(
+            ctx, self._laps(), 'Jane Doe', None, 'A', None, 0, '42', session_id)
+        return points[0].to_line_protocol()
+
+    def test_session_id_tag_integer(self):
+        assert 'session_id=7' in self._build(7)
+
+    def test_session_id_tag_string(self):
+        assert 'session_id=99' in self._build('99')
+
+    def test_session_id_tag_absent_when_none(self):
+        assert 'session_id' not in self._build(None)
+
 
 class TestWritePointsChunked:
     def test_single_chunk_when_below_batch_size(self):
