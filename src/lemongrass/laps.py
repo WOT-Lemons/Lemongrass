@@ -447,13 +447,16 @@ def old_race(ctx, opts):
                         comp['class_name'], comp['class_positions'], session['start_epoc'],
                         comp['car_number'], session['session_id']))
                 _write_points_chunked(ctx.write_api, session_points)
-                push_influx_session(
-                    ctx, session['session_id'], session['session_name'], session['start_epoc'])
             logging.info("All lap data written successfully")
             push_influx_race(ctx, race_ts_ms)
         except Exception as e:
             logging.error("Writing laps failed for race %s: %s", ctx.race_id, e)
             logging.warning("Skipping race stamp so next run will re-backfill")
+            return
+
+        for session in pending_writes:
+            push_influx_session(
+                ctx, session['session_id'], session['session_name'], session['start_epoc'])
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
