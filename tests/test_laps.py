@@ -1547,6 +1547,17 @@ class TestOldRaceFullField:
         for c in mock_push.call_args_list:
             assert c.kwargs.get('car_number') is not None
 
+    def test_race_not_stamped_when_write_fails(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx', return_value=False):
+                with patch.object(_mod, 'push_influx_race') as mock_stamp:
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_stamp.assert_not_called()
+
     def test_validation_aborts_when_no_laps_collected(self):
         """Tracked car found but has zero laps — do not touch InfluxDB."""
         competitor_no_laps = self._make_competitor('42', 1, '1')

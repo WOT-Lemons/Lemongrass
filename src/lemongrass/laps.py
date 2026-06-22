@@ -392,20 +392,29 @@ def old_race(ctx, opts):
 
         # Second pass: delete-and-replace the car's laps, then write each session.
         deleted = False
+        all_writes_ok = True
         for write in pending_writes:
             if not deleted:
                 delete_existing_laps(ctx)
                 deleted = True
-            push_influx(
+            ok = push_influx(
                 ctx, write['influx_laps'], False,
                 competitor_name=write['competitor_name'],
                 car_info=write['car_info'],
                 class_name=write['class_name'], class_positions=write['class_positions'],
                 start_epoc=write['start_epoc'],
                 car_number=write['car_number'])
+            if not ok:
+                all_writes_ok = False
 
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-        push_influx_race(ctx, race_ts_ms)
+        if all_writes_ok:
+            push_influx_race(ctx, race_ts_ms)
+        else:
+            logging.warning(
+                "One or more lap writes failed for race %s — skipping race stamp so next "
+                "run will re-backfill",
+                ctx.race_id)
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
@@ -677,8 +686,11 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
                 logging.info('All lap data written successfully')
         except Exception as e:
             logging.error("Writing %d laps failed: %s", len(points), e)
+            print(UNDERLINE)
+            return False
 
     print(UNDERLINE)
+    return True
 
 
 def push_influx_race(ctx, timestamp_ms):
@@ -711,7 +723,11 @@ def push_influx_race(ctx, timestamp_ms):
 def existing_lap_counts(ctx):
     """Return (total_laps, current_laps) for the tracked car's laps in this race.
 
-    total_laps  — number of lap points written for the car.
+    Returns the count of existing laps for the tracked car. Used as a completeness
+    proxy — if the tracked car's laps are present and current, the race is considered
+    complete (the full field is not verified).
+
+    total_laps  — number of lap points written for the tracked car.
     current_laps — number of those laps stamped with the current SCHEMA_VERSION.
 
     A race is safe to skip only when both equal RaceMonitor's reported lap total:
@@ -749,7 +765,7 @@ def delete_existing_laps(ctx):
 
 
 def _resolve_class_historical(car_number, session_details):
-    """Return (class_name, {lap_num: class_position}) for the tracked car."""
+    """Return (class_name, {lap_num: class_position}) for the given car_number."""
     session = session_details['Session']
     competitors = session['SortedCompetitors']
     categories = session['Categories']
