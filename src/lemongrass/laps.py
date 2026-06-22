@@ -646,9 +646,9 @@ def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
     chunks = range(0, len(points), batch_size)
     total = len(chunks)
     for batch_num, i in enumerate(chunks, 1):
-        if total > 1:
-            logging.info("Writing batch %d of %d", batch_num, total)
         write_api.write(bucket='laps', record=points[i:i + batch_size])
+        if total > 1:
+            logging.info("Batch %d of %d written successfully", batch_num, total)
 
 
 def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
