@@ -109,8 +109,8 @@ def _build_parser():
                              'under the current schema version (historical -n mode only)')
     parser.add_argument('--dry-run', dest='dry_run', default=False,
                         action='store_true',
-                        help='Show what would be written without touching InfluxDB; '
-                             'implies -n (historical mode only)')
+                        help='Implies -n; show what would be written without touching InfluxDB '
+                             '(historical mode only)')
     parser.add_argument('-v', '--verbose', help="Set debug logging", action='store_true')
     parser.add_argument(
         '--interval',
