@@ -1600,3 +1600,57 @@ class TestWritePointsChunked:
         write_api = MagicMock()
         _mod._write_points_chunked(write_api, [], batch_size=5000)
         write_api.write.assert_not_called()
+
+
+class TestDryRun:
+    def _ctx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
+        ctx.delete_api = None
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [
+                    {
+                        'Number': '42', 'Category': '1', 'ID': 1, 'SessionID': 1,
+                        'RaceID': 999, 'FirstName': 'Driver', 'LastName': '42',
+                        'Position': '1', 'Laps': '2', 'LastLapTime': '',
+                        'BestPosition': '1', 'BestLap': '1',
+                        'BestLapTime': '0:01:30.000', 'TotalTime': '0:03:00.000',
+                        'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+                        'LapTimes': [
+                            {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                             'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+                            {'Lap': '2', 'LapTime': '0:01:30.000', 'Position': '1',
+                             'FlagStatus': 0, 'TotalTime': '0:03:00.000'},
+                        ],
+                    },
+                ],
+            },
+        }
+        return ctx
+
+    def test_does_not_call_push_influx_or_delete(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, dry_run=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1, 2: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'delete_existing_laps') as mock_del:
+                    with patch.object(_mod, 'push_influx_race') as mock_stamp:
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_push.assert_not_called()
+        mock_del.assert_not_called()
+        mock_stamp.assert_not_called()
+
+    def test_prints_lap_summary(self, capsys):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, dry_run=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1, 2: 1})):
+            with patch.object(_mod, 'print_rankings'):
+                _mod.old_race(ctx, opts)
+        out = capsys.readouterr().out
+        assert 'car 42' in out
+        assert '2 laps' in out

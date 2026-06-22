@@ -82,6 +82,7 @@ class RaceOptions:
     selected_class: str | None = None
     interval: int = 30
     skip_if_complete: bool = False
+    dry_run: bool = False
 
 
 def _build_parser():
@@ -106,6 +107,10 @@ def _build_parser():
                         action='store_true',
                         help='Skip the backfill if this car already has all its laps written '
                              'under the current schema version (historical -n mode only)')
+    parser.add_argument('--dry-run', dest='dry_run', default=False,
+                        action='store_true',
+                        help='Show what would be written without touching InfluxDB; '
+                             'implies -n (historical mode only)')
     parser.add_argument('-v', '--verbose', help="Set debug logging", action='store_true')
     parser.add_argument(
         '--interval',
@@ -139,7 +144,7 @@ def main():
         sys.exit(1)
 
     influx_token = None
-    if args.network_mode:
+    if args.network_mode and not args.dry_run:
         influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
         if not influx_token:
             logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
@@ -149,12 +154,13 @@ def main():
     car_number = str(args.car_number[0])
 
     opts = RaceOptions(
-        network_mode=args.network_mode,
+        network_mode=args.network_mode or args.dry_run,
         monitor_mode=args.monitor_mode,
         save_file=args.save_file,
         selected_class=args.selected_class,
         interval=args.interval,
         skip_if_complete=args.skip_if_complete,
+        dry_run=args.dry_run,
     )
 
     try:
@@ -189,6 +195,10 @@ def main():
                 return 1
 
             if not opts.network_mode:
+                return _run_race(
+                    RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata), opts, response)
+
+            if opts.dry_run:
                 return _run_race(
                     RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata), opts, response)
 
@@ -379,6 +389,16 @@ def old_race(ctx, opts):
 
     if opts.network_mode:
         expected = len(laps)
+
+        if opts.dry_run:
+            print(UNDERLINE)
+            total_laps = sum(len(w['influx_laps']) for w in pending_writes)
+            for write in pending_writes:
+                print(f"  would write {len(write['influx_laps'])} laps for car {write['car_number']}")
+            print(f"  {len(pending_writes)} competitor(s), {total_laps} laps total")
+            print(UNDERLINE)
+            return
+
         if opts.skip_if_complete and expected > 0:
             total, current = existing_lap_counts(ctx)
             if total == expected and current == expected:
