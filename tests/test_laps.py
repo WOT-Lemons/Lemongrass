@@ -43,6 +43,51 @@ class TestMonitorRoutine:
         result = _mod.refresh_competitor(ctx)
         assert result == []
 
+    def test_collects_all_new_laps_not_just_last(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        lap1 = {'Lap': '1', 'LapTime': '1:00.000'}
+        lap2 = {'Lap': '2', 'LapTime': '1:01.000'}
+        lap3 = {'Lap': '3', 'LapTime': '1:02.000'}
+
+        call_count = 0
+        def fake_refresh(c):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return [lap1, lap2, lap3]
+
+        existing_laps = [lap1]
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(ctx.client.live, 'get_session',
+                              return_value={'Successful': False}):
+                _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=stop)
+
+        assert lap2 in existing_laps
+        assert lap3 in existing_laps
+
+    def test_empty_refresh_does_not_crash(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        call_count = 0
+        def fake_refresh(c):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(ctx.client.live, 'get_session',
+                              return_value={'Successful': False}):
+                _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        # no exception raised is the assertion
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):

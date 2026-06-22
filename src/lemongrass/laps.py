@@ -619,23 +619,28 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     push_influx_race(ctx, ctx.start_epoc * 1000)
 
         current_competitor_lap_times = refresh_competitor(ctx)
-        if current_competitor_lap_times[-1] not in laps:
-            current_competitor_lap_time_df = pandas.json_normalize(
-                current_competitor_lap_times[-1])
-            print(current_competitor_lap_time_df.to_string(index=False, header=False))
-            laps.append(current_competitor_lap_times[-1])
-            if opts.network_mode:
-                class_name, class_position = _resolve_class_live(
-                    ctx.client.live.get_session(ctx.race_id), ctx.car_number)
-                new_lap_num = int(current_competitor_lap_times[-1]['Lap'])
-                class_positions = (
-                    {new_lap_num: class_position} if class_position is not None else None)
-                push_influx(
-                    ctx, [current_competitor_lap_times[-1]], True,
-                    competitor_name=competitor_name,
-                    car_info=car_info,
-                    class_name=class_name, class_positions=class_positions,
-                    session_id=session_id)
+        if not current_competitor_lap_times:
+            continue
+
+        session_response = ctx.client.live.get_session(ctx.race_id)
+
+        for lap in current_competitor_lap_times:
+            if lap not in laps:
+                current_competitor_lap_time_df = pandas.json_normalize(lap)
+                print(current_competitor_lap_time_df.to_string(index=False, header=False))
+                laps.append(lap)
+                if opts.network_mode:
+                    class_name, class_position = _resolve_class_live(
+                        session_response, ctx.car_number)
+                    new_lap_num = int(lap['Lap'])
+                    class_positions = (
+                        {new_lap_num: class_position} if class_position is not None else None)
+                    push_influx(
+                        ctx, [lap], True,
+                        competitor_name=competitor_name,
+                        car_info=car_info,
+                        class_name=class_name, class_positions=class_positions,
+                        session_id=session_id)
 
 
 def refresh_competitor(ctx):
