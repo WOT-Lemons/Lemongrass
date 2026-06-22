@@ -1491,15 +1491,19 @@ class TestPushInfluxSession:
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert self._record(write_api).endswith('1700000000000')
 
-    def test_exception_during_delete_is_logged_not_raised(self):
+    def test_exception_during_delete_is_logged_not_raised(self, caplog):
         ctx, write_api, delete_api = self._ctx()
         delete_api.delete.side_effect = Exception('network error')
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
+        with caplog.at_level(logging.ERROR):
+            _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
+        assert "Writing session failed" in caplog.text
 
-    def test_exception_during_write_is_logged_not_raised(self):
+    def test_exception_during_write_is_logged_not_raised(self, caplog):
         ctx, write_api, delete_api = self._ctx()
         write_api.write.side_effect = Exception('network error')
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
+        with caplog.at_level(logging.ERROR):
+            _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
+        assert "Writing session failed" in caplog.text
 
     def test_start_epoc_none_writes_zero(self):
         ctx, write_api, delete_api = self._ctx()
