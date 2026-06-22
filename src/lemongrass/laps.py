@@ -350,6 +350,11 @@ def old_race(ctx, opts):
                 if not comp_laps:
                     continue
                 comp_number = competitor['Number']
+                try:
+                    int(comp_number)
+                except (ValueError, TypeError):
+                    logging.debug("Skipping non-integer competitor number %r", comp_number)
+                    continue
                 comp_name = (
                     f"{competitor.get('FirstName', '')} {competitor.get('LastName', '')}".strip()
                     or None
@@ -410,30 +415,26 @@ def old_race(ctx, opts):
         # skip_if_complete uses only the tracked car's lap count as a completeness proxy.
         # If the tracked car wrote successfully before a later failure, a future run could
         # see it as complete and skip the race, leaving other competitors' data missing.
-        deleted = False
-        all_writes_ok = True
+        all_points = []
         for write in pending_writes:
-            if not deleted:
-                delete_existing_laps(ctx)
-                deleted = True
-            ok = push_influx(
-                ctx, write['influx_laps'], False,
-                competitor_name=write['competitor_name'],
-                car_info=write['car_info'],
-                class_name=write['class_name'], class_positions=write['class_positions'],
-                start_epoc=write['start_epoc'],
-                car_number=write['car_number'])
-            if not ok:
-                all_writes_ok = False
+            all_points.extend(_build_lap_points(
+                ctx, write['influx_laps'], write['competitor_name'], write['car_info'],
+                write['class_name'], write['class_positions'], write['start_epoc'],
+                write['car_number']))
+
+        delete_existing_laps(ctx)
+        logging.info(
+            "Writing %d laps for %d competitors...", len(all_points), len(pending_writes))
 
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-        if all_writes_ok:
+        try:
+            _write_points_chunked(ctx.write_api, all_points)
+            logging.info("All lap data written successfully")
             push_influx_race(ctx, race_ts_ms)
-        else:
+        except Exception as e:
+            logging.error("Writing laps failed for race %s: %s", ctx.race_id, e)
             logging.warning(
-                "One or more lap writes failed for race %s — skipping race stamp so next "
-                "run will re-backfill",
-                ctx.race_id)
+                "Skipping race stamp so next run will re-backfill")
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
@@ -651,36 +652,25 @@ def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
             logging.info("Batch %d of %d written successfully", batch_num, total)
 
 
-def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
-                class_name=None, class_positions=None, start_epoc=None,
-                car_number=None):
-    """Push lap data to InfluxDB."""
-    logging.debug("Entering network mode.")
+def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_positions,
+                      start_epoc, car_number):
+    """Build InfluxDB Point objects for one competitor's laps."""
     effective_epoc = start_epoc if start_epoc is not None else ctx.start_epoc
     if effective_epoc == 0:
         logging.warning("Start epoch is 0; lap timestamps will be anchored to Unix epoch")
-    logging.debug("Start epoch in seconds: %s", effective_epoc)
     start_epoc_ms = effective_epoc * 1000
-    logging.debug("Start epoch in milliseconds: %s", start_epoc_ms)
-
-    if not monitor_mode:
-        logging.info("Writing laps to influx...")
-
     points = []
-    effective_car_number = car_number if car_number is not None else ctx.car_number
     for lap in laps:
         time_lap_completed_ms = start_epoc_ms + _time_to_ms(lap['TotalTime'])
         lap_time_ms = _time_to_ms(lap['LapTime'])
-
         lap_num = int(lap['Lap'])
-
         point = (
             Point("lap")
             .tag("race_id", ctx.race_id)
             .tag("competitor_name", competitor_name)
             .tag("car_info", car_info)
             .tag("class", class_name)
-            .tag("car_number", effective_car_number)
+            .tag("car_number", car_number)
             .field("lap_no", lap_num)
             .field("lap_time", lap_time_ms)
             .field("position", int(lap['Position']))
@@ -688,20 +678,30 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
             .field("schema_version", SCHEMA_VERSION)
             .time(time_lap_completed_ms, WritePrecision.MS)
         )
-
         if class_positions is not None:
             class_pos = class_positions.get(lap_num)
             if class_pos is not None:
                 point = point.field("class_position", class_pos)
-
         logging.debug(point.to_line_protocol())
         points.append(point)
+    return points
+
+
+def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
+                class_name=None, class_positions=None, start_epoc=None,
+                car_number=None):
+    """Push lap data to InfluxDB."""
+    logging.debug("Entering network mode.")
+    effective_car_number = car_number if car_number is not None else ctx.car_number
+
+    if not monitor_mode:
+        logging.info("Writing laps to influx...")
+
+    points = _build_lap_points(
+        ctx, laps, competitor_name, car_info, class_name, class_positions,
+        start_epoc, effective_car_number)
 
     if points:
-        # One push per push_influx call, chunked internally by _write_points_chunked.
-        # No re-queue on failure (unlike telem.py's flush loop): this is a one-shot
-        # push and the backfill path deletes-and-replaces the full race, so the
-        # recovery for a failed write is to re-run, not to retry in-place.
         try:
             _write_points_chunked(ctx.write_api, points)
             logging.debug("Wrote %d laps to influx.", len(points))
