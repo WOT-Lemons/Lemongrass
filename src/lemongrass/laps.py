@@ -238,6 +238,12 @@ def live_race(ctx, opts):
     """Called if a race ID is live."""
     session_response = ctx.client.live.get_session(ctx.race_id)
 
+    live_session_id = None
+    live_session_name = None
+    if session_response.get('Successful'):
+        live_session_id = session_response['Session'].get('ID')
+        live_session_name = session_response['Session'].get('Name')
+
     print_rankings([], True, opts.selected_class, {})
 
     competitor_details = {}
@@ -286,13 +292,15 @@ def live_race(ctx, opts):
     if opts.network_mode:
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
         push_influx_race(ctx, race_ts_ms)
+        if live_session_id is not None:
+            push_influx_session(ctx, live_session_id, live_session_name, None)
         if laps:
             # class_position intentionally discarded: historical laps were completed before
             # launch so any position we compute now is stale. monitor_routine owns
             # class_position writes. class_name was resolved above from session_response.
             logging.info("Car %s: class %r", ctx.car_number, class_name)
             push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
-                        class_name=class_name, class_positions=None)
+                        class_name=class_name, class_positions=None, session_id=live_session_id)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -300,7 +308,8 @@ def live_race(ctx, opts):
         write_csv(filename, laps)
 
     if opts.monitor_mode:
-        monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info)
+        monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
+                        session_id=live_session_id)
 
 
 def old_race(ctx, opts):
@@ -577,7 +586,8 @@ def write_csv(filename, competitor_lap_times):
         writer.writerows(competitor_lap_times)
 
 
-def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None):
+def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
+                    session_id=None):
     """Monitor mode: poll for new laps and display/push as they arrive."""
     logging.info("Monitoring car %s...", ctx.car_number)
     print(UNDERLINE)
@@ -615,7 +625,8 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     ctx, [current_competitor_lap_times[-1]], True,
                     competitor_name=competitor_name,
                     car_info=car_info,
-                    class_name=class_name, class_positions=class_positions)
+                    class_name=class_name, class_positions=class_positions,
+                    session_id=session_id)
 
 
 def refresh_competitor(ctx):
@@ -701,7 +712,7 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
 
 def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
                 class_name=None, class_positions=None, start_epoc=None,
-                car_number=None):
+                car_number=None, session_id=None):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
     effective_car_number = car_number if car_number is not None else ctx.car_number
@@ -711,7 +722,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
 
     points = _build_lap_points(
         ctx, laps, competitor_name, car_info, class_name, class_positions,
-        start_epoc, effective_car_number)
+        start_epoc, effective_car_number, session_id)
 
     if points:
         try:
