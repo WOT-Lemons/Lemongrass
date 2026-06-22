@@ -1425,6 +1425,89 @@ class TestPushInfluxRace:
         write_api.write.assert_not_called()
 
 
+class TestPushInfluxSession:
+    def _ctx(self):
+        write_api = MagicMock()
+        delete_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 1000000)
+        ctx.delete_api = delete_api
+        return ctx, write_api, delete_api
+
+    def _record(self, write_api):
+        return write_api.write.call_args.kwargs['record'].to_line_protocol()
+
+    def test_calls_delete_before_write(self):
+        ctx, write_api, delete_api = self._ctx()
+        call_order = []
+        delete_api.delete.side_effect = lambda **kw: call_order.append('delete')
+        write_api.write.side_effect = lambda **kw: call_order.append('write')
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert call_order == ['delete', 'write']
+
+    def test_delete_targets_correct_session_id(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        predicate = delete_api.delete.call_args.kwargs['predicate']
+        assert 'session_id="42"' in predicate
+        assert '_measurement="session"' in predicate
+
+    def test_delete_targets_race_sessions_bucket(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert delete_api.delete.call_args.kwargs['bucket'] == 'race_sessions'
+
+    def test_writes_to_race_sessions_bucket(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert write_api.write.call_args.kwargs['bucket'] == 'race_sessions'
+
+    def test_measurement_is_session(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert self._record(write_api).startswith('session,')
+
+    def test_race_id_tag(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert 'race_id=999' in self._record(write_api)
+
+    def test_session_id_tag(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert 'session_id=42' in self._record(write_api)
+
+    def test_session_name_field(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert 'session_name="Day 1"' in self._record(write_api)
+
+    def test_start_epoc_field(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert 'start_epoc=1700000000i' in self._record(write_api)
+
+    def test_timestamp_uses_start_epoc_ms(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
+        assert self._record(write_api).endswith('1700000000000')
+
+    def test_exception_during_delete_is_logged_not_raised(self):
+        ctx, write_api, delete_api = self._ctx()
+        delete_api.delete.side_effect = Exception('network error')
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
+
+    def test_exception_during_write_is_logged_not_raised(self):
+        ctx, write_api, delete_api = self._ctx()
+        write_api.write.side_effect = Exception('network error')
+        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
+
+    def test_start_epoc_none_writes_zero(self):
+        ctx, write_api, delete_api = self._ctx()
+        _mod.push_influx_session(ctx, 42, 'Day 1', None)
+        assert 'start_epoc=0i' in self._record(write_api)
+        assert self._record(write_api).endswith('0')
+
+
 class TestDeleteExistingLaps:
     def _ctx(self):
         delete_api = MagicMock()

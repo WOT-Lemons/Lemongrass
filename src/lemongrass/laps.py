@@ -743,6 +743,29 @@ def push_influx_race(ctx, timestamp_ms):
         logging.error("Writing race failed: %s", e)
 
 
+def push_influx_session(ctx, session_id, session_name, start_epoc):
+    """Write one session metadata point to the race_sessions bucket, replacing any prior point."""
+    try:
+        ctx.delete_api.delete(
+            start=EPOCH_START,
+            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            predicate=f'_measurement="session" AND session_id="{session_id}"',
+            bucket='race_sessions',
+        )
+        start_epoc_ms = (start_epoc or 0) * 1000
+        point = (
+            Point("session")
+            .tag("race_id", ctx.race_id)
+            .tag("session_id", str(session_id))
+            .field("session_name", session_name or "")
+            .field("start_epoc", start_epoc or 0)
+            .time(start_epoc_ms, WritePrecision.MS)
+        )
+        ctx.write_api.write(bucket='race_sessions', record=point)
+    except Exception as e:
+        logging.error("Writing session failed: %s", e)
+
+
 def existing_lap_counts(ctx):
     """Return (total_laps, current_laps) for the tracked car's laps in this race.
 
