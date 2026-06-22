@@ -14,6 +14,7 @@
 
 import argparse
 import csv
+import enum
 import logging
 import os
 from collections import defaultdict
@@ -49,6 +50,11 @@ EPOCH_START = '1970-01-01T00:00:00Z'
 SCHEMA_VERSION = 3
 
 _WRITE_BATCH_SIZE = 5000
+
+
+class MonitorStatus(enum.Enum):
+    RACE_ENDED = "race_ended"
+    INTERRUPTED = "interrupted"
 
 
 @dataclass
@@ -641,8 +647,9 @@ def refresh_competitor(ctx):
     if response['Successful']:
         laps = response['Details']['Laps']
 
-    logging.debug(
-        "Current lap is %s with time %s.", laps[-1]['Lap'], laps[-1]['LapTime'])
+    if laps:
+        logging.debug(
+            "Current lap is %s with time %s.", laps[-1]['Lap'], laps[-1]['LapTime'])
     return laps
 
 

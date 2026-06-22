@@ -33,6 +33,16 @@ class TestMonitorRoutine:
         with patch.object(_mod, 'refresh_competitor', return_value=[{'Lap': 1}]):
             _mod.monitor_routine(ctx, [{'Lap': 1}], opts, _stop_event=stop)
 
+    def test_monitor_status_values_exist(self):
+        assert _mod.MonitorStatus.RACE_ENDED is not None
+        assert _mod.MonitorStatus.INTERRUPTED is not None
+
+    def test_refresh_competitor_empty_response_returns_empty_list(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        ctx.client.live.get_racer.return_value = {'Successful': False}
+        result = _mod.refresh_competitor(ctx)
+        assert result == []
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
