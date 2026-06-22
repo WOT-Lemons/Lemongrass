@@ -1,6 +1,6 @@
 import logging
 import threading
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
 
 import lemongrass.laps as _mod
 
@@ -398,6 +398,13 @@ class TestPushInfluxClassInfo:
         assert 'lap_time=90000i' in record
         # TotalTime 45:30.000 = 2730000 ms; start_epoc=0 → timestamp 2730000
         assert record.endswith('2730000')
+
+    def test_explicit_car_number_overrides_ctx(self):
+        ctx, write_api = self._ctx()  # ctx.car_number = '42'
+        _mod.push_influx(ctx, self._laps(), False, car_number='99')
+        record = self._record(write_api)
+        assert 'car_number=99' in record
+        assert 'car_number=42' not in record
 
 
 class TestSkipIfCompleteArg:
@@ -1453,3 +1460,24 @@ class TestDeleteExistingLaps:
         delete_api.delete.side_effect = Exception("network error")
         _mod.delete_existing_laps(ctx)  # must not raise
         assert "Deleting existing laps failed" in caplog.text
+
+
+class TestWritePointsChunked:
+    def test_single_chunk_when_below_batch_size(self):
+        write_api = MagicMock()
+        points = [MagicMock() for _ in range(10)]
+        _mod._write_points_chunked(write_api, points, batch_size=5000)
+        write_api.write.assert_called_once_with(bucket='laps', record=points)
+
+    def test_splits_into_two_chunks_at_boundary(self):
+        write_api = MagicMock()
+        points = [MagicMock() for _ in range(6)]
+        _mod._write_points_chunked(write_api, points, batch_size=5)
+        assert write_api.write.call_count == 2
+        assert write_api.write.call_args_list[0] == call(bucket='laps', record=points[:5])
+        assert write_api.write.call_args_list[1] == call(bucket='laps', record=points[5:])
+
+    def test_empty_points_makes_no_calls(self):
+        write_api = MagicMock()
+        _mod._write_points_chunked(write_api, [], batch_size=5000)
+        write_api.write.assert_not_called()

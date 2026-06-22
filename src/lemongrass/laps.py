@@ -48,6 +48,8 @@ EPOCH_START = '1970-01-01T00:00:00Z'
 # backfill to bring all historical races up to the current schema.
 SCHEMA_VERSION = 1
 
+_WRITE_BATCH_SIZE = 5000
+
 
 @dataclass
 class RaceMetadata:
@@ -592,8 +594,14 @@ def _time_to_ms(value):
         return 0
 
 
+def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
+    for i in range(0, len(points), batch_size):
+        write_api.write(bucket='laps', record=points[i:i + batch_size])
+
+
 def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
-                class_name=None, class_positions=None, start_epoc=None):
+                class_name=None, class_positions=None, start_epoc=None,
+                car_number=None):
     """Push lap data to InfluxDB."""
     logging.debug("Entering network mode.")
     effective_epoc = start_epoc if start_epoc is not None else ctx.start_epoc
@@ -607,6 +615,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
         logging.info("Writing laps to influx...")
 
     points = []
+    effective_car_number = car_number if car_number is not None else ctx.car_number
     for lap in laps:
         time_lap_completed_ms = start_epoc_ms + _time_to_ms(lap['TotalTime'])
         lap_time_ms = _time_to_ms(lap['LapTime'])
@@ -619,7 +628,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
             .tag("competitor_name", competitor_name)
             .tag("car_info", car_info)
             .tag("class", class_name)
-            .tag("car_number", ctx.car_number)
+            .tag("car_number", effective_car_number)
             .field("lap_no", lap_num)
             .field("lap_time", lap_time_ms)
             .field("position", int(lap['Position']))
@@ -642,7 +651,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
         # backfill path deletes-and-replaces a car's laps wholesale, so the
         # recovery for a failed write is to re-run, not to retry in-place.
         try:
-            ctx.write_api.write(bucket='laps', record=points)
+            _write_points_chunked(ctx.write_api, points)
             logging.debug("Wrote %d laps to influx.", len(points))
             if not monitor_mode:
                 logging.info('All lap data written successfully')
