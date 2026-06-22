@@ -50,6 +50,7 @@ EPOCH_START = '1970-01-01T00:00:00Z'
 SCHEMA_VERSION = 3
 
 _WRITE_BATCH_SIZE = 5000
+_LIVE_CHECK_INTERVAL = 5
 
 
 class MonitorStatus(enum.Enum):
@@ -596,7 +597,7 @@ def write_csv(filename, competitor_lap_times):
 
 
 def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
-                    session_id=None):
+                    session_id=None) -> MonitorStatus | None:
     """Monitor mode: poll for new laps and display/push as they arrive."""
     logging.info("Monitoring car %s...", ctx.car_number)
     print(UNDERLINE)
@@ -606,51 +607,67 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     print(lap_time_df.to_string(index=False))
 
     stop = _stop_event if _stop_event is not None else threading.Event()
-    while not stop.wait(timeout=opts.interval):
-        if opts.network_mode and ctx.start_epoc == 0:
-            race_details = ctx.client.race.details(ctx.race_id)
-            if race_details.get('Successful'):
-                new_epoc = race_details['Race'].get('StartDateEpoc', 0)
-                if new_epoc != 0:
-                    ctx.start_epoc = new_epoc
-                    if ctx.metadata is not None:
-                        ctx.metadata.end_time_epoc = race_details['Race'].get(
-                            'EndDateEpoc', ctx.metadata.end_time_epoc)
-                    push_influx_race(ctx, ctx.start_epoc * 1000)
+    poll_count = 0
+    try:
+        while not stop.wait(timeout=opts.interval):
+            poll_count += 1
 
-        session_response = ctx.client.live.get_session(ctx.race_id)
-        if session_response.get('Successful'):
-            new_session_id = session_response['Session'].get('ID')
-            if new_session_id and new_session_id != session_id:
-                print(f"\nNew session: {session_response['Session'].get('Name', '')}")
-                session_id = new_session_id
-                if opts.network_mode:
-                    push_influx_session(
-                        ctx, session_id, session_response['Session'].get('Name'), None)
-        else:
-            logging.debug("get_session returned unsuccessful; may be between sessions")
+            if opts.network_mode and ctx.start_epoc == 0:
+                race_details = ctx.client.race.details(ctx.race_id)
+                if race_details.get('Successful'):
+                    new_epoc = race_details['Race'].get('StartDateEpoc', 0)
+                    if new_epoc != 0:
+                        ctx.start_epoc = new_epoc
+                        if ctx.metadata is not None:
+                            ctx.metadata.end_time_epoc = race_details['Race'].get(
+                                'EndDateEpoc', ctx.metadata.end_time_epoc)
+                        push_influx_race(ctx, ctx.start_epoc * 1000)
 
-        current_competitor_lap_times = refresh_competitor(ctx)
-        if not current_competitor_lap_times:
-            continue
+            session_response = ctx.client.live.get_session(ctx.race_id)
+            if session_response.get('Successful'):
+                new_session_id = session_response['Session'].get('ID')
+                if new_session_id and new_session_id != session_id:
+                    print(f"\nNew session: {session_response['Session'].get('Name', '')}")
+                    session_id = new_session_id
+                    if opts.network_mode:
+                        push_influx_session(
+                            ctx, session_id, session_response['Session'].get('Name'), None)
+            else:
+                logging.debug("get_session returned unsuccessful; may be between sessions")
 
-        for lap in current_competitor_lap_times:
-            if lap not in laps:
-                current_competitor_lap_time_df = pandas.json_normalize(lap)
-                print(current_competitor_lap_time_df.to_string(index=False, header=False))
-                laps.append(lap)
-                if opts.network_mode:
-                    class_name, class_position = _resolve_class_live(
-                        session_response, ctx.car_number)
-                    new_lap_num = int(lap['Lap'])
-                    class_positions = (
-                        {new_lap_num: class_position} if class_position is not None else None)
-                    push_influx(
-                        ctx, [lap], True,
-                        competitor_name=competitor_name,
-                        car_info=car_info,
-                        class_name=class_name, class_positions=class_positions,
-                        session_id=session_id)
+            if poll_count % _LIVE_CHECK_INTERVAL == 0:
+                try:
+                    live_response = ctx.client.race.is_live(ctx.race_id)
+                    if not live_response.get('IsLive'):
+                        print("Race has ended.")
+                        return MonitorStatus.RACE_ENDED
+                except Exception:
+                    logging.debug("is_live check failed; skipping")
+
+            current_competitor_lap_times = refresh_competitor(ctx)
+            if not current_competitor_lap_times:
+                continue
+
+            for lap in current_competitor_lap_times:
+                if lap not in laps:
+                    current_competitor_lap_time_df = pandas.json_normalize(lap)
+                    print(current_competitor_lap_time_df.to_string(index=False, header=False))
+                    laps.append(lap)
+                    if opts.network_mode:
+                        class_name, class_position = _resolve_class_live(
+                            session_response, ctx.car_number)
+                        new_lap_num = int(lap['Lap'])
+                        class_positions = (
+                            {new_lap_num: class_position} if class_position is not None else None)
+                        push_influx(
+                            ctx, [lap], True,
+                            competitor_name=competitor_name,
+                            car_info=car_info,
+                            class_name=class_name, class_positions=class_positions,
+                            session_id=session_id)
+    except KeyboardInterrupt:
+        print("\nMonitoring stopped.")
+        return MonitorStatus.INTERRUPTED
 
 
 def refresh_competitor(ctx):

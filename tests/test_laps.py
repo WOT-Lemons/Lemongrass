@@ -141,6 +141,68 @@ class TestMonitorRoutine:
         captured = capsys.readouterr()
         assert 'Session B' in captured.out
 
+    def test_returns_race_ended_when_not_live(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        poll_count = 0
+        def fake_wait(timeout):
+            nonlocal poll_count
+            poll_count += 1
+            return poll_count > _mod._LIVE_CHECK_INTERVAL  # stop after interval+1 calls
+
+        stop = MagicMock()
+        stop.wait.side_effect = fake_wait
+
+        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod.threading, 'Event', return_value=stop):
+                result = _mod.monitor_routine(ctx, [], opts)
+
+        assert result == _mod.MonitorStatus.RACE_ENDED
+
+    def test_is_live_called_every_n_polls(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        n = _mod._LIVE_CHECK_INTERVAL
+        poll_count = 0
+        def fake_wait(timeout):
+            nonlocal poll_count
+            poll_count += 1
+            return poll_count > n * 2  # run for 2 full intervals
+
+        stop = MagicMock()
+        stop.wait.side_effect = fake_wait
+
+        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod.threading, 'Event', return_value=stop):
+                _mod.monitor_routine(ctx, [], opts)
+
+        assert ctx.client.race.is_live.call_count == 2
+
+    def test_returns_interrupted_on_keyboard_interrupt(self, capsys):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        ctx.client.live.get_session.return_value = {'Successful': False}
+
+        def raise_kbi(c):
+            raise KeyboardInterrupt
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=raise_kbi):
+            result = _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+
+        assert result == _mod.MonitorStatus.INTERRUPTED
+        captured = capsys.readouterr()
+        assert 'Monitoring stopped' in captured.out
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
