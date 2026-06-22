@@ -618,11 +618,21 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                             'EndDateEpoc', ctx.metadata.end_time_epoc)
                     push_influx_race(ctx, ctx.start_epoc * 1000)
 
+        session_response = ctx.client.live.get_session(ctx.race_id)
+        if session_response.get('Successful'):
+            new_session_id = session_response['Session'].get('ID')
+            if new_session_id and new_session_id != session_id:
+                print(f"\nNew session: {session_response['Session'].get('Name', '')}")
+                session_id = new_session_id
+                if opts.network_mode:
+                    push_influx_session(
+                        ctx, session_id, session_response['Session'].get('Name'), None)
+        else:
+            logging.debug("get_session returned unsuccessful; may be between sessions")
+
         current_competitor_lap_times = refresh_competitor(ctx)
         if not current_competitor_lap_times:
             continue
-
-        session_response = ctx.client.live.get_session(ctx.race_id)
 
         for lap in current_competitor_lap_times:
             if lap not in laps:

@@ -88,6 +88,59 @@ class TestMonitorRoutine:
                 _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
         # no exception raised is the assertion
 
+    def test_detects_new_session_and_updates_session_id(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+
+        lap1 = {'Lap': '1', 'LapTime': '1:00.000'}
+        lap2 = {'Lap': '2', 'LapTime': '1:01.000'}
+
+        session_calls = 0
+        def fake_get_session(race_id):
+            nonlocal session_calls
+            session_calls += 1
+            if session_calls == 1:
+                return {'Successful': True, 'Session': {'ID': 'sess-A', 'Name': 'Session A',
+                                                        'Competitors': {}, 'Classes': {}}}
+            stop.set()
+            return {'Successful': True, 'Session': {'ID': 'sess-B', 'Name': 'Session B',
+                                                    'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[lap1, lap2]):
+            with patch.object(_mod, 'push_influx_session') as mock_push_session:
+                with patch.object(_mod, 'push_influx'):
+                    _mod.monitor_routine(ctx, [lap1], opts, _stop_event=stop,
+                                         session_id='sess-A')
+
+        mock_push_session.assert_called_once_with(ctx, 'sess-B', 'Session B', None)
+
+    def test_new_session_prints_message(self, capsys):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        session_calls = 0
+        def fake_get_session(race_id):
+            nonlocal session_calls
+            session_calls += 1
+            if session_calls == 1:
+                return {'Successful': True, 'Session': {'ID': 'sess-A', 'Name': 'Session A',
+                                                        'Competitors': {}, 'Classes': {}}}
+            stop.set()
+            return {'Successful': True, 'Session': {'ID': 'sess-B', 'Name': 'Session B',
+                                                    'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            _mod.monitor_routine(ctx, [], opts, _stop_event=stop, session_id='sess-A')
+
+        captured = capsys.readouterr()
+        assert 'Session B' in captured.out
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
@@ -1260,6 +1313,10 @@ class TestLiveClassWiring:
         ]
         mock_stop = MagicMock()
         mock_stop.wait.side_effect = [False, True]
+        ctx.client.live.get_session.return_value = {
+            'Successful': True,
+            'Session': {'ID': 55, 'Name': 'Session 1', 'Competitors': {}, 'Classes': {}},
+        }
         with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
             with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
                 with patch.object(_mod, 'push_influx') as mock_push:
