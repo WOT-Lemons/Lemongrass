@@ -317,8 +317,6 @@ def old_race(ctx, opts):
     laps = []
     competitor_details = {}
     competitor_missing = True
-    competitor_name = None
-    car_info = None
     display_class_name = None
     pending_writes = []
 
@@ -337,11 +335,6 @@ def old_race(ctx, opts):
             if competitor['Number'] == ctx.car_number:
                 competitor_missing = False
                 competitor_details = competitor
-                competitor_name = (
-                    f"{competitor.get('FirstName', '')} {competitor.get('LastName', '')}".strip()
-                    or None
-                )
-                car_info = competitor.get('AdditionalData') or None
                 category = competitor.get('Category')
                 display_class_name = (
                     session_details['Session']['Categories']
