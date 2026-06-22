@@ -46,7 +46,7 @@ EPOCH_START = '1970-01-01T00:00:00Z'
 # them, rewriting historical data under the new schema. That "rewrite everything"
 # behavior is itself a useful migration tool — bump the version and re-run the
 # backfill to bring all historical races up to the current schema.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _WRITE_BATCH_SIZE = 5000
 
@@ -320,7 +320,9 @@ def old_race(ctx, opts):
         session_details = ctx.client.results.session_details(session_id, include_lap_times=True)
         sorted_competitors = [dict(c) for c in session_details['Session']['SortedCompetitors']]
 
+        flag_map = {0: "Green", 1: "Yellow", -1: "Finish"}
         session_laps = []
+
         for competitor in sorted_competitors:
             if competitor['Number'] == ctx.car_number:
                 competitor_missing = False
@@ -338,24 +340,41 @@ def old_race(ctx, opts):
                 session_laps = competitor['LapTimes'].copy()
                 laps = laps + [dict(lap) for lap in session_laps]
 
-        if opts.network_mode and session_laps:
-            flag_map = {0: "Green", 1: "Yellow", -1: "Finish"}
-            influx_laps = [
-                {**lap, 'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus']))}
-                for lap in session_laps
-            ]
-            class_name, class_positions = _resolve_class_historical(ctx.car_number, session_details)
-            pending_writes.append({
-                'influx_laps': influx_laps,
-                'competitor_name': competitor_name,
-                'car_info': car_info,
-                'class_name': class_name,
-                'class_positions': class_positions,
-                'start_epoc': session_details['Session'].get('SessionStartDateEpoc'),
-            })
+        if opts.network_mode:
+            start_epoc = session_details['Session'].get('SessionStartDateEpoc')
+            for competitor in sorted_competitors:
+                comp_laps = competitor.get('LapTimes', [])
+                if not comp_laps:
+                    continue
+                comp_number = competitor['Number']
+                comp_name = (
+                    f"{competitor.get('FirstName', '')} {competitor.get('LastName', '')}".strip()
+                    or None
+                )
+                comp_car_info = competitor.get('AdditionalData') or None
+                influx_laps = [
+                    {**lap, 'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus']))}
+                    for lap in comp_laps
+                ]
+                class_name, class_positions = _resolve_class_historical(comp_number, session_details)
+                pending_writes.append({
+                    'influx_laps': influx_laps,
+                    'competitor_name': comp_name,
+                    'car_info': comp_car_info,
+                    'class_name': class_name,
+                    'class_positions': class_positions,
+                    'start_epoc': start_epoc,
+                    'car_number': comp_number,
+                })
 
     if competitor_missing:
         logging.info('Car %s not found', ctx.car_number)
+        return
+
+    if opts.network_mode and (not pending_writes or len(laps) == 0):
+        logging.warning(
+            "Validation failed: no laps collected for race %s car %s — skipping write",
+            ctx.race_id, ctx.car_number)
         return
 
     if opts.network_mode:
@@ -382,7 +401,8 @@ def old_race(ctx, opts):
                 competitor_name=write['competitor_name'],
                 car_info=write['car_info'],
                 class_name=write['class_name'], class_positions=write['class_positions'],
-                start_epoc=write['start_epoc'])
+                start_epoc=write['start_epoc'],
+                car_number=write['car_number'])
 
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
         push_influx_race(ctx, race_ts_ms)

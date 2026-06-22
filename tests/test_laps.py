@@ -689,7 +689,7 @@ class TestOldRaceClassWiring:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        mock_resolve.assert_called_once_with('42', self._session_details())
+        mock_resolve.assert_any_call('42', self._session_details())
 
     def test_passes_class_name_to_push_influx(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -880,9 +880,9 @@ class TestOldRaceClassWiring:
                             _mod.old_race(ctx, opts)
         mock_del.assert_called_once_with(ctx)
 
-    def test_delete_fires_on_first_session_that_has_the_car(self):
-        # Car 42 is absent from session 1 (which holds car 99) and present in
-        # session 2. The delete must fire while processing session 2, not before.
+    def test_delete_fires_once_regardless_of_session_order(self):
+        # Car 42 absent from session 1 (car 99 only), present in session 2.
+        # Full-field writes: session 1's car 99 data and session 2's car 42 data both written.
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
         ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
@@ -899,9 +899,8 @@ class TestOldRaceClassWiring:
                         with patch.object(_mod, '_resolve_class_historical',
                                           return_value=('A', {1: 1})):
                             _mod.old_race(ctx, opts)
-        # Only session 2 yields laps, so exactly one delete and one push occur.
         mock_del.assert_called_once_with(ctx)
-        mock_push.assert_called_once()
+        assert mock_push.call_count == 2
 
     def test_no_delete_when_competitor_missing(self):
         ctx = _mod.RaceContext('999', '77', MagicMock(), MagicMock(), 0)
@@ -1460,6 +1459,115 @@ class TestDeleteExistingLaps:
         delete_api.delete.side_effect = Exception("network error")
         _mod.delete_existing_laps(ctx)  # must not raise
         assert "Deleting existing laps failed" in caplog.text
+
+
+class TestOldRaceFullField:
+    def _make_competitor(self, number, comp_id, position):
+        return {
+            'Number': number, 'Category': '1',
+            'ID': comp_id, 'SessionID': 1, 'RaceID': 999,
+            'FirstName': 'Driver', 'LastName': number,
+            'Position': position, 'Laps': '1', 'LastLapTime': '',
+            'BestPosition': position, 'BestLap': '1',
+            'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+            'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+            'LapTimes': [
+                {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': position,
+                 'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+            ],
+        }
+
+    def _session_details_two_cars(self):
+        """Session with tracked car 42 and competitor 99."""
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [
+                    self._make_competitor('42', 1, '1'),
+                    self._make_competitor('99', 2, '2'),
+                ],
+            },
+        }
+
+    def _ctx(self, session_details, car_number='42'):
+        ctx = _mod.RaceContext('999', car_number, MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = session_details
+        return ctx
+
+    def test_writes_all_competitors_not_just_tracked(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        assert mock_push.call_count == 2
+        pushed_car_numbers = {c.kwargs['car_number'] for c in mock_push.call_args_list}
+        assert pushed_car_numbers == {'42', '99'}
+
+    def test_does_not_write_if_tracked_car_absent(self):
+        ctx = self._ctx(self._session_details_two_cars(), car_number='77')
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx') as mock_push:
+            with patch.object(_mod, 'delete_existing_laps') as mock_del:
+                with patch.object(_mod, 'push_influx_race'):
+                    _mod.old_race(ctx, opts)
+        mock_push.assert_not_called()
+        mock_del.assert_not_called()
+
+    def test_resolve_class_called_per_competitor(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(
+            _mod, '_resolve_class_historical', return_value=('A', {1: 1})
+        ) as mock_resolve:
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        assert mock_resolve.call_count == 2
+        assert {c.args[0] for c in mock_resolve.call_args_list} == {'42', '99'}
+
+    def test_push_influx_receives_explicit_car_number(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx') as mock_push:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        for c in mock_push.call_args_list:
+            assert c.kwargs.get('car_number') is not None
+
+    def test_validation_aborts_when_no_laps_collected(self):
+        """Tracked car found but has zero laps — do not touch InfluxDB."""
+        competitor_no_laps = self._make_competitor('42', 1, '1')
+        competitor_no_laps['LapTimes'] = []
+        session = {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [competitor_no_laps],
+            },
+        }
+        ctx = self._ctx(session)
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx') as mock_push:
+            with patch.object(_mod, 'delete_existing_laps') as mock_del:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
+        mock_push.assert_not_called()
+        mock_del.assert_not_called()
 
 
 class TestWritePointsChunked:
