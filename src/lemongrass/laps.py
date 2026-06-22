@@ -643,7 +643,11 @@ def _time_to_ms(value):
 
 
 def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
-    for i in range(0, len(points), batch_size):
+    chunks = range(0, len(points), batch_size)
+    total = len(chunks)
+    for batch_num, i in enumerate(chunks, 1):
+        if total > 1:
+            logging.info("Writing batch %d of %d", batch_num, total)
         write_api.write(bucket='laps', record=points[i:i + batch_size])
 
 
