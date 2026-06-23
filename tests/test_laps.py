@@ -625,7 +625,7 @@ class TestOldRaceSkip:
     def test_skips_writes_when_complete_and_current(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
-        with patch.object(_mod, 'existing_lap_counts', return_value=(1, 1)):
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
             with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
                 with patch.object(_mod, 'push_influx') as mock_push:
                     with patch.object(_mod, 'push_influx_race') as mock_race:
@@ -639,7 +639,7 @@ class TestOldRaceSkip:
     def test_logs_skip_message_when_complete(self, caplog):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
-        with patch.object(_mod, 'existing_lap_counts', return_value=(1, 1)):
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
             with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
                 with patch.object(_mod, 'push_influx'):
                     with patch.object(_mod, 'push_influx_race'):
@@ -651,7 +651,7 @@ class TestOldRaceSkip:
     def test_writes_when_laps_incomplete(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
-        with patch.object(_mod, 'existing_lap_counts', return_value=(0, 0)):
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(0, 0)):
             with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
@@ -661,7 +661,7 @@ class TestOldRaceSkip:
     def test_writes_when_laps_stale_schema(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
-        with patch.object(_mod, 'existing_lap_counts', return_value=(1, 0)):
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 0)):
             with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
@@ -671,7 +671,7 @@ class TestOldRaceSkip:
     def test_does_not_query_counts_when_skip_disabled(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=False)
-        with patch.object(_mod, 'existing_lap_counts') as mock_counts:
+        with patch.object(_mod, 'existing_lap_counts_fieldwide') as mock_counts:
             with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
@@ -734,6 +734,104 @@ class TestExistingLapCounts:
         assert f'_value == {_mod.SCHEMA_VERSION}' in current_flux
 
 
+class TestArgParserCarNumber:
+    def test_car_number_optional(self):
+        args = _mod._build_parser().parse_args(['12345'])
+        assert args.car_number is None
+
+    def test_car_number_accepted_when_provided(self):
+        args = _mod._build_parser().parse_args(['12345', '42'])
+        assert args.car_number == 42
+
+
+class TestExistingLapCountsFieldwide:
+    def _query_api(self, lap_no_count=0, current_count=0):
+        responses = iter([lap_no_count, current_count])
+
+        def fake_query(flux):
+            count = next(responses)
+            table = MagicMock()
+            rec = MagicMock()
+            rec.get_value.return_value = count
+            table.records = [rec]
+            return [table]
+
+        api = MagicMock()
+        api.query.side_effect = fake_query
+        return api
+
+    def test_returns_total_and_current_schema_counts(self):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = self._query_api(lap_no_count=10, current_count=7)
+        total, current = _mod.existing_lap_counts_fieldwide(ctx)
+        assert total == 10
+        assert current == 7
+
+    def test_query_does_not_filter_by_car_number(self):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = self._query_api()
+        _mod.existing_lap_counts_fieldwide(ctx)
+        flux_calls = [c.args[0] for c in ctx.query_api.query.call_args_list]
+        assert all('car_number' not in q for q in flux_calls)
+        assert all('race_id == "999"' in q for q in flux_calls)
+
+
+class TestOldRaceFieldwide:
+    def _session_details(self, car_number='42'):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [{
+                    'Number': car_number, 'Category': '1', 'ID': 1, 'SessionID': 1,
+                    'RaceID': 999, 'FirstName': 'Jane', 'LastName': 'Doe',
+                    'Position': '1', 'Laps': '1', 'LastLapTime': '',
+                    'BestPosition': '1', 'BestLap': '1',
+                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+                    'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+                    'LapTimes': [
+                        {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                         'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+                    ],
+                }],
+            },
+        }
+
+    def test_proceeds_even_when_tracked_car_absent(self):
+        """With no competitor_missing gate, old_race writes even when ctx.car_number absent."""
+        ctx = _mod.RaceContext('999', '77', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        ctx.query_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        # session has car 42 only; tracked car 77 is absent
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details('42')
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with patch.object(_mod, '_write_points_chunked'):
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'push_influx_session'):
+                        with patch.object(_mod, 'print_rankings'):
+                            with patch.object(_mod, '_resolve_class_historical',
+                                              return_value=('A', {1: 1})):
+                                _mod.old_race(ctx, opts)
+        mock_del.assert_called_once()
+
+    def test_returns_early_when_no_competitors_have_laps(self, caplog):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        # competitor has empty LapTimes
+        no_laps_details = self._session_details()
+        no_laps_details['Session']['SortedCompetitors'][0]['LapTimes'] = []
+        ctx.client.results.session_details.return_value = no_laps_details
+        with patch.object(_mod, 'delete_existing_laps') as mock_del:
+            with caplog.at_level(logging.WARNING):
+                _mod.old_race(ctx, opts)
+        mock_del.assert_not_called()
+        assert any('No competitors' in r.message for r in caplog.records)
+
+
 class TestOldRacePrintsClass:
     def _session_details(self):
         return {
@@ -755,16 +853,6 @@ class TestOldRacePrintsClass:
                 }],
             },
         }
-
-    def test_prints_class_name(self, capsys):
-        ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
-        opts = _mod.RaceOptions(network_mode=False)
-        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
-        ctx.client.results.session_details.return_value = self._session_details()
-        with patch.object(_mod, 'print_rankings'):
-            _mod.old_race(ctx, opts)
-        assert 'Class: B-Class' in capsys.readouterr().out
-
 
 class TestLiveRace:
     def _session_response(self, class_desc='A'):
@@ -1003,15 +1091,6 @@ class TestOldRaceClassWiring:
                 _mod.old_race(ctx, opts)
         mock_race.assert_not_called()
 
-    def test_old_race_push_influx_race_not_called_when_car_not_found(self):
-        ctx = _mod.RaceContext('999', '99', MagicMock(), MagicMock(), 1000)
-        opts = _mod.RaceOptions(network_mode=True)
-        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
-        ctx.client.results.session_details.return_value = self._session_details(car_number='42')
-        with patch.object(_mod, 'push_influx_race') as mock_race:
-            _mod.old_race(ctx, opts)
-        mock_race.assert_not_called()
-
     def test_deletes_existing_laps_before_push(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
         ctx.delete_api = MagicMock()
@@ -1068,20 +1147,6 @@ class TestOldRaceClassWiring:
                             _mod.old_race(ctx, opts)
         mock_del.assert_called_once_with(ctx)
         assert mock_build.call_count == 2
-
-    def test_no_delete_when_competitor_missing(self):
-        ctx = _mod.RaceContext('999', '77', MagicMock(), MagicMock(), 0)
-        ctx.delete_api = MagicMock()
-        opts = _mod.RaceOptions(network_mode=True)
-        # session contains car 42 only; tracked car 77 is absent
-        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
-        ctx.client.results.session_details.return_value = self._session_details()
-        with patch.object(_mod, 'delete_existing_laps') as mock_del:
-            with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race'):
-                    with patch.object(_mod, 'print_rankings'):
-                        _mod.old_race(ctx, opts)
-        mock_del.assert_not_called()
 
     def test_no_delete_when_not_network_mode(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -1851,15 +1916,6 @@ class TestOldRaceFullField:
         built_car_numbers = {c.args[7] for c in mock_build.call_args_list}
         assert built_car_numbers == {'42', '99'}
 
-    def test_does_not_write_if_tracked_car_absent(self):
-        ctx = self._ctx(self._session_details_two_cars(), car_number='77')
-        opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, 'delete_existing_laps') as mock_del:
-            with patch.object(_mod, 'push_influx_race'):
-                _mod.old_race(ctx, opts)
-        assert not ctx.write_api.write.called
-        mock_del.assert_not_called()
-
     def test_resolve_class_called_per_competitor(self):
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
@@ -1977,13 +2033,6 @@ class TestOldRaceFullField:
         with patch.object(_mod, 'push_influx_session') as mock_session:
             with patch.object(_mod, 'print_rankings'):
                 _mod.old_race(ctx, opts)
-        mock_session.assert_not_called()
-
-    def test_push_influx_session_not_called_when_car_missing(self):
-        ctx = self._ctx(self._session_details_two_cars(), car_number='77')
-        opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, 'push_influx_session') as mock_session:
-            _mod.old_race(ctx, opts)
         mock_session.assert_not_called()
 
     def test_build_lap_points_receives_session_id(self):
