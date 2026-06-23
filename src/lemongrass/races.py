@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""lemongrass races subcommand dispatcher."""
+"""lemongrass races subcommand: inspect and manage race data stored in InfluxDB.
+
+Subcommands: list, prune, backfill, diagnose.
+Run `lemongrass races <subcommand> --help` for per-subcommand options.
+"""
 
 import argparse
 import logging
@@ -108,6 +112,8 @@ def _handle_list():
 
 
 def _handle_prune():
+    """Parse args and delete all data for the specified race(s) from InfluxDB,
+    prompting for confirmation unless --yes is passed."""
     parser = argparse.ArgumentParser(prog='lemongrass-races-prune',
                                      description='Delete all data for one or more races from InfluxDB')
     parser.add_argument('race_id', nargs='+')
@@ -185,10 +191,12 @@ def _handle_prune():
 
 
 def _handle_backfill():
+    """Delegate to lemongrass race-backfill (race_backfill.main)."""
     from lemongrass import race_backfill
     race_backfill.main()
 
 
 def _handle_diagnose():
+    """Delegate to lemongrass race-diagnose (race_diagnose.main)."""
     from lemongrass import race_diagnose
     race_diagnose.main()

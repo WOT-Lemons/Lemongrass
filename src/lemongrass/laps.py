@@ -331,9 +331,10 @@ def live_race(ctx, opts):
 
 def old_race(ctx, opts):
     """Handle a completed race: fetch all sessions and accumulate lap points for every
-    competitor across the full field (fieldwide backfill). After gathering the complete
-    expected lap count, decides whether to skip (already complete and current schema),
-    or delete existing laps and rewrite them all in one pass."""
+    competitor across the full field (fieldwide backfill). Each lap point is tagged with
+    session_id. After gathering the complete expected lap count, decides whether to skip
+    (already complete and current schema), or delete existing laps and rewrite them all
+    in one pass. Also the write path for lemongrass race-backfill --upgrade-stored."""
     logging.debug("Getting sessions for race for %s", ctx.race_id)
     race_details = ctx.client.results.sessions_for_race(ctx.race_id)
 
@@ -539,7 +540,14 @@ def write_csv(filename, competitor_lap_times):
 
 def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
                     session_id=None) -> MonitorStatus | None:
-    """Monitor mode: poll for new laps and display/push as they arrive."""
+    """Poll for new laps during a live race, printing and optionally pushing each to InfluxDB.
+
+    Returns MonitorStatus.RACE_ENDED when the race ends naturally, or
+    MonitorStatus.INTERRUPTED on KeyboardInterrupt (caller should exit 130).
+    _stop_event may be injected for testing; defaults to a new threading.Event.
+    session_id is tracked across polls and tags each written lap point; a new
+    session push fires whenever the live session ID changes.
+    """
     logging.info("Monitoring car %s...", ctx.car_number)
     print(UNDERLINE)
 
@@ -652,8 +660,8 @@ def _time_to_ms(value):
 
 
 def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
-    """Write points to the laps bucket in chunks of batch_size, logging progress
-    when more than one batch is needed."""
+    """Write points to the laps bucket in chunks of batch_size, logging each
+    batch individually when more than one batch is needed."""
     chunks = range(0, len(points), batch_size)
     total = len(chunks)
     for batch_num, i in enumerate(chunks, 1):
@@ -702,7 +710,12 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
 def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
                 class_name=None, class_positions=None, start_epoc=None,
                 car_number=None, session_id=None):
-    """Push lap data to InfluxDB."""
+    """Build and write lap points to InfluxDB for one competitor.
+
+    monitor_mode suppresses the "Writing laps..." log line (used for per-lap live writes).
+    car_number defaults to ctx.car_number when None. session_id is passed through as a
+    tag on each point.
+    """
     logging.debug("Entering network mode.")
     effective_car_number = car_number if car_number is not None else ctx.car_number
 

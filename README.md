@@ -76,6 +76,8 @@ Or run ephemerally without installing:
 uvx lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
 
+> **Graceful exit:** Press Ctrl-C at any time to stop monitoring cleanly (exits 130). The monitor also exits automatically when the race ends.
+
 Real example:
 
 ```shell
@@ -276,7 +278,7 @@ lemongrass races <subcommand> [args]
 |------------|-------------|
 | `list` | Show all stored races with lap counts and schema status |
 | `prune RACE_ID...` | Delete all data for one or more races from InfluxDB |
-| `backfill` | Run historical backfill (alias for `lemongrass race-backfill`) |
+| `backfill` | Run historical backfill for all tracked races (delegates to `lemongrass race-backfill`; use `--help` for all options) |
 | `diagnose RACE_ID CAR_NUMBER` | Compare RaceMonitor vs InfluxDB lap counts for a specific car |
 
 ### Examples
@@ -295,6 +297,26 @@ lemongrass races prune 144185 120037 --yes
 lemongrass races diagnose 144185 252
 ```
 
+### Backfill Options
+
+The `backfill` subcommand delegates to `lemongrass race-backfill` and supports these flags:
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Print what would be backfilled without writing anything |
+| `--force` | Re-backfill every race, even those already complete and current |
+| `--upgrade-stored` | Re-process laps already in InfluxDB whose `schema_version` is older than current — faster than `--force` because it skips re-fetching from RaceMonitor |
+| `--override RACE_ID:CAR_NUMBER` | Override the default car number for a specific race (repeatable) |
+| `--validate` | Check that every expected race and car has data in InfluxDB |
+| `--start-year YEAR` | Only include races starting in this year or later (default: 2017) |
+| `--car NUMBER` | Default car number for all races (default: 252) |
+
+> **Note:** `--upgrade-stored` is mutually exclusive with `--force`, `--override`, `--start-year`, `--car`, and `--validate`.
+
+### Session Tracking
+
+All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata is stored in the `race_sessions` bucket.
+
 ## Upgrading from v1.x
 
 As of v2.0.0, the individual entry points (`laps`, `telem`, `race-backfill`, `pisugar-monitor`, `race-diagnose`) were replaced by a single `lemongrass` command. If you have the old package installed, update and prefix commands with `lemongrass`:
@@ -306,5 +328,3 @@ As of v2.0.0, the individual entry points (`laps`, `telem`, `race-backfill`, `pi
 | `race-backfill` | `lemongrass race-backfill` or `lemongrass races backfill` |
 | `pisugar-monitor` | `lemongrass pisugar-monitor` |
 | `race-diagnose` | `lemongrass race-diagnose` or `lemongrass races diagnose` |
-| *(new in 2.1.0)* | `lemongrass races list` — schema status overview |
-| *(new in 2.1.0)* | `lemongrass races prune RACE_ID` — delete race data |
