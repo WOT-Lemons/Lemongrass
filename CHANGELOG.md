@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.1.0](https://github.com/WOT-Lemons/Lemongrass/compare/v2.0.1...v2.1.0) (2026-06-23)
+
+
+### Features
+
+* **laps:** add session_id tracking to lap points and race_sessions bucket ([575f347](https://github.com/WOT-Lemons/Lemongrass/commit/575f347279ab785700edbc7ab11de1a2b34c1617))
+* **laps:** write full-field laps for all competitors in historical backfill ([4066875](https://github.com/WOT-Lemons/Lemongrass/commit/40668759e14fa03b0cac7047b742182981d7433b))
+* **monitor:** graceful exit, session tracking, and resilient polling ([3480842](https://github.com/WOT-Lemons/Lemongrass/commit/34808421720092a28613ba08a8a0feaa0ad3ced7))
+* races command, fieldwide backfill, and --upgrade-stored ([fc5d880](https://github.com/WOT-Lemons/Lemongrass/commit/fc5d8805f604ffbbbcdd49e81c3f19fad66246f0))
+* **races:** prune multiple races in a single invocation ([957eb50](https://github.com/WOT-Lemons/Lemongrass/commit/957eb508b9e938de432e238e09ea4c6f0f57404b))
+
+
+### Documentation
+
+* update README and docstrings for 2.1.0 ([301640b](https://github.com/WOT-Lemons/Lemongrass/commit/301640b75713870624cd801cc3c3c0dc3fe60a23))
+
 ## [2.0.1](https://github.com/WOT-Lemons/Lemongrass/compare/v2.0.0...v2.0.1) (2026-06-21)
 
 
