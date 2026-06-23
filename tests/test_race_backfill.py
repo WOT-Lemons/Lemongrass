@@ -282,6 +282,139 @@ class TestValidateBackfill:
                    if r.levelno == logging.WARNING)
 
 
+class TestRunUpgradeStored:
+    def _query_api(self, stored_races=None, total_by_race=None, current_by_race=None):
+        """
+        stored_races: dict of race_id -> race_name
+        total_by_race: dict of race_id -> total lap count
+        current_by_race: dict of race_id -> current-schema lap count
+        """
+        stored_races = stored_races or {}
+        total_by_race = total_by_race or {}
+        current_by_race = current_by_race or {}
+
+        def fake_query(flux):
+            table = MagicMock()
+            if 'bucket: "races"' in flux:
+                table.records = []
+                for race_id, name in stored_races.items():
+                    rec = MagicMock()
+                    rec.values = {'race_id': race_id, 'race_name': name}
+                    table.records.append(rec)
+            elif '"schema_version"' in flux:
+                table.records = []
+                for race_id, count in current_by_race.items():
+                    rec = MagicMock()
+                    rec.get_value.return_value = count
+                    table.records.append(rec)
+            else:
+                # total laps query
+                # return single record with count for the race_id embedded in the flux
+                count = 0
+                for race_id, c in total_by_race.items():
+                    if f'race_id == "{race_id}"' in flux:
+                        count = c
+                rec = MagicMock()
+                rec.get_value.return_value = count
+                table.records = [rec]
+            return [table]
+
+        api = MagicMock()
+        api.query.side_effect = fake_query
+        return api
+
+    def test_skips_race_already_at_current_schema(self, caplog):
+        import logging
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 10},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            with caplog.at_level(logging.INFO):
+                _mod.run_upgrade_stored(query_api)
+        mock_run.assert_not_called()
+        assert any('skipping' in r.message and '101' in r.message for r in caplog.records)
+
+    def test_rebackfills_stale_race(self):
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 5},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _mod.run_upgrade_stored(query_api)
+        assert mock_run.call_count == 1
+        cmd = mock_run.call_args.args[0]
+        assert cmd == ['laps', '-n', '101']
+
+    def test_dry_run_does_not_call_subprocess(self):
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 5},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            _mod.run_upgrade_stored(query_api, dry_run=True)
+        mock_run.assert_not_called()
+
+    def test_skips_race_with_no_stored_laps(self, caplog):
+        import logging
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 0},
+            current_by_race={},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            with caplog.at_level(logging.INFO):
+                _mod.run_upgrade_stored(query_api)
+        mock_run.assert_not_called()
+
+    def test_returns_failed_race_ids(self):
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 5},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=1)
+            failures = _mod.run_upgrade_stored(query_api)
+        assert failures == ['101']
+
+    def test_returns_empty_list_on_success(self):
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 5},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            failures = _mod.run_upgrade_stored(query_api)
+        assert failures == []
+
+    def test_stops_on_interrupt(self):
+        query_api = self._query_api(
+            stored_races={'101': 'Race 1', '202': 'Race 2'},
+            total_by_race={'101': 5, '202': 5},
+            current_by_race={'101': 0, '202': 0},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=130)
+            _mod.run_upgrade_stored(query_api)
+        assert mock_run.call_count == 1
+
+
+class TestUpgradeStoredArgParsing:
+    def test_upgrade_stored_flag_accepted(self):
+        args = _mod._build_parser().parse_args(['--upgrade-stored'])
+        assert args.upgrade_stored is True
+
+    def test_upgrade_stored_default_false(self):
+        args = _mod._build_parser().parse_args([])
+        assert args.upgrade_stored is False
+
+
 class TestArgParsing:
     def test_dry_run_flag(self):
         args = _mod._build_parser().parse_args(['--dry-run'])

@@ -76,6 +76,11 @@ def _build_parser():
     parser.add_argument('--force', dest='force', action='store_true', default=False,
                         help='Re-backfill every race even if its laps are already complete and '
                              'current; by default complete races are skipped')
+    parser.add_argument('--upgrade-stored', dest='upgrade_stored', action='store_true',
+                       default=False,
+                       help='Re-backfill stored races with schema versions older than current; '
+                            'mutually exclusive with --force, --override, --start-year, '
+                            '--car, and --validate')
     return parser
 
 
@@ -193,9 +198,100 @@ def run_backfill(races, default_car, overrides, dry_run=False, force=False):
     return failures
 
 
+def run_upgrade_stored(query_api, dry_run=False):
+    """Query InfluxDB for stored races with stale schema versions and re-backfill them.
+
+    Races already at the current SCHEMA_VERSION are skipped. Re-backfill calls
+    `laps -n <race_id>` with no car_number (fieldwide mode).
+    """
+    from lemongrass.laps import SCHEMA_VERSION
+
+    races_tables = query_api.query(
+        f'from(bucket: "races")\n'
+        f'  |> range(start: {EPOCH_START})\n'
+        f'  |> filter(fn: (r) => r._measurement == "race" and r._field == "end_time_epoc")\n'
+    )
+    stored_races = {}
+    for table in races_tables:
+        for record in table.records:
+            race_id = record.values.get('race_id')
+            stored_races[race_id] = record.values.get('race_name', 'unknown')
+
+    failures = []
+    for race_id, race_name in sorted(stored_races.items()):
+        total_tables = query_api.query(
+            f'from(bucket: "laps")\n'
+            f'  |> range(start: {EPOCH_START})\n'
+            f'  |> filter(fn: (r) => r._measurement == "lap"\n'
+            f'      and r.race_id == "{race_id}" and r._field == "lap_no")\n'
+            f'  |> count()'
+        )
+        total = sum(r.get_value() for t in total_tables for r in t.records)
+
+        current_tables = query_api.query(
+            f'from(bucket: "laps")\n'
+            f'  |> range(start: {EPOCH_START})\n'
+            f'  |> filter(fn: (r) => r._measurement == "lap"\n'
+            f'      and r.race_id == "{race_id}"\n'
+            f'      and r._field == "schema_version" and r._value == {SCHEMA_VERSION})\n'
+            f'  |> count()'
+        )
+        current = sum(r.get_value() for t in current_tables for r in t.records)
+
+        if total == 0:
+            logging.info("race %s (%s): no laps stored, skipping", race_id, race_name)
+            continue
+
+        if current == total:
+            logging.info("race %s (%s): already at schema v%d, skipping",
+                        race_id, race_name, SCHEMA_VERSION)
+            continue
+
+        logging.info("race %s (%s): stale (%d/%d at current schema), %s",
+                    race_id, race_name, current, total,
+                    "would re-backfill" if dry_run else "re-backfilling")
+        if dry_run:
+            continue
+
+        result = subprocess.run(['laps', '-n', str(race_id)], capture_output=False)
+        if result.returncode == 130:
+            logging.info("laps was interrupted; stopping upgrade.")
+            break
+        if result.returncode != 0:
+            logging.error("Re-backfill failed for race %s", race_id)
+            failures.append(race_id)
+
+    if failures:
+        logging.error("%d race(s) failed to upgrade: %s", len(failures), failures)
+    return failures
+
+
 def main():
     """Entry point: parse args, discover races, then backfill or validate."""
     args = _build_parser().parse_args()
+
+    if args.upgrade_stored:
+        exclusive = [
+            args.force,
+            bool(args.overrides),
+            args.start_year != DEFAULT_START_YEAR,
+            args.car_number != DEFAULT_CAR_NUMBER,
+            args.validate,
+        ]
+        if any(exclusive):
+            logging.error(
+                "--upgrade-stored is mutually exclusive with --force, --override, "
+                "--start-year, --car, and --validate")
+            sys.exit(1)
+        influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
+        if not influx_token:
+            logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+            sys.exit(1)
+        from influxdb_client import InfluxDBClient
+        with InfluxDBClient(url='https://influxdb.focism.com',
+                           token=influx_token, org='focism') as influx_client:
+            failures = run_upgrade_stored(influx_client.query_api(), dry_run=args.dry_run)
+        sys.exit(1 if failures else 0)
 
     token = os.environ.get('RACEMONITOR_TOKEN')
     if not token:
