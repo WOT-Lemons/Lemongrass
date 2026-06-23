@@ -71,7 +71,7 @@ class RaceMetadata:
 class RaceContext:
     """Fixed context for a run: race identity, API client, and optional InfluxDB handle."""
     race_id: str
-    car_number: str
+    car_number: str | None
     client: object
     write_api: object
     start_epoc: int
@@ -96,7 +96,7 @@ def _build_parser():
     """Build and return the argument parser."""
     parser = argparse.ArgumentParser(description='Interact with lap data')
     parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
-    parser.add_argument('car_number', metavar='car_number', nargs=1, type=int, action='store')
+    parser.add_argument('car_number', metavar='car_number', nargs='?', type=int, default=None)
     parser.add_argument('-c', '--class', metavar='A/B/C', dest='selected_class', nargs='?',
                         type=ascii, action='store', help='Group or filter by class (A/B/C)')
     parser.add_argument('-m', '--monitor', dest='monitor_mode', default=False,
@@ -112,8 +112,8 @@ def _build_parser():
         help='Write lap times to CSV')
     parser.add_argument('--skip-if-complete', dest='skip_if_complete', default=False,
                         action='store_true',
-                        help='Skip the backfill if this car already has all its laps written '
-                             'under the current schema version (historical -n mode only)')
+                        help='Skip the backfill if this race already has all fieldwide laps '
+                             'written under the current schema version (historical -n mode only)')
     parser.add_argument('--dry-run', dest='dry_run', default=False,
                         action='store_true',
                         help='Implies -n; show what would be written without touching InfluxDB '
@@ -158,7 +158,7 @@ def main():
             sys.exit(1)
 
     race_id = str(args.race_id[0])
-    car_number = str(args.car_number[0])
+    car_number = str(args.car_number) if args.car_number is not None else None
 
     opts = RaceOptions(
         network_mode=args.network_mode or args.dry_run,
@@ -197,6 +197,13 @@ def main():
                 logging.info("Sorting results for class %s.", opts.selected_class.upper())
 
             response = client.race.is_live(race_id)
+
+            is_live = response.get('Successful') and response.get('IsLive')
+            if car_number is None and (args.monitor_mode or is_live):
+                logging.error("car_number is required for live/monitor mode")
+                sys.exit(1)
+            if car_number is not None and not is_live and not args.monitor_mode:
+                logging.warning("car_number provided but ignored in historical fieldwide mode")
 
             if not response['Successful']:
                 return 1
@@ -331,13 +338,9 @@ def old_race(ctx, opts):
         "Race %s has %s sessions, %s",
         ctx.race_id, len(session_ids_for_race), session_ids_for_race)
 
-    laps = []
-    competitor_details = {}
-    competitor_missing = True
-    display_class_name = None
     pending_writes = []
 
-    # First pass: gather every session's laps for the tracked car. We accumulate
+    # First pass: gather every session's laps for all competitors. We accumulate
     # the write payloads instead of writing inline so the skip check below can see
     # the complete expected lap count before any delete/write happens.
     for sid in session_ids_for_race:
@@ -346,19 +349,6 @@ def old_race(ctx, opts):
         sorted_competitors = [dict(c) for c in session_details['Session']['SortedCompetitors']]
 
         flag_map = {0: "Green", 1: "Yellow", -1: "Finish"}
-        session_laps = []
-
-        for competitor in sorted_competitors:
-            if competitor['Number'] == ctx.car_number:
-                competitor_missing = False
-                competitor_details = competitor
-                category = competitor.get('Category')
-                display_class_name = (
-                    session_details['Session']['Categories']
-                    .get(category, {}).get('Name', category)
-                )
-                session_laps = competitor['LapTimes'].copy()
-                laps = laps + [dict(lap) for lap in session_laps]
 
         if opts.network_mode:
             session_id = session_details['Session']['ID']
@@ -400,18 +390,17 @@ def old_race(ctx, opts):
                 })
             pending_writes.append(session_entry)
 
-    if competitor_missing:
-        logging.info('Car %s not found', ctx.car_number)
-        return
-
-    if opts.network_mode and (not pending_writes or len(laps) == 0):
+    if opts.network_mode and (not pending_writes or not any(s['competitors'] for s in pending_writes)):
         logging.warning(
-            "Validation failed: no laps collected for race %s car %s — skipping write",
-            ctx.race_id, ctx.car_number)
+            "No competitors with laps found for race %s — skipping write", ctx.race_id)
         return
 
     if opts.network_mode:
-        expected = len(laps)
+        expected = sum(
+            len(comp['influx_laps'])
+            for session in pending_writes
+            for comp in session['competitors']
+        )
 
         if opts.dry_run:
             print(UNDERLINE)
@@ -429,14 +418,13 @@ def old_race(ctx, opts):
             return
 
         if opts.skip_if_complete and expected > 0:
-            total, current = existing_lap_counts(ctx)
+            total, current = existing_lap_counts_fieldwide(ctx)
             if total == expected and current == expected:
                 race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                 push_influx_race(ctx, race_ts_ms)
                 logging.info(
-                    "SKIP: race %s car %s already complete and current "
-                    "(%d laps, schema v%d)",
-                    ctx.race_id, ctx.car_number, total, SCHEMA_VERSION)
+                    "SKIP: race %s already complete and current (%d laps, schema v%d)",
+                    ctx.race_id, total, SCHEMA_VERSION)
                 return
 
         delete_existing_laps(ctx)
@@ -468,59 +456,6 @@ def old_race(ctx, opts):
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
-
-    tracked_category = competitor_details.get('Category')
-    try:
-        tracked_pos = int(competitor_details.get('Position', 0))
-        display_class_pos = 1 + sum(
-            1 for c in sorted_competitors
-            if c.get('Category') == tracked_category
-            and c['Number'] != ctx.car_number
-            and int(c.get('Position', 0)) < tracked_pos
-        )
-    except (ValueError, TypeError):
-        display_class_pos = None
-
-    print(
-        f"Team: {competitor_details['FirstName']:<6}\t"
-        f"Car Number: {competitor_details['Number']:<4}\t"
-        f"Class: {display_class_name}\t"
-        f"Transponder: {competitor_details['Transponder']}"
-    )
-    print(
-        f"Best Position:\t{competitor_details['BestPosition']:>}\n"
-        f"Final Position:\t{competitor_details['Position']:>}\n"
-        f"Final Class Position:\t{display_class_pos if display_class_pos is not None else 'N/A':>}\n"
-        f"Total Laps:\t{competitor_details['Laps']:>}\n"
-        f"Best Lap:\t{competitor_details['BestLap']:>}\n"
-        f"Best Lap Time:\t{competitor_details['BestLapTime']:>}\n"
-        f"Total Time:\t{competitor_details['TotalTime']:>}"
-    )
-    print(UNDERLINE)
-
-    for lap in laps:
-        if lap['FlagStatus'] == 1:
-            lap['FlagStatus'] = "Yellow"
-        elif lap['FlagStatus'] == 0:
-            lap['FlagStatus'] = "Green"
-        elif lap['FlagStatus'] == -1:
-            lap['FlagStatus'] = "Finish"
-
-    lap_time_df = pandas.json_normalize(laps)
-    print(lap_time_df.to_string(index=False))
-    print(UNDERLINE)
-
-    for competitor in sorted_competitors:
-        for key, value in competitor.items():
-            try:
-                if key == 'Position':
-                    competitor[key] = int(value)
-            except ValueError:
-                value = None
-
-    if opts.save_file:
-        filename = f"{competitor_details['FirstName']}-{ctx.race_id}-results"
-        write_csv(filename, laps)
 
 
 def print_rankings(sorted_competitors, _race_live, selected_class, categories):
@@ -857,6 +792,28 @@ def existing_lap_counts(ctx):
             f'  |> filter(fn: (r) => r._measurement == "lap"\n'
             f'      and r.race_id == "{ctx.race_id}"\n'
             f'      and r.car_number == "{ctx.car_number}")\n'
+            f'  |> filter(fn: (r) => {field_filter})\n'
+            f'  |> count()'
+        )
+        return sum(r.get_value() for t in tables for r in t.records)
+
+    total = _count('r._field == "lap_no"')
+    current = _count(f'r._field == "schema_version" and r._value == {SCHEMA_VERSION}')
+    return total, current
+
+
+def existing_lap_counts_fieldwide(ctx):
+    """Return (total_laps, current_laps) for all cars in this race.
+
+    Like existing_lap_counts but without a car_number filter — counts across
+    the full field. Used by old_race when running in fieldwide mode.
+    """
+    def _count(field_filter):
+        tables = ctx.query_api.query(
+            f'from(bucket: "laps")\n'
+            f'  |> range(start: {EPOCH_START})\n'
+            f'  |> filter(fn: (r) => r._measurement == "lap"\n'
+            f'      and r.race_id == "{ctx.race_id}")\n'
             f'  |> filter(fn: (r) => {field_filter})\n'
             f'  |> count()'
         )
