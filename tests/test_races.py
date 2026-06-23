@@ -46,16 +46,21 @@ class TestDispatch:
 
 
 class TestHandlePrune:
-    def _make_influx_client(self, race_name='Test Race'):
+    def _make_influx_client(self, races=None):
+        if races is None:
+            races = {'12345': 'Test Race'}
         client = MagicMock()
         query_api = MagicMock()
 
         def fake_query(flux):
-            table = MagicMock()
-            rec = MagicMock()
-            rec.values = {'race_name': race_name}
-            table.records = [rec]
-            return [table]
+            tables = []
+            for race_id, race_name in races.items():
+                table = MagicMock()
+                rec = MagicMock()
+                rec.values = {'race_id': race_id, 'race_name': race_name}
+                table.records = [rec]
+                tables.append(table)
+            return tables
 
         query_api.query.side_effect = fake_query
         client.query_api.return_value = query_api
@@ -131,6 +136,74 @@ class TestHandlePrune:
         err = capsys.readouterr().err
         assert 'bad id!' in err
         assert 'also bad!' in err
+
+    def test_prune_aborts_when_race_not_found_in_influx(self, capsys):
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races-prune', '99999', '--yes']):
+            with patch('lemongrass.races.InfluxDBClient',
+                       return_value=self._make_influx_client(races={})):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    with pytest.raises(SystemExit) as exc:
+                        _mod._handle_prune()
+        assert exc.value.code != 0
+        assert '99999' in capsys.readouterr().err
+
+    def test_prune_reports_all_not_found_ids(self, capsys):
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races-prune', '11111', '22222', '--yes']):
+            with patch('lemongrass.races.InfluxDBClient',
+                       return_value=self._make_influx_client(races={})):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    with pytest.raises(SystemExit) as exc:
+                        _mod._handle_prune()
+        assert exc.value.code != 0
+        err = capsys.readouterr().err
+        assert '11111' in err
+        assert '22222' in err
+
+    def test_prune_multi_shows_summary_before_confirm(self, capsys):
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races-prune', '12345', '67890']):
+            races = {'12345': 'Le Mans 2026', '67890': 'Sebring 2025'}
+            with patch('lemongrass.races.InfluxDBClient',
+                       return_value=self._make_influx_client(races=races)):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    with patch('builtins.input', return_value='n'):
+                        with pytest.raises(SystemExit):
+                            _mod._handle_prune()
+        out = capsys.readouterr().out
+        assert '12345' in out
+        assert 'Le Mans 2026' in out
+        assert '67890' in out
+        assert 'Sebring 2025' in out
+
+    def test_prune_multi_deletes_all_races_with_yes(self, capsys):
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races-prune', '12345', '67890', '--yes']):
+            races = {'12345': 'Le Mans 2026', '67890': 'Sebring 2025'}
+            fake_client = self._make_influx_client(races=races)
+            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    _mod._handle_prune()
+        out = capsys.readouterr().out
+        assert out.count('Deleted laps') == 2
+        assert out.count('Deleted race metadata') == 2
+        assert out.count('Deleted sessions') == 2
+
+    def test_prune_multi_deletes_all_three_buckets_per_race(self):
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races-prune', '12345', '67890', '--yes']):
+            races = {'12345': 'Le Mans 2026', '67890': 'Sebring 2025'}
+            fake_client = self._make_influx_client(races=races)
+            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    _mod._handle_prune()
+        delete_api = fake_client.delete_api.return_value
+        assert delete_api.delete.call_count == 6  # 3 buckets × 2 races
+        buckets = [c.kwargs.get('bucket') for c in delete_api.delete.call_args_list]
+        assert buckets.count('laps') == 2
+        assert buckets.count('races') == 2
+        assert buckets.count('race_sessions') == 2
 
 
 class TestHandleBackfill:
