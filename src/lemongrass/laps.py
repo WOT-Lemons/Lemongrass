@@ -12,6 +12,7 @@
 #   writes are the during-race approximation; the backfill makes the final record authoritative.
 
 import argparse
+import contextlib
 import csv
 import enum
 import logging
@@ -481,9 +482,7 @@ def print_rankings(sorted_competitors, _race_live, selected_class, categories):
 
     for competitor in sorted_competitors:
         for item in competitor:
-            if item == "FirstName" and item != '':
-                list_of_names.append(competitor[item])
-            elif item == "LastName" and item != '':
+            if (item == "FirstName" and item != '') or (item == "LastName" and item != ''):
                 list_of_names.append(competitor[item])
 
     for competitor in sorted_competitors:
@@ -880,10 +879,8 @@ def _resolve_class_historical(car_number, session_details):
         if competitor['Number'] == car_number:
             tracked_category = competitor['Category']
             for lap in competitor['LapTimes']:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     tracked_laps[int(lap['Lap'])] = int(lap['Position'])
-                except (ValueError, TypeError):
-                    pass
             break
 
     if tracked_category is None:
@@ -899,10 +896,8 @@ def _resolve_class_historical(car_number, session_details):
         if competitor['Number'] == car_number or competitor['Category'] != tracked_category:
             continue
         for lap in competitor['LapTimes']:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 class_lap_positions[int(lap['Lap'])].append(int(lap['Position']))
-            except (ValueError, TypeError):
-                pass
 
     class_positions = {
         lap_num: 1 + sum(1 for pos in class_lap_positions.get(lap_num, []) if pos < tracked_pos)

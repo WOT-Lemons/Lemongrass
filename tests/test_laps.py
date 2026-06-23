@@ -907,10 +907,9 @@ class TestLiveRace:
     def test_network_mode_calls_get_session_once(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, 'print_rankings'):
-            with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race'):
-                    _mod.live_race(ctx, opts)
+        with patch.object(_mod, 'print_rankings'), patch.object(_mod, 'push_influx'):
+            with patch.object(_mod, 'push_influx_race'):
+                _mod.live_race(ctx, opts)
         assert ctx.client.live.get_session.call_count == 1
 
 
@@ -946,11 +945,10 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = self._session_details()
         with patch.object(
             _mod, '_resolve_class_historical', return_value=('A', {1: 1})
-        ) as mock_resolve:
-            with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race'):
-                    with patch.object(_mod, 'print_rankings'):
-                        _mod.old_race(ctx, opts)
+        ) as mock_resolve, patch.object(_mod, 'push_influx'):
+            with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
         mock_resolve.assert_any_call('42', self._session_details())
 
     def test_passes_class_name_to_build_lap_points(self):
@@ -1927,11 +1925,10 @@ class TestOldRaceFullField:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(
             _mod, '_resolve_class_historical', return_value=('A', {1: 1})
-        ) as mock_resolve:
-            with patch.object(_mod, 'push_influx_race'):
-                with patch.object(_mod, 'delete_existing_laps'):
-                    with patch.object(_mod, 'print_rankings'):
-                        _mod.old_race(ctx, opts)
+        ) as mock_resolve, patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'delete_existing_laps'):
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
         assert mock_resolve.call_count == 2
         assert {c.args[0] for c in mock_resolve.call_args_list} == {'42', '99'}
 

@@ -359,9 +359,8 @@ class TestHandleList:
         assert out.index('New Race') < out.index('Old Race')
 
     def test_exits_when_no_influx_token(self):
-        with patch.dict('os.environ', {}, clear=True):
-            with pytest.raises(SystemExit) as exc:
-                _mod._handle_list()
+        with patch.dict('os.environ', {}, clear=True), pytest.raises(SystemExit) as exc:
+            _mod._handle_list()
         assert exc.value.code != 0
 
 
