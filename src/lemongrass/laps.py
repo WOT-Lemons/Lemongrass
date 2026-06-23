@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Interact with the RaceMonitor lap timing system."""
 #
 # Timestamp anchoring (design decision):
@@ -17,10 +16,10 @@ import csv
 import enum
 import logging
 import os
-from collections import defaultdict
 import sys
 import threading
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -54,6 +53,8 @@ _LIVE_CHECK_INTERVAL = 5
 
 
 class MonitorStatus(enum.Enum):
+    """Return values from monitor_routine indicating how polling ended."""
+
     RACE_ENDED = "race_ended"
     INTERRUPTED = "interrupted"
 
@@ -210,11 +211,13 @@ def main():
 
             if not opts.network_mode:
                 return _run_race(
-                    RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata), opts, response)
+                    RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
+                    opts, response)
 
             if opts.dry_run:
                 return _run_race(
-                    RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata), opts, response)
+                    RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
+                    opts, response)
 
             with InfluxDBClient(
                 url='https://influxdb.focism.com', token=influx_token, org='focism'
@@ -278,7 +281,9 @@ def live_race(ctx, opts):
     competitor_details['Name'] = (
         competitor_details['FirstName'] + ' ' + competitor_details['LastName'])
 
-    competitor_name = f"{competitor_details.get('FirstName', '')} {competitor_details.get('LastName', '')}".strip() or None
+    first = competitor_details.get('FirstName', '')
+    last = competitor_details.get('LastName', '')
+    competitor_name = f"{first} {last}".strip() or None
     car_info = competitor_details.get('AdditionalData') or None
     class_name, class_position = _resolve_class_live(session_response, ctx.car_number)
 
@@ -385,7 +390,8 @@ def old_race(ctx, opts):
                     {**lap, 'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus']))}
                     for lap in comp_laps
                 ]
-                class_name, class_positions = _resolve_class_historical(comp_number, session_details)
+                class_name, class_positions = _resolve_class_historical(
+                    comp_number, session_details)
                 session_entry['competitors'].append({
                     'influx_laps': influx_laps,
                     'competitor_name': comp_name,
@@ -396,7 +402,8 @@ def old_race(ctx, opts):
                 })
             pending_writes.append(session_entry)
 
-    if opts.network_mode and (not pending_writes or not any(s['competitors'] for s in pending_writes)):
+    no_data = not pending_writes or not any(s['competitors'] for s in pending_writes)
+    if opts.network_mode and no_data:
         logging.warning(
             "No competitors with laps found for race %s — skipping write", ctx.race_id)
         return
@@ -418,7 +425,8 @@ def old_race(ctx, opts):
             total_competitors = sum(len(s['competitors']) for s in pending_writes)
             for session in pending_writes:
                 for comp in session['competitors']:
-                    print(f"  would write {len(comp['influx_laps'])} laps for car {comp['car_number']}")
+                    nlaps = len(comp['influx_laps'])
+                    print(f"  would write {nlaps} laps for car {comp['car_number']}")
             print(f"  {total_competitors} competitor(s), {total_laps} laps total")
             print(UNDERLINE)
             return
@@ -426,7 +434,9 @@ def old_race(ctx, opts):
         if opts.skip_if_complete and expected > 0:
             total, current = existing_lap_counts_fieldwide(ctx)
             if total == expected and current == expected:
-                race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+                race_ts_ms = (
+                    ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+                )
                 push_influx_race(ctx, race_ts_ms)
                 logging.info(
                     "SKIP: race %s already complete and current (%d laps, schema v%d)",

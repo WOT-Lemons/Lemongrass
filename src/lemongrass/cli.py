@@ -1,3 +1,4 @@
+"""Entry point for the lemongrass CLI dispatcher."""
 import importlib
 import sys
 
@@ -12,6 +13,7 @@ _COMMANDS = {
 
 
 def main():
+    """Dispatch to the subcommand named by the first CLI argument."""
     if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help"):
         print("Usage: lemongrass <command> [args]")
         print(f"Commands: {', '.join(_COMMANDS)}")

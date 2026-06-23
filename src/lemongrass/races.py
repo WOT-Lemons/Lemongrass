@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """lemongrass races subcommand: inspect and manage race data stored in InfluxDB.
 
 Subcommands: list, prune, backfill, diagnose.
@@ -114,8 +113,9 @@ def _handle_list():
 def _handle_prune():
     """Parse args and delete all data for the specified race(s) from InfluxDB,
     prompting for confirmation unless --yes is passed."""
-    parser = argparse.ArgumentParser(prog='lemongrass-races-prune',
-                                     description='Delete all data for one or more races from InfluxDB')
+    parser = argparse.ArgumentParser(
+        prog='lemongrass-races-prune',
+        description='Delete all data for one or more races from InfluxDB')
     parser.add_argument('race_id', nargs='+')
     parser.add_argument('--yes', action='store_true', default=False,
                         help='Skip confirmation prompt')

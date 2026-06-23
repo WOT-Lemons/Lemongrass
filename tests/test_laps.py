@@ -1,5 +1,6 @@
 import logging
 import threading
+from typing import ClassVar
 from unittest.mock import MagicMock, call, mock_open, patch
 
 import lemongrass.laps as _mod
@@ -495,7 +496,7 @@ class TestPushInfluxClassInfo:
         assert record.endswith('1090000')
 
     def test_warns_when_effective_epoc_is_zero(self, caplog):
-        ctx, write_api = self._ctx()  # ctx.start_epoc = 0
+        ctx, _write_api = self._ctx()  # ctx.start_epoc = 0
         with caplog.at_level(logging.WARNING):
             _mod.push_influx(ctx, self._laps(), False)
         assert any('epoch' in r.message.lower() and r.levelno == logging.WARNING
@@ -577,7 +578,7 @@ class TestPushInfluxClassInfo:
         assert 'car_number=42' not in record
 
     def test_passes_session_id_to_build_lap_points(self):
-        ctx, write_api = self._ctx()
+        ctx, _write_api = self._ctx()
         with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
             _mod.push_influx(ctx, self._laps(), False, session_id=77)
         assert mock_build.call_args.args[8] == 77
@@ -1308,7 +1309,8 @@ class TestLiveClassWiring:
             {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
              'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
         ]
-        new_laps = existing_laps + [
+        new_laps = [
+            *existing_laps,
             {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '3',
              'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
         ]
@@ -1329,7 +1331,8 @@ class TestLiveClassWiring:
             {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
              'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
         ]
-        new_laps = existing_laps + [
+        new_laps = [
+            *existing_laps,
             {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '3',
              'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
         ]
@@ -1358,7 +1361,8 @@ class TestLiveClassWiring:
     def test_live_race_passes_car_info_to_push_influx(self):
         ctx = self._make_ctx()
         opts = _mod.RaceOptions(network_mode=True)
-        ctx.client.live.get_racer.return_value['Details']['Competitor']['AdditionalData'] = '2005/Toy/Celica'
+        competitor = ctx.client.live.get_racer.return_value['Details']['Competitor']
+        competitor['AdditionalData'] = '2005/Toy/Celica'
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx') as mock_push:
                 with patch.object(_mod, 'push_influx_race'):
@@ -1434,7 +1438,8 @@ class TestLiveClassWiring:
             {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
              'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
         ]
-        new_laps = existing_laps + [
+        new_laps = [
+            *existing_laps,
             {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '3',
              'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
         ]
@@ -1460,7 +1465,8 @@ class TestLiveClassWiring:
             {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '3',
              'FlagStatus': '0', 'TotalTime': '0:01:30.000'},
         ]
-        new_laps = existing_laps + [
+        new_laps = [
+            *existing_laps,
             {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '3',
              'FlagStatus': '0', 'TotalTime': '0:03:01.000'},
         ]
@@ -1481,7 +1487,7 @@ class TestLiveClassWiring:
 class TestMonitorRoutineEpocRecheck:
     # A lap that is already in the laps list — refresh_competitor returns it so the
     # "new lap" branch never executes, keeping tests focused on the recheck logic.
-    _existing_lap = {
+    _existing_lap: ClassVar[dict] = {
         'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
         'FlagStatus': '0', 'TotalTime': '0:01:30.000',
     }
@@ -1686,59 +1692,59 @@ class TestPushInfluxRace:
         assert call_order == ['delete', 'write']
 
     def test_delete_targets_correct_race_id(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, _write_api, delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000000)
         predicate = delete_api.delete.call_args.kwargs['predicate']
         assert 'race_id="999"' in predicate
         assert '_measurement="race"' in predicate
 
     def test_delete_targets_races_bucket(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, _write_api, delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000000)
         assert delete_api.delete.call_args.kwargs['bucket'] == 'races'
 
     def test_writes_to_races_bucket(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000000)
         assert write_api.write.call_args.kwargs['bucket'] == 'races'
 
     def test_measurement_is_race(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000000)
         assert self._record(write_api).startswith('race,')
 
     def test_race_id_tag(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000000)
         assert 'race_id=999' in self._record(write_api)
 
     def test_track_name_tag(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000000)
         assert 'track_name=Road\\ America' in self._record(write_api)
 
     def test_end_time_epoc_field(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000000)
         assert 'end_time_epoc=1749132000i' in self._record(write_api)
 
     def test_uses_provided_timestamp(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000)
         assert self._record(write_api).endswith('5000')
 
     def test_exception_during_delete_is_logged_not_raised(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, _write_api, delete_api = self._ctx()
         delete_api.delete.side_effect = Exception("network error")
         _mod.push_influx_race(ctx, 5000000)  # must not raise
 
     def test_exception_during_write_is_logged_not_raised(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         write_api.write.side_effect = Exception("network error")
         _mod.push_influx_race(ctx, 5000000)  # must not raise
 
     def test_omits_series_name_tag_when_none(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         ctx.metadata = _mod.RaceMetadata(
             race_name='Race', track_name='Track', series_name=None, end_time_epoc=0)
         _mod.push_influx_race(ctx, 1000)
@@ -1772,68 +1778,68 @@ class TestPushInfluxSession:
         assert call_order == ['delete', 'write']
 
     def test_delete_targets_correct_session_id(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, _write_api, delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         predicate = delete_api.delete.call_args.kwargs['predicate']
         assert 'session_id="42"' in predicate
         assert '_measurement="session"' in predicate
 
     def test_delete_targets_race_sessions_bucket(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, _write_api, delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert delete_api.delete.call_args.kwargs['bucket'] == 'race_sessions'
 
     def test_writes_to_race_sessions_bucket(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert write_api.write.call_args.kwargs['bucket'] == 'race_sessions'
 
     def test_measurement_is_session(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert self._record(write_api).startswith('session,')
 
     def test_race_id_tag(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert 'race_id=999' in self._record(write_api)
 
     def test_session_id_tag(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert 'session_id=42' in self._record(write_api)
 
     def test_session_name_field(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert 'session_name="Day 1"' in self._record(write_api)
 
     def test_start_epoc_field(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert 'start_epoc=1700000000i' in self._record(write_api)
 
     def test_timestamp_uses_start_epoc_ms(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert self._record(write_api).endswith('1700000000000')
 
     def test_exception_during_delete_is_logged_not_raised(self, caplog):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, _write_api, delete_api = self._ctx()
         delete_api.delete.side_effect = Exception('network error')
         with caplog.at_level(logging.ERROR):
             _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
         assert "Writing session failed" in caplog.text
 
     def test_exception_during_write_is_logged_not_raised(self, caplog):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         write_api.write.side_effect = Exception('network error')
         with caplog.at_level(logging.ERROR):
             _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
         assert "Writing session failed" in caplog.text
 
     def test_start_epoc_none_writes_zero(self):
-        ctx, write_api, delete_api = self._ctx()
+        ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', None)
         assert 'start_epoc=0i' in self._record(write_api)
         assert self._record(write_api).endswith('0')

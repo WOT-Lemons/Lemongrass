@@ -1,5 +1,6 @@
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 import lemongrass.races as _mod
@@ -209,7 +210,7 @@ class TestHandlePrune:
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     _mod._handle_prune()
         delete_api = fake_client.delete_api.return_value
-        assert delete_api.delete.call_count == 6  # 3 buckets × 2 races
+        assert delete_api.delete.call_count == 6  # 3 buckets x 2 races
         buckets = [c.kwargs.get('bucket') for c in delete_api.delete.call_args_list]
         assert buckets.count('laps') == 2
         assert buckets.count('races') == 2

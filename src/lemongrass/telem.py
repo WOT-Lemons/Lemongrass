@@ -1,11 +1,10 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Sends OBD-II measurements to InfluxDB."""
 
-from datetime import datetime, timezone
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 from time import sleep
 
 import obd

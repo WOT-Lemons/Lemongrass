@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Sends PiSugar measurements to InfluxDB."""
 
 import base64
@@ -9,9 +8,9 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-
 from datetime import datetime, timezone
 from time import sleep, time
+
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
