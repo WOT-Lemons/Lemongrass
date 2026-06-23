@@ -113,7 +113,7 @@ def _handle_prune():
 
     invalid_ids = [rid for rid in race_ids if not _RACE_ID_RE.fullmatch(rid)]
     if invalid_ids:
-        print("invalid race ID(s):", " ".join(invalid_ids), file=sys.stderr)
+        print("invalid race ID(s):", ", ".join(f'"{r}"' for r in invalid_ids), file=sys.stderr)
         sys.exit(1)
 
     token = _require_influx_token()
@@ -121,6 +121,7 @@ def _handle_prune():
     with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG) as client:
         query_api = client.query_api()
 
+        # safe: all ids validated against [A-Za-z0-9_-]+ above; no Flux metacharacters possible
         ids_set = '["' + '", "'.join(race_ids) + '"]'
         races_tables = query_api.query(
             f'from(bucket: "races")\n'
@@ -155,11 +156,6 @@ def _handle_prune():
 
         for rid in race_ids:
             delete_api.delete(start=EPOCH_START, stop=now,
-                              predicate=f'_measurement="lap" AND race_id="{rid}"',
-                              bucket='laps')
-            print(f"Deleted laps for race {rid}")
-
-            delete_api.delete(start=EPOCH_START, stop=now,
                               predicate=f'_measurement="race" AND race_id="{rid}"',
                               bucket='races')
             print(f"Deleted race metadata for race {rid}")
@@ -168,6 +164,11 @@ def _handle_prune():
                               predicate=f'_measurement="session" AND race_id="{rid}"',
                               bucket='race_sessions')
             print(f"Deleted sessions for race {rid}")
+
+            delete_api.delete(start=EPOCH_START, stop=now,
+                              predicate=f'_measurement="lap" AND race_id="{rid}"',
+                              bucket='laps')
+            print(f"Deleted laps for race {rid}")
 
 
 def _handle_backfill():
