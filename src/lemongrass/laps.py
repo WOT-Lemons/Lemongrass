@@ -234,7 +234,8 @@ def _run_race(ctx, opts, response):
             old_race(ctx, opts)
         else:
             logging.info("Race %s is currently live.", ctx.race_id)
-            live_race(ctx, opts)
+            if live_race(ctx, opts) is MonitorStatus.INTERRUPTED:
+                sys.exit(130)
         return 0
     except KeyboardInterrupt:
         logging.info("Interrupted, exiting.")
@@ -315,8 +316,8 @@ def live_race(ctx, opts):
         write_csv(filename, laps)
 
     if opts.monitor_mode:
-        monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
-                        session_id=live_session_id)
+        return monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
+                               session_id=live_session_id)
 
 
 def old_race(ctx, opts):
@@ -623,7 +624,11 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                                 'EndDateEpoc', ctx.metadata.end_time_epoc)
                         push_influx_race(ctx, ctx.start_epoc * 1000)
 
-            session_response = ctx.client.live.get_session(ctx.race_id)
+            try:
+                session_response = ctx.client.live.get_session(ctx.race_id)
+            except Exception:
+                logging.debug("get_session failed; skipping session check")
+                session_response = {'Successful': False}
             if session_response.get('Successful'):
                 new_session_id = session_response['Session'].get('ID')
                 if new_session_id and new_session_id != session_id:
@@ -925,7 +930,7 @@ def _resolve_class_live(session_response, car_number):
     Takes the response from ``client.live.get_session`` so the caller can fetch the
     session once and reuse it.
     """
-    if not session_response['Successful']:
+    if not session_response.get('Successful'):
         return None, None
     session = session_response['Session']
     classes = session['Classes']
