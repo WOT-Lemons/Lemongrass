@@ -46,7 +46,7 @@ class TestMonitorRoutine:
     def test_collects_all_new_laps_not_just_last(self):
         stop = threading.Event()
         ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
-        opts = _mod.RaceOptions(network_mode=False, interval=30)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
 
         lap1 = {'Lap': '1', 'LapTime': '1:00.000'}
         lap2 = {'Lap': '2', 'LapTime': '1:01.000'}
@@ -72,7 +72,7 @@ class TestMonitorRoutine:
     def test_empty_refresh_does_not_crash(self):
         stop = threading.Event()
         ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
-        opts = _mod.RaceOptions(network_mode=False, interval=30)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
 
         call_count = 0
         def fake_refresh(c):
@@ -91,7 +91,7 @@ class TestMonitorRoutine:
     def test_detects_new_session_and_updates_session_id(self):
         stop = threading.Event()
         ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
-        opts = _mod.RaceOptions(network_mode=True, interval=30)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
 
         lap1 = {'Lap': '1', 'LapTime': '1:00.000'}
         lap2 = {'Lap': '2', 'LapTime': '1:01.000'}
@@ -120,7 +120,7 @@ class TestMonitorRoutine:
     def test_new_session_prints_message(self, capsys):
         stop = threading.Event()
         ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
-        opts = _mod.RaceOptions(network_mode=False, interval=30)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
 
         session_calls = 0
         def fake_get_session(race_id):
@@ -189,7 +189,7 @@ class TestMonitorRoutine:
     def test_returns_interrupted_on_keyboard_interrupt(self, capsys):
         stop = threading.Event()
         ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
-        opts = _mod.RaceOptions(network_mode=False, interval=30)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
 
         ctx.client.live.get_session.return_value = {'Successful': False}
 
