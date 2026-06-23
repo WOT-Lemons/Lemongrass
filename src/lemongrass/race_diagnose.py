@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Diagnose lap data discrepancies for a specific race and car number.
 
 Queries both the RaceMonitor API and InfluxDB and prints side-by-side lap
@@ -85,8 +84,10 @@ def diagnose_influx(query_api, race_id, car_number, start_epoc=0, end_epoc=0):
     """Print stored lap count, time range, and all lap numbers from InfluxDB."""
     print(f'\n=== InfluxDB: race {race_id}, car {car_number} ===')
 
-    range_start = (datetime.fromtimestamp(start_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                   if start_epoc else EPOCH_START)
+    range_start = (
+        datetime.fromtimestamp(start_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        if start_epoc else EPOCH_START
+    )
     if not end_epoc:
         print(f"  Warning: end_time_epoc not set for race {race_id}, using now() as range stop")
     range_stop = (datetime.fromtimestamp(end_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')

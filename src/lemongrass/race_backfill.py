@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Discover and backfill historical 24 Hours of Lemons lap data.
 
 Searches the RaceMonitor API for past Real Hoopties, GP du Lac, and Halloween
@@ -145,8 +144,10 @@ def validate_backfill(pairs, query_api):
         if not end_epoc:
             logging.warning("race %s: end_time_epoc=0 in races bucket, using now() as range stop",
                             race_id)
-        range_stop = (datetime.fromtimestamp(end_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                      if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+        range_stop = (
+            datetime.fromtimestamp(end_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        )
 
         lap_tables = query_api.query(
             f'from(bucket: "laps")\n'
