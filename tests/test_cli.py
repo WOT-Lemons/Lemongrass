@@ -8,8 +8,9 @@ import lemongrass.cli as cli
 
 class TestDispatcher:
     def test_no_args_exits_nonzero(self):
-        with patch.object(sys, 'argv', ['lemongrass']), pytest.raises(SystemExit) as exc:
-            cli.main()
+        with patch.object(sys, 'argv', ['lemongrass']):
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
         assert exc.value.code != 0
 
     def test_unknown_command_exits_nonzero(self):
