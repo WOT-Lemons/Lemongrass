@@ -105,3 +105,73 @@ class TestHandlePrune:
                 with pytest.raises(SystemExit) as exc:
                     _mod._handle_prune()
         assert exc.value.code != 0
+
+
+class TestHandleBackfill:
+    def test_delegates_to_race_backfill_main(self):
+        mock_main = MagicMock()
+        with patch.object(sys, 'argv', ['lemongrass-races-backfill', '--dry-run']):
+            with patch('lemongrass.race_backfill.main', mock_main):
+                _mod._handle_backfill()
+        mock_main.assert_called_once()
+
+    def test_argv_passed_through_to_race_backfill(self):
+        captured = {}
+
+        def capture():
+            captured['argv'] = sys.argv[:]
+
+        with patch.object(sys, 'argv', ['lemongrass-races-backfill', '--force']):
+            with patch('lemongrass.race_backfill.main', capture):
+                _mod._handle_backfill()
+        assert '--force' in captured['argv']
+
+    def test_routes_backfill_through_main_dispatch(self):
+        mock_main = MagicMock()
+        with patch.object(sys, 'argv', ['lemongrass-races', 'backfill', '--dry-run']):
+            with patch('lemongrass.race_backfill.main', mock_main):
+                _mod.main()
+        mock_main.assert_called_once()
+
+    def test_upgrade_stored_flag_reaches_race_backfill(self):
+        captured = {}
+
+        def capture():
+            captured['argv'] = sys.argv[:]
+
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races', 'backfill', '--upgrade-stored']):
+            with patch('lemongrass.race_backfill.main', capture):
+                _mod.main()
+        assert '--upgrade-stored' in captured['argv']
+
+
+class TestHandleDiagnose:
+    def test_delegates_to_race_diagnose_main(self):
+        mock_main = MagicMock()
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races-diagnose', '12345', '42']):
+            with patch('lemongrass.race_diagnose.main', mock_main):
+                _mod._handle_diagnose()
+        mock_main.assert_called_once()
+
+    def test_argv_passed_through_to_race_diagnose(self):
+        captured = {}
+
+        def capture():
+            captured['argv'] = sys.argv[:]
+
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races-diagnose', '12345', '42']):
+            with patch('lemongrass.race_diagnose.main', capture):
+                _mod._handle_diagnose()
+        assert '12345' in captured['argv']
+        assert '42' in captured['argv']
+
+    def test_routes_diagnose_through_main_dispatch(self):
+        mock_main = MagicMock()
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races', 'diagnose', '12345', '42']):
+            with patch('lemongrass.race_diagnose.main', mock_main):
+                _mod.main()
+        mock_main.assert_called_once()
