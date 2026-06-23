@@ -5,6 +5,7 @@
 import argparse
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ INFLUX_ORG = 'focism'
 EPOCH_START = '1970-01-01T00:00:00Z'
 
 _SUBCOMMANDS = ('list', 'prune', 'backfill', 'diagnose')
+_RACE_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 def main():
@@ -108,6 +110,9 @@ def _handle_prune():
                         help='Skip confirmation prompt')
     args = parser.parse_args()
     race_id = args.race_id
+    if not _RACE_ID_RE.fullmatch(race_id):
+        logging.error("Invalid race_id: %r", race_id)
+        sys.exit(1)
     token = _require_influx_token()
 
     with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG) as client:

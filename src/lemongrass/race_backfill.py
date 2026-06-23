@@ -288,9 +288,13 @@ def main():
             logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
             sys.exit(1)
         from influxdb_client import InfluxDBClient
-        with InfluxDBClient(url='https://influxdb.focism.com',
-                           token=influx_token, org='focism') as influx_client:
-            failures = run_upgrade_stored(influx_client.query_api(), dry_run=args.dry_run)
+        try:
+            with InfluxDBClient(url='https://influxdb.focism.com',
+                               token=influx_token, org='focism') as influx_client:
+                failures = run_upgrade_stored(influx_client.query_api(), dry_run=args.dry_run)
+        except KeyboardInterrupt:
+            logging.info("Interrupted, exiting.")
+            sys.exit(130)
         sys.exit(1 if failures else 0)
 
     token = os.environ.get('RACEMONITOR_TOKEN')

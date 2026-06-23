@@ -112,8 +112,8 @@ def _build_parser():
         help='Write lap times to CSV')
     parser.add_argument('--skip-if-complete', dest='skip_if_complete', default=False,
                         action='store_true',
-                        help='Skip the backfill if this car already has all its laps written '
-                             'under the current schema version (historical -n mode only)')
+                        help='Skip the backfill if this race already has all fieldwide laps '
+                             'written under the current schema version (historical -n mode only)')
     parser.add_argument('--dry-run', dest='dry_run', default=False,
                         action='store_true',
                         help='Implies -n; show what would be written without touching InfluxDB '
