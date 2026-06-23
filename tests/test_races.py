@@ -106,6 +106,32 @@ class TestHandlePrune:
                     _mod._handle_prune()
         assert exc.value.code != 0
 
+    def test_prune_rejects_invalid_race_id(self, capsys):
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', 'bad id!']):
+            with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                with pytest.raises(SystemExit) as exc:
+                    _mod._handle_prune()
+        assert exc.value.code != 0
+
+    def test_prune_rejects_multiple_invalid_race_ids(self, capsys):
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races-prune', 'bad id!', 'also bad!']):
+            with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                with pytest.raises(SystemExit) as exc:
+                    _mod._handle_prune()
+        assert exc.value.code != 0
+
+    def test_prune_reports_all_invalid_ids(self, capsys):
+        with patch.object(sys, 'argv',
+                          ['lemongrass-races-prune', 'bad id!', 'also bad!']):
+            with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                with pytest.raises(SystemExit):
+                    _mod._handle_prune()
+        # both bad IDs should appear in stderr
+        err = capsys.readouterr().err
+        assert 'bad id!' in err
+        assert 'also bad!' in err
+
 
 class TestHandleBackfill:
     def test_delegates_to_race_backfill_main(self):

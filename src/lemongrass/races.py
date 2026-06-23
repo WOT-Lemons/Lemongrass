@@ -104,16 +104,20 @@ def _handle_list():
 
 def _handle_prune():
     parser = argparse.ArgumentParser(prog='lemongrass-races-prune',
-                                     description='Delete all data for a race from InfluxDB')
-    parser.add_argument('race_id')
+                                     description='Delete all data for one or more races from InfluxDB')
+    parser.add_argument('race_id', nargs='+')
     parser.add_argument('--yes', action='store_true', default=False,
                         help='Skip confirmation prompt')
     args = parser.parse_args()
-    race_id = args.race_id
-    if not _RACE_ID_RE.fullmatch(race_id):
-        logging.error("Invalid race_id: %r", race_id)
+    race_ids = args.race_id
+
+    invalid_ids = [rid for rid in race_ids if not _RACE_ID_RE.fullmatch(rid)]
+    if invalid_ids:
+        print("invalid race ID(s):", " ".join(invalid_ids), file=sys.stderr)
         sys.exit(1)
+
     token = _require_influx_token()
+    race_id = race_ids[0]  # temporary bridge — removed in Task 2
 
     with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG) as client:
         query_api = client.query_api()
