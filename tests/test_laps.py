@@ -33,6 +33,176 @@ class TestMonitorRoutine:
         with patch.object(_mod, 'refresh_competitor', return_value=[{'Lap': 1}]):
             _mod.monitor_routine(ctx, [{'Lap': 1}], opts, _stop_event=stop)
 
+    def test_monitor_status_values_exist(self):
+        assert _mod.MonitorStatus.RACE_ENDED is not None
+        assert _mod.MonitorStatus.INTERRUPTED is not None
+
+    def test_refresh_competitor_empty_response_returns_empty_list(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        ctx.client.live.get_racer.return_value = {'Successful': False}
+        result = _mod.refresh_competitor(ctx)
+        assert result == []
+
+    def test_collects_all_new_laps_not_just_last(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        lap1 = {'Lap': '1', 'LapTime': '1:00.000'}
+        lap2 = {'Lap': '2', 'LapTime': '1:01.000'}
+        lap3 = {'Lap': '3', 'LapTime': '1:02.000'}
+
+        call_count = 0
+        def fake_refresh(c):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return [lap1, lap2, lap3]
+
+        existing_laps = [lap1]
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(ctx.client.live, 'get_session',
+                              return_value={'Successful': False}):
+                _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=stop)
+
+        assert lap2 in existing_laps
+        assert lap3 in existing_laps
+
+    def test_empty_refresh_does_not_crash(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        call_count = 0
+        def fake_refresh(c):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(ctx.client.live, 'get_session',
+                              return_value={'Successful': False}):
+                _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        # no exception raised is the assertion
+
+    def test_detects_new_session_and_updates_session_id(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=30)
+
+        lap1 = {'Lap': '1', 'LapTime': '1:00.000'}
+        lap2 = {'Lap': '2', 'LapTime': '1:01.000'}
+
+        session_calls = 0
+        def fake_get_session(race_id):
+            nonlocal session_calls
+            session_calls += 1
+            if session_calls == 1:
+                return {'Successful': True, 'Session': {'ID': 'sess-A', 'Name': 'Session A',
+                                                        'Competitors': {}, 'Classes': {}}}
+            stop.set()
+            return {'Successful': True, 'Session': {'ID': 'sess-B', 'Name': 'Session B',
+                                                    'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[lap1, lap2]):
+            with patch.object(_mod, 'push_influx_session') as mock_push_session:
+                with patch.object(_mod, 'push_influx'):
+                    _mod.monitor_routine(ctx, [lap1], opts, _stop_event=stop,
+                                         session_id='sess-A')
+
+        mock_push_session.assert_called_once_with(ctx, 'sess-B', 'Session B', None)
+
+    def test_new_session_prints_message(self, capsys):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        session_calls = 0
+        def fake_get_session(race_id):
+            nonlocal session_calls
+            session_calls += 1
+            if session_calls == 1:
+                return {'Successful': True, 'Session': {'ID': 'sess-A', 'Name': 'Session A',
+                                                        'Competitors': {}, 'Classes': {}}}
+            stop.set()
+            return {'Successful': True, 'Session': {'ID': 'sess-B', 'Name': 'Session B',
+                                                    'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            _mod.monitor_routine(ctx, [], opts, _stop_event=stop, session_id='sess-A')
+
+        captured = capsys.readouterr()
+        assert 'Session B' in captured.out
+
+    def test_returns_race_ended_when_not_live(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        poll_count = 0
+        def fake_wait(timeout):
+            nonlocal poll_count
+            poll_count += 1
+            return poll_count > _mod._LIVE_CHECK_INTERVAL  # stop after interval+1 calls
+
+        stop = MagicMock()
+        stop.wait.side_effect = fake_wait
+
+        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod.threading, 'Event', return_value=stop):
+                result = _mod.monitor_routine(ctx, [], opts)
+
+        assert result == _mod.MonitorStatus.RACE_ENDED
+
+    def test_is_live_called_every_n_polls(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        n = _mod._LIVE_CHECK_INTERVAL
+        poll_count = 0
+        def fake_wait(timeout):
+            nonlocal poll_count
+            poll_count += 1
+            return poll_count > n * 2  # run for 2 full intervals
+
+        stop = MagicMock()
+        stop.wait.side_effect = fake_wait
+
+        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod.threading, 'Event', return_value=stop):
+                _mod.monitor_routine(ctx, [], opts)
+
+        assert ctx.client.race.is_live.call_count == 2
+
+    def test_returns_interrupted_on_keyboard_interrupt(self, capsys):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        ctx.client.live.get_session.return_value = {'Successful': False}
+
+        def raise_kbi(c):
+            raise KeyboardInterrupt
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=raise_kbi):
+            result = _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+
+        assert result == _mod.MonitorStatus.INTERRUPTED
+        captured = capsys.readouterr()
+        assert 'Monitoring stopped' in captured.out
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
@@ -1205,6 +1375,10 @@ class TestLiveClassWiring:
         ]
         mock_stop = MagicMock()
         mock_stop.wait.side_effect = [False, True]
+        ctx.client.live.get_session.return_value = {
+            'Successful': True,
+            'Session': {'ID': 55, 'Name': 'Session 1', 'Competitors': {}, 'Classes': {}},
+        }
         with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
             with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
                 with patch.object(_mod, 'push_influx') as mock_push:
