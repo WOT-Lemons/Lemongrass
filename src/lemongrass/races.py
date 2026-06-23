@@ -109,7 +109,7 @@ def _handle_prune():
     parser.add_argument('--yes', action='store_true', default=False,
                         help='Skip confirmation prompt')
     args = parser.parse_args()
-    race_ids = args.race_id
+    race_ids = list(dict.fromkeys(args.race_id))
 
     invalid_ids = [rid for rid in race_ids if not _RACE_ID_RE.fullmatch(rid)]
     if invalid_ids:
@@ -154,21 +154,29 @@ def _handle_prune():
         now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         delete_api = client.delete_api()
 
+        failed = []
         for rid in race_ids:
-            delete_api.delete(start=EPOCH_START, stop=now,
-                              predicate=f'_measurement="race" AND race_id="{rid}"',
-                              bucket='races')
-            print(f"Deleted race metadata for race {rid}")
+            try:
+                delete_api.delete(start=EPOCH_START, stop=now,
+                                  predicate=f'_measurement="race" AND race_id="{rid}"',
+                                  bucket='races')
+                print(f"Deleted race metadata for race {rid}")
 
-            delete_api.delete(start=EPOCH_START, stop=now,
-                              predicate=f'_measurement="session" AND race_id="{rid}"',
-                              bucket='race_sessions')
-            print(f"Deleted sessions for race {rid}")
+                delete_api.delete(start=EPOCH_START, stop=now,
+                                  predicate=f'_measurement="session" AND race_id="{rid}"',
+                                  bucket='race_sessions')
+                print(f"Deleted sessions for race {rid}")
 
-            delete_api.delete(start=EPOCH_START, stop=now,
-                              predicate=f'_measurement="lap" AND race_id="{rid}"',
-                              bucket='laps')
-            print(f"Deleted laps for race {rid}")
+                delete_api.delete(start=EPOCH_START, stop=now,
+                                  predicate=f'_measurement="lap" AND race_id="{rid}"',
+                                  bucket='laps')
+                print(f"Deleted laps for race {rid}")
+            except Exception as e:
+                print(f"error pruning race {rid}: {e}", file=sys.stderr)
+                failed.append(rid)
+        if failed:
+            print("failed to prune:", " ".join(failed), file=sys.stderr)
+            sys.exit(1)
 
 
 def _handle_backfill():
