@@ -146,6 +146,115 @@ class TestHandleBackfill:
         assert '--upgrade-stored' in captured['argv']
 
 
+class TestHandleList:
+    def _make_client(self, races, totals, currents):
+        """Build mock InfluxDB client for _handle_list.
+
+        races:    list of (race_id, race_name, date_str) e.g. ('R1', 'My Race', '2026-01-15')
+        totals:   dict {race_id: total_lap_count}
+        currents: dict {race_id: current_schema_lap_count}
+        """
+        from datetime import datetime, timezone
+
+        def fake_query(flux):
+            if 'bucket: "races"' in flux:
+                tables = []
+                for race_id, race_name, date_str in races:
+                    table = MagicMock()
+                    rec = MagicMock()
+                    rec.values = {'race_id': race_id, 'race_name': race_name}
+                    rec.get_time.return_value = datetime.strptime(
+                        date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+                    table.records = [rec]
+                    tables.append(table)
+                return tables
+            elif '"lap_no"' in flux:
+                tables = []
+                for race_id, count in totals.items():
+                    table = MagicMock()
+                    rec = MagicMock()
+                    rec.values = {'race_id': race_id}
+                    rec.get_value.return_value = count
+                    table.records = [rec]
+                    tables.append(table)
+                return tables
+            else:
+                tables = []
+                for race_id, count in currents.items():
+                    table = MagicMock()
+                    rec = MagicMock()
+                    rec.values = {'race_id': race_id}
+                    rec.get_value.return_value = count
+                    table.records = [rec]
+                    tables.append(table)
+                return tables
+
+        client = MagicMock()
+        query_api = MagicMock()
+        query_api.query.side_effect = fake_query
+        client.query_api.return_value = query_api
+        client.__enter__ = lambda s: client
+        client.__exit__ = MagicMock(return_value=False)
+        return client
+
+    def test_no_laps_schema_state(self, capsys):
+        client = self._make_client(
+            races=[('R1', 'Empty Race', '2026-01-01')],
+            totals={},
+            currents={},
+        )
+        with patch('lemongrass.races.InfluxDBClient', return_value=client):
+            with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                _mod._handle_list()
+        assert 'no laps' in capsys.readouterr().out
+
+    def test_current_schema_state(self, capsys):
+        from lemongrass.laps import SCHEMA_VERSION
+        client = self._make_client(
+            races=[('R1', 'Full Race', '2026-01-01')],
+            totals={'R1': 50},
+            currents={'R1': 50},
+        )
+        with patch('lemongrass.races.InfluxDBClient', return_value=client):
+            with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                _mod._handle_list()
+        assert f'current (v{SCHEMA_VERSION})' in capsys.readouterr().out
+
+    def test_stale_schema_state(self, capsys):
+        client = self._make_client(
+            races=[('R1', 'Old Race', '2026-01-01')],
+            totals={'R1': 50},
+            currents={'R1': 20},
+        )
+        with patch('lemongrass.races.InfluxDBClient', return_value=client):
+            with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                _mod._handle_list()
+        out = capsys.readouterr().out
+        assert 'stale' in out
+        assert '20/50' in out
+
+    def test_sorted_newest_first(self, capsys):
+        client = self._make_client(
+            races=[
+                ('R1', 'Old Race', '2024-06-01'),
+                ('R2', 'New Race', '2026-06-01'),
+            ],
+            totals={'R1': 10, 'R2': 10},
+            currents={'R1': 10, 'R2': 10},
+        )
+        with patch('lemongrass.races.InfluxDBClient', return_value=client):
+            with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                _mod._handle_list()
+        out = capsys.readouterr().out
+        assert out.index('New Race') < out.index('Old Race')
+
+    def test_exits_when_no_influx_token(self):
+        with patch.dict('os.environ', {}, clear=True):
+            with pytest.raises(SystemExit) as exc:
+                _mod._handle_list()
+        assert exc.value.code != 0
+
+
 class TestHandleDiagnose:
     def test_delegates_to_race_diagnose_main(self):
         mock_main = MagicMock()
