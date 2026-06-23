@@ -50,6 +50,8 @@ docker pull ghcr.io/wot-lemons/lemongrass:latest
 
 **Docker** — pass your credentials via an env file (see `.env.sample`). To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass`.
 
+> **Note:** `CAR_NUMBER` is required for live/monitor mode. Omit it for completed races to write laps for all competitors (fieldwide backfill).
+
 ```shell
 docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
@@ -151,27 +153,29 @@ Lap Position      LapTime FlagStatus    TotalTime
 
 ### Completed Race
 
-You can retrieve info for a completed race too.
+You can retrieve info for a completed race too. Omit `CAR_NUMBER` to write laps for all competitors in the field (fieldwide backfill mode).
 
 **Docker:**
 
 ```shell
+# Single car
 docker run --rm -it \
   --env-file .env \
   ghcr.io/wot-lemons/lemongrass:latest \
   lemongrass laps RACE_ID CAR_NUMBER
+
+# Full field
+docker run --rm -it \
+  --env-file .env \
+  ghcr.io/wot-lemons/lemongrass:latest \
+  lemongrass laps RACE_ID
 ```
 
-**pip:**
+**pip / uv:**
 
 ```shell
-lemongrass laps RACE_ID CAR_NUMBER
-```
-
-**uv:**
-
-```shell
-lemongrass laps RACE_ID CAR_NUMBER
+lemongrass laps RACE_ID CAR_NUMBER   # single car
+lemongrass laps RACE_ID              # full field
 ```
 
 Real example:
@@ -260,6 +264,37 @@ Lap      LapTime Position FlagStatus    TotalTime
 --------------------------------------------------------------------------------
 ```
 
+## Race Management
+
+The `races` subcommand provides tools for inspecting and managing race data stored in InfluxDB.
+
+```shell
+lemongrass races <subcommand> [args]
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | Show all stored races with lap counts and schema status |
+| `prune RACE_ID...` | Delete all data for one or more races from InfluxDB |
+| `backfill` | Run historical backfill (alias for `lemongrass race-backfill`) |
+| `diagnose RACE_ID CAR_NUMBER` | Compare RaceMonitor vs InfluxDB lap counts for a specific car |
+
+### Examples
+
+```shell
+# List all stored races and their schema version status
+lemongrass races list
+
+# Delete a race (prompts for confirmation)
+lemongrass races prune 144185
+
+# Delete multiple races at once, skipping confirmation
+lemongrass races prune 144185 120037 --yes
+
+# Diagnose a lap count mismatch for car 252 in race 144185
+lemongrass races diagnose 144185 252
+```
+
 ## Upgrading from v1.x
 
 As of v2.0.0, the individual entry points (`laps`, `telem`, `race-backfill`, `pisugar-monitor`, `race-diagnose`) were replaced by a single `lemongrass` command. If you have the old package installed, update and prefix commands with `lemongrass`:
@@ -268,6 +303,8 @@ As of v2.0.0, the individual entry points (`laps`, `telem`, `race-backfill`, `pi
 |--------|-------|
 | `laps RACE_ID CAR_NUMBER` | `lemongrass laps RACE_ID CAR_NUMBER` |
 | `telem` | `lemongrass telem` |
-| `race-backfill` | `lemongrass race-backfill` |
+| `race-backfill` | `lemongrass race-backfill` or `lemongrass races backfill` |
 | `pisugar-monitor` | `lemongrass pisugar-monitor` |
-| `race-diagnose` | `lemongrass race-diagnose` |
+| `race-diagnose` | `lemongrass race-diagnose` or `lemongrass races diagnose` |
+| *(new in 2.1.0)* | `lemongrass races list` — schema status overview |
+| *(new in 2.1.0)* | `lemongrass races prune RACE_ID` — delete race data |

@@ -250,7 +250,9 @@ def _run_race(ctx, opts, response):
 
 
 def live_race(ctx, opts):
-    """Called if a race ID is live."""
+    """Handle a live race: fetch the current session, print rankings and racer detail,
+    optionally write lap points to InfluxDB, and optionally launch monitor_routine
+    to poll for new laps until the race ends or the user interrupts."""
     session_response = ctx.client.live.get_session(ctx.race_id)
 
     live_session_id = None
@@ -328,7 +330,10 @@ def live_race(ctx, opts):
 
 
 def old_race(ctx, opts):
-    """Called if a race ID is not live."""
+    """Handle a completed race: fetch all sessions and accumulate lap points for every
+    competitor across the full field (fieldwide backfill). After gathering the complete
+    expected lap count, decides whether to skip (already complete and current schema),
+    or delete existing laps and rewrite them all in one pass."""
     logging.debug("Getting sessions for race for %s", ctx.race_id)
     race_details = ctx.client.results.sessions_for_race(ctx.race_id)
 
@@ -647,6 +652,8 @@ def _time_to_ms(value):
 
 
 def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
+    """Write points to the laps bucket in chunks of batch_size, logging progress
+    when more than one batch is needed."""
     chunks = range(0, len(points), batch_size)
     total = len(chunks)
     for batch_num, i in enumerate(chunks, 1):
@@ -774,9 +781,10 @@ def push_influx_session(ctx, session_id, session_name, start_epoc):
 def existing_lap_counts(ctx):
     """Return (total_laps, current_laps) for the tracked car's laps in this race.
 
-    Returns the count of existing laps for the tracked car. Used as a completeness
-    proxy — if the tracked car's laps are present and current, the race is considered
-    complete (the full field is not verified).
+    Counts laps filtered by ctx.car_number. Note: the historical backfill path
+    uses existing_lap_counts_fieldwide instead (which counts across all cars
+    without a car_number filter). This function is for single-car callers such
+    as tests or diagnostic tooling.
 
     total_laps  — number of lap points written for the tracked car.
     current_laps — number of those laps stamped with the current SCHEMA_VERSION.

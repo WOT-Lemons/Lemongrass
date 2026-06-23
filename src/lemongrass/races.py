@@ -20,6 +20,8 @@ _RACE_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 def main():
+    """Entry point for `lemongrass races`. Dispatches to the appropriate subcommand
+    handler (list, prune, backfill, diagnose) based on the first argument."""
     if len(sys.argv) < 2 or sys.argv[1] not in _SUBCOMMANDS:
         print("Usage: lemongrass races <subcommand> [args]")
         print(f"Subcommands: {', '.join(_SUBCOMMANDS)}")
@@ -31,6 +33,7 @@ def main():
 
 
 def _require_influx_token():
+    """Read INFLUX_TELEMETRY_TOKEN from the environment, exiting with an error if unset."""
     token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
     if not token:
         logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
@@ -39,6 +42,8 @@ def _require_influx_token():
 
 
 def _handle_list():
+    """Print a table of all races in the races bucket with their total lap count and
+    schema version status (current, stale, or no laps)."""
     from lemongrass.laps import SCHEMA_VERSION
 
     token = _require_influx_token()
