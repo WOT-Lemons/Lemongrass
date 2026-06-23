@@ -304,9 +304,10 @@ class TestRunUpgradeStored:
             elif '"schema_version"' in flux:
                 table.records = []
                 for race_id, count in current_by_race.items():
-                    rec = MagicMock()
-                    rec.get_value.return_value = count
-                    table.records.append(rec)
+                    if f'race_id == "{race_id}"' in flux:
+                        rec = MagicMock()
+                        rec.get_value.return_value = count
+                        table.records.append(rec)
             else:
                 # total laps query
                 # return single record with count for the race_id embedded in the flux
