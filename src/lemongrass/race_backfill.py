@@ -6,26 +6,33 @@ Searches the RaceMonitor API for past Real Hoopties, GP du Lac, and Halloween
 Hoop races and writes lap data for a given car number to the laps/races InfluxDB
 buckets by invoking `laps -n` for each race found.
 
+Assumes `lemongrass` is installed as a CLI tool. If running from the repo, prefix
+commands with `uv run` (e.g. `uv run lemongrass race-backfill`).
+
 Usage:
     # Preview what would be backfilled (no writes)
-    uv run race-backfill --dry-run
+    lemongrass race-backfill --dry-run
 
     # Run the backfill (default car 252, from 2017 onwards). Races whose laps are
     # already complete and written under the current schema version are skipped.
-    uv run race-backfill
+    lemongrass race-backfill
 
     # Force a re-backfill of every race, even ones already complete and current
     # (e.g. after bumping SCHEMA_VERSION in laps to migrate historical data)
-    uv run race-backfill --force
+    lemongrass race-backfill --force
 
     # Override car number for a specific race (e.g. 2022 Hoopties used car 253)
-    uv run race-backfill --override 120037:253
+    lemongrass race-backfill --override 120037:253
 
     # Validate that backfilled races have data in InfluxDB
-    uv run race-backfill --validate --override 120037:253
+    lemongrass race-backfill --validate --override 120037:253
 
     # Backfill from a different year or for a different default car
-    uv run race-backfill --start-year 2023 --car 82
+    lemongrass race-backfill --start-year 2023 --car 82
+
+    # Re-write laps stored under an older schema version without re-fetching from
+    # RaceMonitor (faster than --force when only the schema tag changed)
+    lemongrass race-backfill --upgrade-stored
 
 Required environment variables:
     RACEMONITOR_TOKEN      — RaceMonitor API token (always required)
@@ -59,6 +66,7 @@ class _OverrideAction(argparse.Action):
 
 
 def _build_parser():
+    """Build and return the argument parser for lemongrass race-backfill."""
     parser = argparse.ArgumentParser(
         description='Discover and backfill historical Lemons lap data.')
     parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,

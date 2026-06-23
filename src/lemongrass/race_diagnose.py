@@ -6,11 +6,14 @@ Queries both the RaceMonitor API and InfluxDB and prints side-by-side lap
 counts, session breakdown, and all stored lap numbers so you can pinpoint
 whether a count mismatch is an API issue or a write issue.
 
+Assumes `lemongrass` is installed as a CLI tool. If running from the repo, prefix
+with `uv run` (e.g. `uv run lemongrass race-diagnose 144185 252`).
+
 Usage:
-    uv run race-diagnose <race_id> <car_number>
+    lemongrass race-diagnose <race_id> <car_number>
 
 Example:
-    uv run race-diagnose 144185 252
+    lemongrass race-diagnose 144185 252
 
 Required environment variables:
     RACEMONITOR_TOKEN      — RaceMonitor API token

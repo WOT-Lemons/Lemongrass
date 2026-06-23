@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""lemongrass races subcommand dispatcher."""
+"""lemongrass races subcommand: inspect and manage race data stored in InfluxDB.
+
+Subcommands: list, prune, backfill, diagnose.
+Run `lemongrass races <subcommand> --help` for per-subcommand options.
+"""
 
 import argparse
 import logging
@@ -20,6 +24,8 @@ _RACE_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 def main():
+    """Entry point for `lemongrass races`. Dispatches to the appropriate subcommand
+    handler (list, prune, backfill, diagnose) based on the first argument."""
     if len(sys.argv) < 2 or sys.argv[1] not in _SUBCOMMANDS:
         print("Usage: lemongrass races <subcommand> [args]")
         print(f"Subcommands: {', '.join(_SUBCOMMANDS)}")
@@ -31,6 +37,7 @@ def main():
 
 
 def _require_influx_token():
+    """Read INFLUX_TELEMETRY_TOKEN from the environment, exiting with an error if unset."""
     token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
     if not token:
         logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
@@ -39,6 +46,8 @@ def _require_influx_token():
 
 
 def _handle_list():
+    """Print a table of all races in the races bucket with their total lap count and
+    schema version status (current, stale, or no laps)."""
     from lemongrass.laps import SCHEMA_VERSION
 
     token = _require_influx_token()
@@ -103,6 +112,8 @@ def _handle_list():
 
 
 def _handle_prune():
+    """Parse args and delete all data for the specified race(s) from InfluxDB,
+    prompting for confirmation unless --yes is passed."""
     parser = argparse.ArgumentParser(prog='lemongrass-races-prune',
                                      description='Delete all data for one or more races from InfluxDB')
     parser.add_argument('race_id', nargs='+')
@@ -180,10 +191,12 @@ def _handle_prune():
 
 
 def _handle_backfill():
+    """Delegate to lemongrass race-backfill (race_backfill.main)."""
     from lemongrass import race_backfill
     race_backfill.main()
 
 
 def _handle_diagnose():
+    """Delegate to lemongrass race-diagnose (race_diagnose.main)."""
     from lemongrass import race_diagnose
     race_diagnose.main()
