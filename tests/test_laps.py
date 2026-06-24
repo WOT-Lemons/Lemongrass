@@ -2120,14 +2120,45 @@ class TestPrintRankingsNonNumericPosition:
         return {'1': {'ID': '1', 'Name': 'Gold'}}
 
     @pytest.mark.parametrize("bad_pos", ['6$G', '$G', 'P1', '--'])
-    def test_non_numeric_position_does_not_crash(self, bad_pos, capsys):
+    def test_non_numeric_position_does_not_crash(self, bad_pos):
         competitors = [self._competitor(position=bad_pos)]
         _mod.print_rankings(competitors, False, None, self._categories())
 
     @pytest.mark.parametrize("bad_pos", ['6$G', '$G', 'P1', '--'])
-    def test_non_numeric_position_with_selected_class_does_not_crash(self, bad_pos, capsys):
+    def test_non_numeric_position_with_selected_class_does_not_crash(self, bad_pos):
         competitors = [self._competitor(position=bad_pos)]
         _mod.print_rankings(competitors, False, (None, 'gold'), self._categories())
+
+
+class TestPrintRankingsSortOrder:
+    """Behavioral tests using real pandas (conftest mocks pandas; patch it back)."""
+
+    def _competitor(self, position='1', number='42', name='Jane', category='1', laps='5'):
+        return {
+            'Position': position, 'Number': number, 'FirstName': name, 'LastName': '',
+            'Laps': laps, 'Category': category, 'Transponder': 'T1',
+        }
+
+    def _categories(self):
+        return {'1': {'ID': '1', 'Name': 'Gold'}}
+
+    def test_numeric_position_sorts_before_non_numeric(self, capsys):
+        import sys
+        # conftest mocks pandas in sys.modules; pop it to import the real one
+        pandas_mock = sys.modules.pop('pandas', None)
+        try:
+            import pandas as real_pandas
+        finally:
+            if pandas_mock is not None:
+                sys.modules['pandas'] = pandas_mock
+        competitors = [
+            self._competitor(position='6$G', number='99'),
+            self._competitor(position='1', number='42'),
+        ]
+        with patch.object(_mod, 'pandas', real_pandas):
+            _mod.print_rankings(competitors, False, None, self._categories())
+        out = capsys.readouterr().out
+        assert out.index('42') < out.index('99')
 
 
 class TestWritePointsChunked:
