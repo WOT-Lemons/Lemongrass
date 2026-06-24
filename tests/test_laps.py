@@ -579,6 +579,14 @@ class TestPushInfluxClassInfo:
         _mod.push_influx(ctx, laps, False)
         assert 'lap_time' not in self._record(write_api)
 
+    def test_unparseable_total_time_anchors_to_start_epoc(self):
+        ctx, write_api = self._ctx()  # start_epoc=0
+        laps = [{'Lap': '1', 'LapTime': '1:30.000', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '3$H'}]
+        _mod.push_influx(ctx, laps, False)
+        # TotalTime unparseable → falls back to 0; timestamp = start_epoc_ms + 0 = 0
+        assert self._record(write_api).endswith(' 0')
+
     def test_explicit_car_number_overrides_ctx(self):
         ctx, write_api = self._ctx()  # ctx.car_number = '42'
         _mod.push_influx(ctx, self._laps(), False, car_number='99')

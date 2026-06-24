@@ -658,8 +658,9 @@ def _time_to_ms(value):
     fractional '.mmm' part optional. RaceMonitor omits the hours component when a
     value is under an hour, so we right-align the colon-separated parts.
 
-    Returns 0 for unparseable values; the API occasionally returns garbage for
-    invalid or pit laps.
+    Returns None for unparseable values, which causes the field to be omitted
+    from the InfluxDB point. The API occasionally returns garbage for invalid
+    or pit laps.
     """
     try:
         parts = value.split(':')
