@@ -2109,6 +2109,27 @@ class TestBuildLapPointsNonNumericPosition:
         assert 'position=3i' in points[0].to_line_protocol()
 
 
+class TestPrintRankingsNonNumericPosition:
+    def _competitor(self, position='1', number='42', name='Jane', category='1', laps='5'):
+        return {
+            'Position': position, 'Number': number, 'FirstName': name, 'LastName': '',
+            'Laps': laps, 'Category': category, 'Transponder': 'T1',
+        }
+
+    def _categories(self):
+        return {'1': {'ID': '1', 'Name': 'Gold'}}
+
+    @pytest.mark.parametrize("bad_pos", ['6$G', '$G', 'P1', '--'])
+    def test_non_numeric_position_does_not_crash(self, bad_pos, capsys):
+        competitors = [self._competitor(position=bad_pos)]
+        _mod.print_rankings(competitors, False, None, self._categories())
+
+    @pytest.mark.parametrize("bad_pos", ['6$G', '$G', 'P1', '--'])
+    def test_non_numeric_position_with_selected_class_does_not_crash(self, bad_pos, capsys):
+        competitors = [self._competitor(position=bad_pos)]
+        _mod.print_rankings(competitors, False, (None, 'gold'), self._categories())
+
+
 class TestWritePointsChunked:
     def test_single_chunk_when_below_batch_size(self):
         write_api = MagicMock()
