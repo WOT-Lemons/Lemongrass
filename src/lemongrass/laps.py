@@ -668,8 +668,8 @@ def _time_to_ms(value):
         minutes = int(parts[-2]) if len(parts) >= 2 else 0
         return hours * 3600000 + minutes * 60000 + int(sec) * 1000 + int(ms or 0)
     except (ValueError, AttributeError):
-        logging.warning("unparseable lap time %r; writing 0 ms", value)
-        return 0
+        logging.warning("unparseable lap time %r; omitting field", value)
+        return None
 
 
 def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
@@ -692,7 +692,7 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
     start_epoc_ms = effective_epoc * 1000
     points = []
     for lap in laps:
-        time_lap_completed_ms = start_epoc_ms + _time_to_ms(lap['TotalTime'])
+        time_lap_completed_ms = start_epoc_ms + (_time_to_ms(lap['TotalTime']) or 0)
         lap_time_ms = _time_to_ms(lap['LapTime'])
         lap_num = int(lap['Lap'])
         try:
@@ -711,11 +711,12 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
             .tag("class", class_name)
             .tag("car_number", car_number)
             .field("lap_no", lap_num)
-            .field("lap_time", lap_time_ms)
             .field("flag_status", lap['FlagStatus'])
             .field("schema_version", SCHEMA_VERSION)
             .time(time_lap_completed_ms, WritePrecision.MS)
         )
+        if lap_time_ms is not None:
+            point = point.field("lap_time", lap_time_ms)
         if position is not None:
             point = point.field("position", position)
         if session_id is not None:
