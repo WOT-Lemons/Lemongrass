@@ -999,6 +999,65 @@ def _compute_class_positions_live(session_response):
     return result
 
 
+def push_influx_standings_live(ctx, session_response, session_id):
+    """Write one standings point per competitor from a live session snapshot."""
+    if not session_response.get('Successful'):
+        logging.debug("push_influx_standings_live: unsuccessful session response, skipping")
+        return
+    competitors = session_response['Session']['Competitors']
+    classes = session_response['Session']['Classes']
+    class_positions = _compute_class_positions_live(session_response)
+    timestamp_ms = int(time.time() * 1000)
+    points = []
+    for comp in competitors.values():
+        try:
+            position = int(comp['Position'])
+        except (ValueError, TypeError):
+            continue
+        try:
+            lap_count = int(comp['Laps'])
+        except (ValueError, TypeError):
+            continue
+        class_id = comp['ClassID']
+        class_name = classes.get(class_id, {}).get('Description', class_id)
+        competitor_name = (
+            f"{comp.get('FirstName', '')} {comp.get('LastName', '')}".strip() or None
+        )
+        car_info = comp.get('AdditionalData') or None
+        car_number = comp['Number']
+        best_lap_ms = _time_to_ms(comp.get('BestLapTime', ''))
+        last_lap_ms = _time_to_ms(comp.get('LastLapTime', ''))
+        class_position = class_positions.get(car_number)
+        point = (
+            Point("standings")
+            .tag("race_id", ctx.race_id)
+            .tag("car_number", car_number)
+            .tag("competitor_name", competitor_name)
+            .tag("car_info", car_info)
+            .tag("class", class_name)
+            .field("position", position)
+            .field("lap_count", lap_count)
+            .time(timestamp_ms, WritePrecision.MS)
+        )
+        if session_id is not None:
+            point = point.tag("session_id", str(session_id))
+        if class_position is not None:
+            point = point.field("class_position", class_position)
+        if best_lap_ms is not None:
+            point = point.field("best_lap_time", best_lap_ms)
+        if last_lap_ms is not None:
+            point = point.field("last_lap_time", last_lap_ms)
+        points.append(point)
+    if points:
+        try:
+            _write_points_chunked(ctx.write_api, points)
+            logging.debug(
+                "Wrote %d standings points for live race %s", len(points), ctx.race_id)
+        except Exception as e:
+            logging.error(
+                "Writing standings failed for race %s: %s", ctx.race_id, e)
+
+
 def _resolve_race_metadata(race_details, client):
     """Resolve race-level metadata from race details and a single series lookup."""
     if not race_details.get('Successful'):
