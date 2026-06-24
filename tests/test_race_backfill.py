@@ -117,7 +117,7 @@ class TestRunBackfill:
         assert any('Real Hoopties 2022' in r.message and '253' in r.message
                    for r in caplog.records)
 
-    def test_subprocess_invokes_laps_entry_point(self):
+    def test_subprocess_invokes_lemongrass_laps(self):
         with patch.object(_mod.subprocess, 'run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             _mod.run_backfill(self._races()[:1], default_car='252', overrides={})

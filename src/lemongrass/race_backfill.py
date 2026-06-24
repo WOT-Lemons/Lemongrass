@@ -3,7 +3,7 @@
 
 Searches the RaceMonitor API for past Real Hoopties, GP du Lac, and Halloween
 Hoop races and writes lap data for a given car number to the laps/races InfluxDB
-buckets by invoking `laps -n` for each race found.
+buckets by invoking `lemongrass laps -n` for each race found.
 
 Assumes `lemongrass` is installed as a CLI tool. If running from the repo, prefix
 commands with `uv run` (e.g. `uv run lemongrass race-backfill`).
@@ -176,9 +176,9 @@ def validate_backfill(pairs, query_api):
 
 
 def run_backfill(races, default_car, overrides, dry_run=False, force=False):
-    """Run `laps -n` for each race, using per-race car number overrides where set.
+    """Run `lemongrass laps -n` for each race, using per-race car number overrides where set.
 
-    Unless force is set, passes --skip-if-complete so `laps` skips races whose
+    Unless force is set, passes --skip-if-complete so `lemongrass laps` skips races whose
     laps are already complete and written under the current schema version.
     """
     failures = []
@@ -211,7 +211,7 @@ def run_upgrade_stored(query_api, dry_run=False):
     """Query InfluxDB for stored races with stale schema versions and re-backfill them.
 
     Races already at the current SCHEMA_VERSION are skipped. Re-backfill calls
-    `laps -n <race_id>` with no car_number (fieldwide mode).
+    `lemongrass laps -n <race_id>` with no car_number (fieldwide mode).
     """
     from lemongrass.laps import SCHEMA_VERSION
 
