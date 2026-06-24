@@ -3,6 +3,8 @@ import threading
 from typing import ClassVar
 from unittest.mock import MagicMock, call, mock_open, patch
 
+import pytest
+
 import lemongrass.laps as _mod
 
 
@@ -2073,6 +2075,38 @@ class TestBuildLapPointsSessionId:
 
     def test_session_id_tag_absent_when_none(self):
         assert 'session_id' not in self._build(None)
+
+
+class TestBuildLapPointsNonNumericPosition:
+    def _ctx(self):
+        return _mod.RaceContext('138911', '77', MagicMock(), MagicMock(), 0)
+
+    def _make_lap(self, lap='227', position='1'):
+        return {'Lap': lap, 'LapTime': '104', 'Position': position,
+                'FlagStatus': 'Green', 'TotalTime': '121'}
+
+    @pytest.mark.parametrize("bad_pos", ['$G', 'P1', '--'])
+    def test_non_numeric_position_omits_field(self, bad_pos):
+        laps = [self._make_lap(position=bad_pos)]
+        points = _mod._build_lap_points(self._ctx(), laps, 'Car 77', None, 'Gold', None, 0, '77')
+        assert len(points) == 1
+        assert 'position=' not in points[0].to_line_protocol()
+
+    def test_none_position_omits_field(self):
+        laps = [self._make_lap(position=None)]
+        points = _mod._build_lap_points(self._ctx(), laps, 'Car 77', None, 'Gold', None, 0, '77')
+        assert len(points) == 1
+        assert 'position=' not in points[0].to_line_protocol()
+
+    def test_lap_number_preserved_when_position_bad(self):
+        laps = [self._make_lap(lap='227', position='$G')]
+        points = _mod._build_lap_points(self._ctx(), laps, 'Car 77', None, 'Gold', None, 0, '77')
+        assert 'lap_no=227i' in points[0].to_line_protocol()
+
+    def test_numeric_position_written_normally(self):
+        laps = [self._make_lap(lap='227', position='3')]
+        points = _mod._build_lap_points(self._ctx(), laps, 'Car 77', None, 'Gold', None, 0, '77')
+        assert 'position=3i' in points[0].to_line_protocol()
 
 
 class TestWritePointsChunked:
