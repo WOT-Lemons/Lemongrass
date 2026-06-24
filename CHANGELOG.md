@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.1.1](https://github.com/WOT-Lemons/Lemongrass/compare/v2.1.0...v2.1.1) (2026-06-24)
+
+
+### Bug Fixes
+
+* **laps:** handle non-numeric Position values from RaceMonitor API ([2a39c0c](https://github.com/WOT-Lemons/Lemongrass/commit/2a39c0ccf0543353cce57dd1ad2c535010e821e7))
+* **laps:** handle non-numeric Position values in print_rankings sort ([3967c4b](https://github.com/WOT-Lemons/Lemongrass/commit/3967c4bec50ad02825c1c168d0465a1626051c2d))
+* **laps:** omit lap_time field instead of storing 0 on parse failure ([401dc3a](https://github.com/WOT-Lemons/Lemongrass/commit/401dc3a2658e8a582053f188eb90ad5ba4e1135c))
+* **race-backfill:** invoke laps via lemongrass dispatcher ([32584bf](https://github.com/WOT-Lemons/Lemongrass/commit/32584bf526f3320524bd07059ee742cbba7f5903))
+
 ## [2.1.0](https://github.com/WOT-Lemons/Lemongrass/compare/v2.0.1...v2.1.0) (2026-06-23)
 
 
