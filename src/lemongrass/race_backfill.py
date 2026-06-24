@@ -185,7 +185,7 @@ def run_backfill(races, default_car, overrides, dry_run=False, force=False):
     for race in races:
         race_id = str(race['ID'])
         car_number = resolve_car_number(race_id, default_car, overrides)
-        cmd = ['laps', '-n']
+        cmd = ['lemongrass', 'laps', '-n']
         if not force:
             cmd.append('--skip-if-complete')
         cmd += [race_id, car_number]
@@ -262,7 +262,7 @@ def run_upgrade_stored(query_api, dry_run=False):
         if dry_run:
             continue
 
-        result = subprocess.run(['laps', '-n', str(race_id)], capture_output=False)
+        result = subprocess.run(['lemongrass', 'laps', '-n', str(race_id)], capture_output=False)
         if result.returncode == 130:
             logging.info("laps was interrupted; stopping upgrade.")
             break
