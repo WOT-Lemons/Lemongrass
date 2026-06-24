@@ -324,6 +324,7 @@ def live_race(ctx, opts):
             logging.info("Car %s: class %r", ctx.car_number, class_name)
             push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
                         class_name=class_name, class_positions=None, session_id=live_session_id)
+        push_influx_standings_live(ctx, session_response, live_session_id)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -600,6 +601,9 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                             ctx, session_id, session_response['Session'].get('Name'), None)
             else:
                 logging.debug("get_session returned unsuccessful; may be between sessions")
+
+            if opts.network_mode:
+                push_influx_standings_live(ctx, session_response, session_id)
 
             if poll_count % _LIVE_CHECK_INTERVAL == 0:
                 try:

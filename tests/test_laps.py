@@ -206,6 +206,51 @@ class TestMonitorRoutine:
         captured = capsys.readouterr()
         assert 'Monitoring stopped' in captured.out
 
+    def test_standings_written_each_poll_in_network_mode(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        call_count = 0
+        def fake_get_session(race_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return {'Successful': True, 'Session': {
+                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
+                with patch.object(_mod, 'push_influx'):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+
+        mock_standings.assert_called_once_with(ctx, mock_standings.call_args[0][1], 'sess-1')
+
+    def test_standings_not_written_when_not_network_mode(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+
+        call_count = 0
+        def fake_get_session(race_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return {'Successful': True, 'Session': {
+                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
+                _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+
+        mock_standings.assert_not_called()
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
@@ -929,6 +974,61 @@ class TestLiveRace:
                 with patch.object(_mod, 'push_influx_race'):
                     _mod.live_race(ctx, opts)
         assert ctx.client.live.get_session.call_count == 1
+
+
+class TestLiveRaceStandingsWrite:
+    def test_standings_written_at_startup_in_network_mode(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000)
+        ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=False, interval=30)
+
+        session_resp = {'Successful': True, 'Session': {
+            'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+        ctx.client.live.get_session.return_value = session_resp
+        ctx.client.live.get_racer.return_value = {
+            'Successful': True,
+            'Details': {
+                'Competitor': {
+                    'FirstName': 'Ben', 'LastName': 'K', 'Number': '42',
+                    'Transponder': 'T', 'BestPosition': '1', 'Position': '1',
+                    'Laps': '5', 'BestLap': '3', 'BestLapTime': '1:30.000',
+                    'TotalTime': '10:00.000', 'AdditionalData': None,
+                },
+                'Laps': [],
+            },
+        }
+
+        with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'push_influx_session'):
+                with patch.object(_mod, 'push_influx'):
+                    with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
+                        _mod.live_race(ctx, opts)
+
+        mock_standings.assert_called_once_with(ctx, session_resp, 'sess-1')
+
+    def test_standings_not_written_at_startup_when_not_network_mode(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 1000)
+        opts = _mod.RaceOptions(network_mode=False, monitor_mode=False, interval=30)
+
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': {
+            'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+        ctx.client.live.get_racer.return_value = {
+            'Successful': True,
+            'Details': {
+                'Competitor': {
+                    'FirstName': 'Ben', 'LastName': 'K', 'Number': '42',
+                    'Transponder': 'T', 'BestPosition': '1', 'Position': '1',
+                    'Laps': '5', 'BestLap': '3', 'BestLapTime': '1:30.000',
+                    'TotalTime': '10:00.000', 'AdditionalData': None,
+                },
+                'Laps': [],
+            },
+        }
+
+        with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
+            _mod.live_race(ctx, opts)
+
+        mock_standings.assert_not_called()
 
 
 class TestOldRaceClassWiring:
