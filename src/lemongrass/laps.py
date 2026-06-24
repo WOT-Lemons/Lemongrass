@@ -507,7 +507,9 @@ def print_rankings(sorted_competitors, _race_live, selected_class, categories):
         sorted_competitors_df = sorted_competitors_df.rename(
             columns={'Category': 'Class', 'Number': '#', 'Position': 'Overall Pos.'})
         sorted_competitors_df = sorted_competitors_df.sort_values(
-            'Overall Pos.', key=pandas.to_numeric, ignore_index=True)
+            'Overall Pos.',
+            key=lambda s: pandas.to_numeric(s, errors='coerce'),
+            ignore_index=True)
         sorted_competitors_df['Class Pos.'] = (
             sorted_competitors_df.groupby('Class').cumcount() + 1)
         sorted_competitors_df = sorted_competitors_df[
@@ -523,7 +525,9 @@ def print_rankings(sorted_competitors, _race_live, selected_class, categories):
         sorted_competitors_df = sorted_competitors_df.rename(
             columns={'Category': 'Class', 'Number': '#', 'Position': 'Pos.'})
         sorted_competitors_df = sorted_competitors_df.sort_values(
-            'Pos.', key=pandas.to_numeric, ignore_index=True)
+            'Pos.',
+            key=lambda s: pandas.to_numeric(s, errors='coerce'),
+            ignore_index=True)
         sorted_competitors_df['Class Pos.'] = (
             sorted_competitors_df.groupby('Class').cumcount() + 1)
         sorted_competitors_df = sorted_competitors_df[
