@@ -979,6 +979,26 @@ def _resolve_class_live(session_response, car_number):
     return class_name, class_position
 
 
+def _compute_class_positions_live(session_response):
+    """Return {car_number: class_position} for all live competitors in one pass."""
+    if not session_response.get('Successful'):
+        return {}
+    competitors = session_response['Session']['Competitors']
+    by_class = defaultdict(list)
+    for comp in competitors.values():
+        try:
+            pos = int(comp['Position'])
+        except (ValueError, TypeError):
+            continue
+        by_class[comp['ClassID']].append((pos, comp['Number']))
+    result = {}
+    for entries in by_class.values():
+        entries.sort()
+        for rank, (_, car_number) in enumerate(entries, 1):
+            result[car_number] = rank
+    return result
+
+
 def _resolve_race_metadata(race_details, client):
     """Resolve race-level metadata from race details and a single series lookup."""
     if not race_details.get('Successful'):

@@ -2249,3 +2249,56 @@ class TestDryRun:
         out = capsys.readouterr().out
         assert 'car 42' in out
         assert '2 laps' in out
+
+
+class TestComputeClassPositionsLive:
+    def _resp(self, competitors, classes=None):
+        return {
+            'Successful': True,
+            'Session': {
+                'Competitors': {str(i): c for i, c in enumerate(competitors)},
+                'Classes': classes or {},
+            },
+        }
+
+    def _comp(self, number, class_id, position):
+        return {'Number': number, 'ClassID': class_id, 'Position': position}
+
+    def test_single_class_ranked_by_position(self):
+        resp = self._resp([
+            self._comp('42', 'A', '1'),
+            self._comp('7',  'A', '2'),
+            self._comp('99', 'A', '3'),
+        ])
+        result = _mod._compute_class_positions_live(resp)
+        assert result == {'42': 1, '7': 2, '99': 3}
+
+    def test_multiple_classes_ranked_independently(self):
+        resp = self._resp([
+            self._comp('42', 'A', '1'),
+            self._comp('7',  'B', '2'),
+            self._comp('99', 'A', '3'),
+            self._comp('5',  'B', '4'),
+        ])
+        result = _mod._compute_class_positions_live(resp)
+        assert result['42'] == 1  # class A, overall 1st
+        assert result['99'] == 2  # class A, overall 3rd
+        assert result['7']  == 1  # class B, overall 2nd
+        assert result['5']  == 2  # class B, overall 4th
+
+    def test_non_numeric_position_excluded(self):
+        resp = self._resp([
+            self._comp('42', 'A', '1'),
+            self._comp('7',  'A', 'N/A'),
+        ])
+        result = _mod._compute_class_positions_live(resp)
+        assert '7' not in result
+        assert result['42'] == 1
+
+    def test_single_car_class_gets_position_1(self):
+        resp = self._resp([self._comp('42', 'A', '5')])
+        result = _mod._compute_class_positions_live(resp)
+        assert result == {'42': 1}
+
+    def test_unsuccessful_response_returns_empty(self):
+        assert _mod._compute_class_positions_live({'Successful': False}) == {}
