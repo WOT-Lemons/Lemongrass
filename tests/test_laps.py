@@ -417,8 +417,8 @@ class TestTimeToMs:
     def test_missing_milliseconds(self):
         assert _mod._time_to_ms('45:30') == 45 * 60000 + 30 * 1000
 
-    def test_unparseable_value_returns_zero(self):
-        assert _mod._time_to_ms('3$H') == 0
+    def test_unparseable_value_returns_none(self):
+        assert _mod._time_to_ms('3$H') is None
 
     def test_unparseable_value_logs_warning(self, caplog):
         import logging
@@ -571,6 +571,21 @@ class TestPushInfluxClassInfo:
         assert 'lap_time=90000i' in record
         # TotalTime 45:30.000 = 2730000 ms; start_epoc=0 → timestamp 2730000
         assert record.endswith('2730000')
+
+    def test_omits_lap_time_field_when_unparseable(self):
+        ctx, write_api = self._ctx()
+        laps = [{'Lap': '1', 'LapTime': '3$H', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'}]
+        _mod.push_influx(ctx, laps, False)
+        assert 'lap_time' not in self._record(write_api)
+
+    def test_unparseable_total_time_anchors_to_start_epoc(self):
+        ctx, write_api = self._ctx()  # start_epoc=0
+        laps = [{'Lap': '1', 'LapTime': '1:30.000', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '3$H'}]
+        _mod.push_influx(ctx, laps, False)
+        # TotalTime unparseable → falls back to 0; timestamp = start_epoc_ms + 0 = 0
+        assert self._record(write_api).endswith(' 0')
 
     def test_explicit_car_number_overrides_ctx(self):
         ctx, write_api = self._ctx()  # ctx.car_number = '42'
