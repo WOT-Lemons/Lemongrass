@@ -1226,7 +1226,8 @@ class TestOldRaceClassWiring:
                                           return_value=('A', {1: 1})):
                             _mod.old_race(ctx, opts)
         mock_del.assert_called_once_with(ctx)
-        assert order == ['delete', 'write']
+        assert order[0] == 'delete'
+        assert 'write' in order
 
     def test_delete_fires_once_across_multiple_sessions(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -2475,3 +2476,85 @@ class TestPushInfluxStandingsLive:
         with patch.object(_mod, '_write_points_chunked') as mock_write:
             _mod.push_influx_standings_live(ctx, {'Successful': False}, 'sess-1')
         mock_write.assert_not_called()
+
+
+class TestPushInfluxStandingsHistorical:
+    def _entry(self, competitors):
+        return {
+            'session_id': 101,
+            'session_name': 'Race',
+            'start_epoc': 1700000000,
+            'competitors': competitors,
+        }
+
+    def _comp(self, car_number='42', position='3', laps='50', class_name='B',
+              class_positions=None, best='1:30.000', last='1:31.000'):
+        return {
+            'car_number': car_number,
+            'competitor_name': 'Ben K',
+            'car_info': None,
+            'class_name': class_name,
+            'class_positions': class_positions if class_positions is not None else {50: 2},
+            'influx_laps': [],
+            'final_position': position,
+            'final_laps': laps,
+            'best_lap_time': best,
+            'last_lap_time': last,
+        }
+
+    def test_writes_one_point_per_competitor(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp('42'), self._comp('7', position='5')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        mock_write.assert_called_once()
+        assert len(mock_write.call_args[0][1]) == 2
+
+    def test_measurement_is_standings(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp()])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert lp.startswith('standings,')
+
+    def test_uses_final_class_position(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        comp = self._comp(class_positions={1: 3, 2: 2, 3: 1})
+        entry = self._entry([comp])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'class_position=1i' in lp
+
+    def test_session_id_tagged(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp()])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'session_id=101' in lp
+
+    def test_non_numeric_position_skipped(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp(position='DNF')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        mock_write.assert_not_called()
+
+    def test_unparseable_lap_times_omitted(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp(best='', last='')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'best_lap_time' not in lp
+        assert 'last_lap_time' not in lp
+
+    def test_empty_class_positions_omits_class_position_field(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp(class_positions={})])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'class_position' not in lp

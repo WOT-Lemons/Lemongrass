@@ -401,6 +401,10 @@ def old_race(ctx, opts):
                     'class_name': class_name,
                     'class_positions': class_positions,
                     'car_number': comp_number,
+                    'final_position': competitor.get('Position', ''),
+                    'final_laps': competitor.get('Laps', ''),
+                    'best_lap_time': competitor.get('BestLapTime', ''),
+                    'last_lap_time': competitor.get('LastLapTime', ''),
                 })
             pending_writes.append(session_entry)
 
@@ -471,6 +475,9 @@ def old_race(ctx, opts):
         for session in pending_writes:
             push_influx_session(
                 ctx, session['session_id'], session['session_name'], session['start_epoc'])
+
+        for session in pending_writes:
+            push_influx_standings_historical(ctx, session)
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
@@ -1060,6 +1067,58 @@ def push_influx_standings_live(ctx, session_response, session_id):
         except Exception as e:
             logging.error(
                 "Writing standings failed for race %s: %s", ctx.race_id, e)
+
+
+def push_influx_standings_historical(ctx, session_entry):
+    """Write one standings point per competitor from a completed session."""
+    start_epoc = session_entry.get('start_epoc') or 0
+    timestamp_ms = start_epoc * 1000
+    session_id = session_entry['session_id']
+    points = []
+    for comp in session_entry['competitors']:
+        try:
+            position = int(comp['final_position'])
+        except (ValueError, TypeError):
+            continue
+        try:
+            lap_count = int(comp['final_laps'])
+        except (ValueError, TypeError):
+            continue
+        class_positions = comp.get('class_positions') or {}
+        class_position = (
+            class_positions[max(class_positions)] if class_positions else None
+        )
+        best_lap_ms = _time_to_ms(comp.get('best_lap_time') or '')
+        last_lap_ms = _time_to_ms(comp.get('last_lap_time') or '')
+        point = (
+            Point("standings")
+            .tag("race_id", ctx.race_id)
+            .tag("car_number", comp['car_number'])
+            .tag("competitor_name", comp['competitor_name'])
+            .tag("car_info", comp['car_info'])
+            .tag("class", comp['class_name'])
+            .tag("session_id", str(session_id))
+            .field("position", position)
+            .field("lap_count", lap_count)
+            .time(timestamp_ms, WritePrecision.MS)
+        )
+        if class_position is not None:
+            point = point.field("class_position", class_position)
+        if best_lap_ms is not None:
+            point = point.field("best_lap_time", best_lap_ms)
+        if last_lap_ms is not None:
+            point = point.field("last_lap_time", last_lap_ms)
+        points.append(point)
+    if points:
+        try:
+            _write_points_chunked(ctx.write_api, points)
+            logging.debug(
+                "Wrote %d historical standings for race %s session %s",
+                len(points), ctx.race_id, session_id)
+        except Exception as e:
+            logging.error(
+                "Writing historical standings failed for race %s session %s: %s",
+                ctx.race_id, session_id, e)
 
 
 def _resolve_race_metadata(race_details, client):
