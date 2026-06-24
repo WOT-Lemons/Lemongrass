@@ -117,12 +117,12 @@ class TestRunBackfill:
         assert any('Real Hoopties 2022' in r.message and '253' in r.message
                    for r in caplog.records)
 
-    def test_subprocess_invokes_laps_entry_point(self):
+    def test_subprocess_invokes_lemongrass_laps(self):
         with patch.object(_mod.subprocess, 'run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             _mod.run_backfill(self._races()[:1], default_car='252', overrides={})
         cmd = mock_run.call_args.args[0]
-        assert cmd[0] == 'laps'
+        assert cmd[:2] == ['lemongrass', 'laps']
 
     def test_failure_summary_logged_when_any_race_fails(self, caplog):
         import logging
@@ -348,7 +348,7 @@ class TestRunUpgradeStored:
             _mod.run_upgrade_stored(query_api)
         assert mock_run.call_count == 1
         cmd = mock_run.call_args.args[0]
-        assert cmd == ['laps', '-n', '101']
+        assert cmd == ['lemongrass', 'laps', '-n', '101']
 
     def test_dry_run_does_not_call_subprocess(self):
         query_api = self._query_api(
