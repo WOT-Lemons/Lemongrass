@@ -694,8 +694,11 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
         try:
             position = int(lap['Position'])
         except (ValueError, TypeError):
-            logging.warning("unparseable position %r on lap %s for %s; writing 999", lap['Position'], lap_num, competitor_name)
-            position = 999
+            logging.warning(
+                "unparseable position %r on lap %s for %s; omitting field",
+                lap['Position'], lap_num, competitor_name,
+            )
+            position = None
         point = (
             Point("lap")
             .tag("race_id", ctx.race_id)
@@ -705,11 +708,12 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
             .tag("car_number", car_number)
             .field("lap_no", lap_num)
             .field("lap_time", lap_time_ms)
-            .field("position", position)
             .field("flag_status", lap['FlagStatus'])
             .field("schema_version", SCHEMA_VERSION)
             .time(time_lap_completed_ms, WritePrecision.MS)
         )
+        if position is not None:
+            point = point.field("position", position)
         if session_id is not None:
             point = point.tag("session_id", str(session_id))
         if class_positions is not None:
