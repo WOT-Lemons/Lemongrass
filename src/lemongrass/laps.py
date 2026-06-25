@@ -324,6 +324,7 @@ def live_race(ctx, opts):
             logging.info("Car %s: class %r", ctx.car_number, class_name)
             push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
                         class_name=class_name, class_positions=None, session_id=live_session_id)
+        push_influx_standings_live(ctx, session_response, live_session_id)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -400,6 +401,10 @@ def old_race(ctx, opts):
                     'class_name': class_name,
                     'class_positions': class_positions,
                     'car_number': comp_number,
+                    'final_position': competitor.get('Position', ''),
+                    'final_laps': competitor.get('Laps', ''),
+                    'best_lap_time': competitor.get('BestLapTime', ''),
+                    'last_lap_time': competitor.get('LastLapTime', ''),
                 })
             pending_writes.append(session_entry)
 
@@ -470,6 +475,9 @@ def old_race(ctx, opts):
         for session in pending_writes:
             push_influx_session(
                 ctx, session['session_id'], session['session_name'], session['start_epoc'])
+
+        for session in pending_writes:
+            push_influx_standings_historical(ctx, session)
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
@@ -570,6 +578,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
 
     stop = _stop_event if _stop_event is not None else threading.Event()
     poll_count = 0
+    prev_standings = {}
     try:
         while not stop.wait(timeout=opts.interval):
             poll_count += 1
@@ -595,11 +604,16 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 if new_session_id and new_session_id != session_id:
                     print(f"\nNew session: {session_response['Session'].get('Name', '')}")
                     session_id = new_session_id
+                    prev_standings = {}
                     if opts.network_mode:
                         push_influx_session(
                             ctx, session_id, session_response['Session'].get('Name'), None)
             else:
                 logging.debug("get_session returned unsuccessful; may be between sessions")
+
+            if opts.network_mode:
+                prev_standings = push_influx_standings_live(
+                    ctx, session_response, session_id, prev_standings)
 
             if poll_count % _LIVE_CHECK_INTERVAL == 0:
                 try:
@@ -977,6 +991,149 @@ def _resolve_class_live(session_response, car_number):
         car_number, class_name, tracked_pos, class_position,
     )
     return class_name, class_position
+
+
+def _compute_class_positions_live(session_response):
+    """Return {car_number: class_position} for all live competitors in one pass."""
+    if not session_response.get('Successful'):
+        return {}
+    competitors = session_response['Session']['Competitors']
+    by_class = defaultdict(list)
+    for comp in competitors.values():
+        try:
+            pos = int(comp['Position'])
+        except (ValueError, TypeError):
+            continue
+        by_class[comp['ClassID']].append((pos, comp['Number']))
+    result = {}
+    for entries in by_class.values():
+        entries.sort()
+        for rank, (_, car_number) in enumerate(entries, 1):
+            result[car_number] = rank
+    return result
+
+
+def push_influx_standings_live(ctx, session_response, session_id, prev_standings=None):
+    """Write one standings point per competitor when standings have changed.
+
+    prev_standings maps car_number to a (position, lap_count, class_position,
+    best_lap_ms, last_lap_ms) snapshot from the previous poll.  The entire
+    field is compared atomically — if any competitor changed, all are written.
+    Pass None to write all competitors unconditionally (e.g. at race startup).
+    Returns the current standings snapshot dict for the caller to pass next poll.
+    """
+    if not session_response.get('Successful'):
+        logging.debug("push_influx_standings_live: unsuccessful session response, skipping")
+        return prev_standings if prev_standings is not None else {}
+    competitors = session_response['Session']['Competitors']
+    classes = session_response['Session']['Classes']
+    class_positions = _compute_class_positions_live(session_response)
+    timestamp_ms = int(time.time() * 1000)
+    curr_standings = {}
+    points = []
+    for comp in competitors.values():
+        try:
+            position = int(comp['Position'])
+        except (ValueError, TypeError):
+            continue
+        try:
+            lap_count = int(comp['Laps'])
+        except (ValueError, TypeError):
+            continue
+        class_id = comp['ClassID']
+        class_name = classes.get(class_id, {}).get('Description', class_id)
+        competitor_name = (
+            f"{comp.get('FirstName', '')} {comp.get('LastName', '')}".strip() or None
+        )
+        car_info = comp.get('AdditionalData') or None
+        car_number = comp['Number']
+        best_lap_ms = _time_to_ms(comp.get('BestLapTime', ''))
+        last_lap_ms = _time_to_ms(comp.get('LastLapTime', ''))
+        class_position = class_positions.get(car_number)
+        curr_standings[car_number] = (
+            position, lap_count, class_position, best_lap_ms, last_lap_ms)
+        point = (
+            Point("standings")
+            .tag("race_id", ctx.race_id)
+            .tag("car_number", car_number)
+            .tag("competitor_name", competitor_name)
+            .tag("car_info", car_info)
+            .tag("class", class_name)
+            .field("position", position)
+            .field("lap_count", lap_count)
+            .time(timestamp_ms, WritePrecision.MS)
+        )
+        if session_id is not None:
+            point = point.tag("session_id", str(session_id))
+        if class_position is not None:
+            point = point.field("class_position", class_position)
+        if best_lap_ms is not None:
+            point = point.field("best_lap_time", best_lap_ms)
+        if last_lap_ms is not None:
+            point = point.field("last_lap_time", last_lap_ms)
+        points.append(point)
+    if points and curr_standings != prev_standings:
+        try:
+            _write_points_chunked(ctx.write_api, points)
+            logging.debug(
+                "Wrote %d standings points for live race %s", len(points), ctx.race_id)
+        except Exception as e:
+            logging.error(
+                "Writing standings failed for race %s: %s", ctx.race_id, e)
+            return prev_standings if prev_standings is not None else {}
+    return curr_standings
+
+
+def push_influx_standings_historical(ctx, session_entry):
+    """Write one standings point per competitor from a completed session."""
+    start_epoc = session_entry.get('start_epoc') or 0
+    timestamp_ms = start_epoc * 1000
+    session_id = session_entry['session_id']
+    points = []
+    for comp in session_entry['competitors']:
+        try:
+            position = int(comp['final_position'])
+        except (ValueError, TypeError):
+            continue
+        try:
+            lap_count = int(comp['final_laps'])
+        except (ValueError, TypeError):
+            continue
+        class_positions = comp.get('class_positions') or {}
+        class_position = (
+            class_positions[max(class_positions)] if class_positions else None
+        )
+        best_lap_ms = _time_to_ms(comp.get('best_lap_time') or '')
+        last_lap_ms = _time_to_ms(comp.get('last_lap_time') or '')
+        point = (
+            Point("standings")
+            .tag("race_id", ctx.race_id)
+            .tag("car_number", comp['car_number'])
+            .tag("competitor_name", comp['competitor_name'])
+            .tag("car_info", comp['car_info'])
+            .tag("class", comp['class_name'])
+            .tag("session_id", str(session_id))
+            .field("position", position)
+            .field("lap_count", lap_count)
+            .time(timestamp_ms, WritePrecision.MS)
+        )
+        if class_position is not None:
+            point = point.field("class_position", class_position)
+        if best_lap_ms is not None:
+            point = point.field("best_lap_time", best_lap_ms)
+        if last_lap_ms is not None:
+            point = point.field("last_lap_time", last_lap_ms)
+        points.append(point)
+    if points:
+        try:
+            _write_points_chunked(ctx.write_api, points)
+            logging.debug(
+                "Wrote %d historical standings for race %s session %s",
+                len(points), ctx.race_id, session_id)
+        except Exception as e:
+            logging.error(
+                "Writing historical standings failed for race %s session %s: %s",
+                ctx.race_id, session_id, e)
 
 
 def _resolve_race_metadata(race_details, client):

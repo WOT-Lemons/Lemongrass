@@ -206,6 +206,81 @@ class TestMonitorRoutine:
         captured = capsys.readouterr()
         assert 'Monitoring stopped' in captured.out
 
+    def test_standings_written_each_poll_in_network_mode(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        call_count = 0
+        def fake_get_session(race_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return {'Successful': True, 'Session': {
+                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
+                with patch.object(_mod, 'push_influx'):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+
+        mock_standings.assert_called_once_with(ctx, mock_standings.call_args[0][1], 'sess-1', {})
+
+    def test_standings_not_written_when_not_network_mode(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+
+        call_count = 0
+        def fake_get_session(race_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return {'Successful': True, 'Session': {
+                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
+                _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+
+        mock_standings.assert_not_called()
+
+    def test_prev_standings_threaded_back_each_poll(self):
+        """Verify monitor_routine passes the return value of each standings call
+        back as prev_standings on the subsequent poll."""
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+        sentinel = {'42': (1, 5, None, None, None)}
+
+        call_count = 0
+        def fake_get_session(race_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                stop.set()
+            return {'Successful': True, 'Session': {
+                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        # First call returns sentinel; second call should receive it as prev_standings.
+        mock_standings = MagicMock(return_value=sentinel)
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod, 'push_influx_standings_live', mock_standings):
+                with patch.object(_mod, 'push_influx'):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+
+        assert mock_standings.call_count == 2
+        _, _, _, second_prev = mock_standings.call_args_list[1][0]
+        assert second_prev == sentinel
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
@@ -931,6 +1006,61 @@ class TestLiveRace:
         assert ctx.client.live.get_session.call_count == 1
 
 
+class TestLiveRaceStandingsWrite:
+    def test_standings_written_at_startup_in_network_mode(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000)
+        ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=False, interval=30)
+
+        session_resp = {'Successful': True, 'Session': {
+            'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+        ctx.client.live.get_session.return_value = session_resp
+        ctx.client.live.get_racer.return_value = {
+            'Successful': True,
+            'Details': {
+                'Competitor': {
+                    'FirstName': 'Ben', 'LastName': 'K', 'Number': '42',
+                    'Transponder': 'T', 'BestPosition': '1', 'Position': '1',
+                    'Laps': '5', 'BestLap': '3', 'BestLapTime': '1:30.000',
+                    'TotalTime': '10:00.000', 'AdditionalData': None,
+                },
+                'Laps': [],
+            },
+        }
+
+        with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'push_influx_session'):
+                with patch.object(_mod, 'push_influx'):
+                    with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
+                        _mod.live_race(ctx, opts)
+
+        mock_standings.assert_called_once_with(ctx, session_resp, 'sess-1')
+
+    def test_standings_not_written_at_startup_when_not_network_mode(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 1000)
+        opts = _mod.RaceOptions(network_mode=False, monitor_mode=False, interval=30)
+
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': {
+            'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+        ctx.client.live.get_racer.return_value = {
+            'Successful': True,
+            'Details': {
+                'Competitor': {
+                    'FirstName': 'Ben', 'LastName': 'K', 'Number': '42',
+                    'Transponder': 'T', 'BestPosition': '1', 'Position': '1',
+                    'Laps': '5', 'BestLap': '3', 'BestLapTime': '1:30.000',
+                    'TotalTime': '10:00.000', 'AdditionalData': None,
+                },
+                'Laps': [],
+            },
+        }
+
+        with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
+            _mod.live_race(ctx, opts)
+
+        mock_standings.assert_not_called()
+
+
 class TestOldRaceClassWiring:
     def _session_details(self, car_number='42', cat_id='1', cat_name='A'):
         return {
@@ -1126,7 +1256,8 @@ class TestOldRaceClassWiring:
                                           return_value=('A', {1: 1})):
                             _mod.old_race(ctx, opts)
         mock_del.assert_called_once_with(ctx)
-        assert order == ['delete', 'write']
+        assert order[0] == 'delete'
+        assert 'write' in order
 
     def test_delete_fires_once_across_multiple_sessions(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -2249,3 +2380,277 @@ class TestDryRun:
         out = capsys.readouterr().out
         assert 'car 42' in out
         assert '2 laps' in out
+
+
+class TestComputeClassPositionsLive:
+    def _resp(self, competitors, classes=None):
+        return {
+            'Successful': True,
+            'Session': {
+                'Competitors': {str(i): c for i, c in enumerate(competitors)},
+                'Classes': classes or {},
+            },
+        }
+
+    def _comp(self, number, class_id, position):
+        return {'Number': number, 'ClassID': class_id, 'Position': position}
+
+    def test_single_class_ranked_by_position(self):
+        resp = self._resp([
+            self._comp('42', 'A', '1'),
+            self._comp('7',  'A', '2'),
+            self._comp('99', 'A', '3'),
+        ])
+        result = _mod._compute_class_positions_live(resp)
+        assert result == {'42': 1, '7': 2, '99': 3}
+
+    def test_multiple_classes_ranked_independently(self):
+        resp = self._resp([
+            self._comp('42', 'A', '1'),
+            self._comp('7',  'B', '2'),
+            self._comp('99', 'A', '3'),
+            self._comp('5',  'B', '4'),
+        ])
+        result = _mod._compute_class_positions_live(resp)
+        assert result['42'] == 1  # class A, overall 1st
+        assert result['99'] == 2  # class A, overall 3rd
+        assert result['7']  == 1  # class B, overall 2nd
+        assert result['5']  == 2  # class B, overall 4th
+
+    def test_non_numeric_position_excluded(self):
+        resp = self._resp([
+            self._comp('42', 'A', '1'),
+            self._comp('7',  'A', 'N/A'),
+        ])
+        result = _mod._compute_class_positions_live(resp)
+        assert '7' not in result
+        assert result['42'] == 1
+
+    def test_single_car_class_gets_position_1(self):
+        resp = self._resp([self._comp('42', 'A', '5')])
+        result = _mod._compute_class_positions_live(resp)
+        assert result == {'42': 1}
+
+    def test_unsuccessful_response_returns_empty(self):
+        assert _mod._compute_class_positions_live({'Successful': False}) == {}
+
+
+class TestPushInfluxStandingsLive:
+    def _resp(self, competitors, classes=None):
+        return {
+            'Successful': True,
+            'Session': {
+                'Competitors': {str(i): c for i, c in enumerate(competitors)},
+                'Classes': classes or {},
+            },
+        }
+
+    def _comp(self, number='42', class_id='A', position='1', laps='5',
+              best='1:30.000', last='1:31.000'):
+        return {
+            'Number': number, 'ClassID': class_id, 'Position': position,
+            'Laps': laps, 'FirstName': 'Ben', 'LastName': 'K',
+            'AdditionalData': None, 'BestLapTime': best, 'LastLapTime': last,
+        }
+
+    def test_writes_one_point_per_competitor(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp('42'), self._comp('7', position='2')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        mock_write.assert_called_once()
+        assert len(mock_write.call_args[0][1]) == 2
+
+    def test_measurement_is_standings(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp()])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert lp.startswith('standings,')
+
+    def test_session_id_tagged(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp()])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-99')
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'session_id=sess-99' in lp
+
+    def test_session_id_none_omits_tag(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp()])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, None)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'session_id' not in lp
+
+    def test_non_numeric_position_skips_competitor(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp(position='N/A')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        mock_write.assert_not_called()
+
+    def test_unparseable_lap_times_omitted(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp(best='', last='')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'best_lap_time' not in lp
+        assert 'last_lap_time' not in lp
+
+    def test_unsuccessful_response_writes_nothing(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, {'Successful': False}, 'sess-1')
+        mock_write.assert_not_called()
+
+    def test_returns_curr_standings_dict(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp('42', position='1'), self._comp('7', position='2')])
+        with patch.object(_mod, '_write_points_chunked'):
+            result = _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        assert '42' in result
+        assert '7' in result
+
+    def test_unchanged_standings_skips_write(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp('42', position='1', laps='5'),
+                           self._comp('7', position='2', laps='5')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            prev = _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        mock_write.assert_called_once()
+        with patch.object(_mod, '_write_points_chunked') as mock_write2:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1', prev)
+        mock_write2.assert_not_called()
+
+    def test_any_position_change_writes_all_competitors(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp1 = self._resp([self._comp('42', position='2', laps='5'),
+                            self._comp('7', position='1', laps='5')])
+        resp2 = self._resp([self._comp('42', position='1', laps='5'),
+                            self._comp('7', position='2', laps='5')])
+        with patch.object(_mod, '_write_points_chunked'):
+            prev = _mod.push_influx_standings_live(ctx, resp1, 'sess-1')
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
+        mock_write.assert_called_once()
+        assert len(mock_write.call_args[0][1]) == 2
+
+    def test_new_lap_triggers_write(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp1 = self._resp([self._comp('42', position='1', laps='5')])
+        resp2 = self._resp([self._comp('42', position='1', laps='6')])
+        with patch.object(_mod, '_write_points_chunked'):
+            prev = _mod.push_influx_standings_live(ctx, resp1, 'sess-1')
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
+        mock_write.assert_called_once()
+
+    def test_none_prev_standings_writes_all(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp('42'), self._comp('7', position='2')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1', None)
+        mock_write.assert_called_once()
+        assert len(mock_write.call_args[0][1]) == 2
+
+    def test_unsuccessful_response_returns_prev_standings(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        prev = {'42': (1, 5, None, None, None)}
+        result = _mod.push_influx_standings_live(ctx, {'Successful': False}, 'sess-1', prev)
+        assert result == prev
+
+    def test_write_failure_returns_prev_standings_for_retry(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp1 = self._resp([self._comp('42', position='1', laps='5')])
+        resp2 = self._resp([self._comp('42', position='1', laps='6')])
+        with patch.object(_mod, '_write_points_chunked'):
+            prev = _mod.push_influx_standings_live(ctx, resp1, 'sess-1')
+        with patch.object(_mod, '_write_points_chunked', side_effect=Exception("influx down")):
+            result = _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
+        assert result == prev
+
+
+class TestPushInfluxStandingsHistorical:
+    def _entry(self, competitors):
+        return {
+            'session_id': 101,
+            'session_name': 'Race',
+            'start_epoc': 1700000000,
+            'competitors': competitors,
+        }
+
+    def _comp(self, car_number='42', position='3', laps='50', class_name='B',
+              class_positions=None, best='1:30.000', last='1:31.000'):
+        return {
+            'car_number': car_number,
+            'competitor_name': 'Ben K',
+            'car_info': None,
+            'class_name': class_name,
+            'class_positions': class_positions if class_positions is not None else {50: 2},
+            'influx_laps': [],
+            'final_position': position,
+            'final_laps': laps,
+            'best_lap_time': best,
+            'last_lap_time': last,
+        }
+
+    def test_writes_one_point_per_competitor(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp('42'), self._comp('7', position='5')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        mock_write.assert_called_once()
+        assert len(mock_write.call_args[0][1]) == 2
+
+    def test_measurement_is_standings(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp()])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert lp.startswith('standings,')
+
+    def test_uses_final_class_position(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        comp = self._comp(class_positions={1: 3, 2: 2, 3: 1})
+        entry = self._entry([comp])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'class_position=1i' in lp
+
+    def test_session_id_tagged(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp()])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'session_id=101' in lp
+
+    def test_non_numeric_position_skipped(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp(position='DNF')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        mock_write.assert_not_called()
+
+    def test_unparseable_lap_times_omitted(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp(best='', last='')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'best_lap_time' not in lp
+        assert 'last_lap_time' not in lp
+
+    def test_empty_class_positions_omits_class_position_field(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp(class_positions={})])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'class_position' not in lp
