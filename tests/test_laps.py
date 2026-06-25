@@ -2720,3 +2720,25 @@ class TestMonitorRoutineCorruptedLapNumber:
                 with patch.object(_mod, 'push_influx') as mock_push:
                     _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
         mock_push.assert_not_called()
+
+    def test_bad_lap_number_logs_warning_in_monitor(self, caplog):
+        stop = threading.Event()
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        corrupted_lap = {'Lap': '$J', 'LapTime': '0:01:30.000', 'Position': '3',
+                         'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'}
+
+        call_count = 0
+        def fake_refresh(c):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return [corrupted_lap]
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+                with caplog.at_level(logging.WARNING):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        assert any('$J' in r.message for r in caplog.records)
