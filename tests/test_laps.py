@@ -227,7 +227,7 @@ class TestMonitorRoutine:
                 with patch.object(_mod, 'push_influx'):
                     _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
 
-        mock_standings.assert_called_once_with(ctx, mock_standings.call_args[0][1], 'sess-1')
+        mock_standings.assert_called_once_with(ctx, mock_standings.call_args[0][1], 'sess-1', {})
 
     def test_standings_not_written_when_not_network_mode(self):
         stop = threading.Event()
@@ -250,6 +250,36 @@ class TestMonitorRoutine:
                 _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
 
         mock_standings.assert_not_called()
+
+    def test_prev_standings_threaded_back_each_poll(self):
+        """Verify monitor_routine passes the return value of each standings call
+        back as prev_standings on the subsequent poll."""
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+        sentinel = {'42': (1, 5, None, None, None)}
+
+        call_count = 0
+        def fake_get_session(race_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                stop.set()
+            return {'Successful': True, 'Session': {
+                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        # First call returns sentinel; second call should receive it as prev_standings.
+        mock_standings = MagicMock(return_value=sentinel)
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod, 'push_influx_standings_live', mock_standings):
+                with patch.object(_mod, 'push_influx'):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+
+        assert mock_standings.call_count == 2
+        _, _, _, second_prev = mock_standings.call_args_list[1][0]
+        assert second_prev == sentinel
 
 
 class TestWriteCSV:
@@ -2476,6 +2506,72 @@ class TestPushInfluxStandingsLive:
         with patch.object(_mod, '_write_points_chunked') as mock_write:
             _mod.push_influx_standings_live(ctx, {'Successful': False}, 'sess-1')
         mock_write.assert_not_called()
+
+    def test_returns_curr_standings_dict(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp('42', position='1'), self._comp('7', position='2')])
+        with patch.object(_mod, '_write_points_chunked'):
+            result = _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        assert '42' in result
+        assert '7' in result
+
+    def test_unchanged_standings_skips_write(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp('42', position='1', laps='5'),
+                           self._comp('7', position='2', laps='5')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            prev = _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        mock_write.assert_called_once()
+        with patch.object(_mod, '_write_points_chunked') as mock_write2:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1', prev)
+        mock_write2.assert_not_called()
+
+    def test_any_position_change_writes_all_competitors(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp1 = self._resp([self._comp('42', position='2', laps='5'),
+                            self._comp('7', position='1', laps='5')])
+        resp2 = self._resp([self._comp('42', position='1', laps='5'),
+                            self._comp('7', position='2', laps='5')])
+        with patch.object(_mod, '_write_points_chunked'):
+            prev = _mod.push_influx_standings_live(ctx, resp1, 'sess-1')
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
+        mock_write.assert_called_once()
+        assert len(mock_write.call_args[0][1]) == 2
+
+    def test_new_lap_triggers_write(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp1 = self._resp([self._comp('42', position='1', laps='5')])
+        resp2 = self._resp([self._comp('42', position='1', laps='6')])
+        with patch.object(_mod, '_write_points_chunked'):
+            prev = _mod.push_influx_standings_live(ctx, resp1, 'sess-1')
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
+        mock_write.assert_called_once()
+
+    def test_none_prev_standings_writes_all(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp('42'), self._comp('7', position='2')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1', None)
+        mock_write.assert_called_once()
+        assert len(mock_write.call_args[0][1]) == 2
+
+    def test_unsuccessful_response_returns_prev_standings(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        prev = {'42': (1, 5, None, None, None)}
+        result = _mod.push_influx_standings_live(ctx, {'Successful': False}, 'sess-1', prev)
+        assert result == prev
+
+    def test_write_failure_returns_prev_standings_for_retry(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp1 = self._resp([self._comp('42', position='1', laps='5')])
+        resp2 = self._resp([self._comp('42', position='1', laps='6')])
+        with patch.object(_mod, '_write_points_chunked'):
+            prev = _mod.push_influx_standings_live(ctx, resp1, 'sess-1')
+        with patch.object(_mod, '_write_points_chunked', side_effect=Exception("influx down")):
+            result = _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
+        assert result == prev
 
 
 class TestPushInfluxStandingsHistorical:

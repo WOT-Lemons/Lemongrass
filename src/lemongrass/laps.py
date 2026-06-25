@@ -578,6 +578,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
 
     stop = _stop_event if _stop_event is not None else threading.Event()
     poll_count = 0
+    prev_standings = {}
     try:
         while not stop.wait(timeout=opts.interval):
             poll_count += 1
@@ -603,6 +604,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 if new_session_id and new_session_id != session_id:
                     print(f"\nNew session: {session_response['Session'].get('Name', '')}")
                     session_id = new_session_id
+                    prev_standings = {}
                     if opts.network_mode:
                         push_influx_session(
                             ctx, session_id, session_response['Session'].get('Name'), None)
@@ -610,7 +612,8 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 logging.debug("get_session returned unsuccessful; may be between sessions")
 
             if opts.network_mode:
-                push_influx_standings_live(ctx, session_response, session_id)
+                prev_standings = push_influx_standings_live(
+                    ctx, session_response, session_id, prev_standings)
 
             if poll_count % _LIVE_CHECK_INTERVAL == 0:
                 try:
@@ -1010,15 +1013,23 @@ def _compute_class_positions_live(session_response):
     return result
 
 
-def push_influx_standings_live(ctx, session_response, session_id):
-    """Write one standings point per competitor from a live session snapshot."""
+def push_influx_standings_live(ctx, session_response, session_id, prev_standings=None):
+    """Write one standings point per competitor when standings have changed.
+
+    prev_standings maps car_number to a (position, lap_count, class_position,
+    best_lap_ms, last_lap_ms) snapshot from the previous poll.  The entire
+    field is compared atomically — if any competitor changed, all are written.
+    Pass None to write all competitors unconditionally (e.g. at race startup).
+    Returns the current standings snapshot dict for the caller to pass next poll.
+    """
     if not session_response.get('Successful'):
         logging.debug("push_influx_standings_live: unsuccessful session response, skipping")
-        return
+        return prev_standings if prev_standings is not None else {}
     competitors = session_response['Session']['Competitors']
     classes = session_response['Session']['Classes']
     class_positions = _compute_class_positions_live(session_response)
     timestamp_ms = int(time.time() * 1000)
+    curr_standings = {}
     points = []
     for comp in competitors.values():
         try:
@@ -1039,6 +1050,8 @@ def push_influx_standings_live(ctx, session_response, session_id):
         best_lap_ms = _time_to_ms(comp.get('BestLapTime', ''))
         last_lap_ms = _time_to_ms(comp.get('LastLapTime', ''))
         class_position = class_positions.get(car_number)
+        curr_standings[car_number] = (
+            position, lap_count, class_position, best_lap_ms, last_lap_ms)
         point = (
             Point("standings")
             .tag("race_id", ctx.race_id)
@@ -1059,7 +1072,7 @@ def push_influx_standings_live(ctx, session_response, session_id):
         if last_lap_ms is not None:
             point = point.field("last_lap_time", last_lap_ms)
         points.append(point)
-    if points:
+    if points and curr_standings != prev_standings:
         try:
             _write_points_chunked(ctx.write_api, points)
             logging.debug(
@@ -1067,6 +1080,8 @@ def push_influx_standings_live(ctx, session_response, session_id):
         except Exception as e:
             logging.error(
                 "Writing standings failed for race %s: %s", ctx.race_id, e)
+            return prev_standings if prev_standings is not None else {}
+    return curr_standings
 
 
 def push_influx_standings_historical(ctx, session_entry):
