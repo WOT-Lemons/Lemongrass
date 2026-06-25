@@ -24,7 +24,7 @@ dependencies = [
     "influxdb-client~=1.47",
     "obd~=0.7",
     "pandas~=2.3",
-    "race-monitor>=0.5.1,<1",
+    "race-monitor>=0.6.0,<1",
 ]
 
 [project.urls]
