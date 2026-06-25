@@ -636,7 +636,12 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     if opts.network_mode:
                         class_name, class_position = _resolve_class_live(
                             session_response, ctx.car_number)
-                        new_lap_num = int(lap['Lap'])
+                        try:
+                            new_lap_num = int(lap['Lap'])
+                        except (ValueError, TypeError):
+                            logging.warning(
+                                "unparseable lap number %r in monitor; skipping", lap['Lap'])
+                            continue
                         class_positions = (
                             {new_lap_num: class_position} if class_position is not None else None)
                         push_influx(
@@ -709,7 +714,12 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
     for lap in laps:
         time_lap_completed_ms = start_epoc_ms + (_time_to_ms(lap['TotalTime']) or 0)
         lap_time_ms = _time_to_ms(lap['LapTime'])
-        lap_num = int(lap['Lap'])
+        try:
+            lap_num = int(lap['Lap'])
+        except (ValueError, TypeError):
+            logging.warning("unparseable lap number %r for %s; skipping lap", lap['Lap'],
+                            competitor_name)
+            continue
         try:
             position = int(lap['Position'])
         except (ValueError, TypeError):
