@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 from typing import ClassVar
 from unittest.mock import MagicMock, call, mock_open, patch
@@ -6,6 +7,45 @@ from unittest.mock import MagicMock, call, mock_open, patch
 import pytest
 
 import lemongrass.laps as _mod
+
+
+class TestResolveTokens:
+    def test_multi_tokens_returns_list(self):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN1,TOKEN2'}, clear=True):
+            result = _mod._resolve_tokens()
+        assert result == ['TOKEN1', 'TOKEN2']
+
+    def test_single_racemonitor_tokens_returns_string(self):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN1'}, clear=True):
+            result = _mod._resolve_tokens()
+        assert result == 'TOKEN1'
+
+    def test_falls_back_to_racemonitor_token(self):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKEN': 'FALLBACK'}, clear=True):
+            result = _mod._resolve_tokens()
+        assert result == 'FALLBACK'
+
+    def test_returns_empty_string_when_neither_set(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = _mod._resolve_tokens()
+        assert result == ''
+
+    def test_racemonitor_tokens_takes_priority(self):
+        with patch.dict(os.environ,
+                        {'RACEMONITOR_TOKENS': 'MULTI1,MULTI2', 'RACEMONITOR_TOKEN': 'SINGLE'},
+                        clear=True):
+            result = _mod._resolve_tokens()
+        assert result == ['MULTI1', 'MULTI2']
+
+    def test_strips_whitespace_from_tokens(self):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': ' TOKEN1 , TOKEN2 '}, clear=True):
+            result = _mod._resolve_tokens()
+        assert result == ['TOKEN1', 'TOKEN2']
+
+    def test_whitespace_only_racemonitor_tokens_returns_empty_string(self):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': '  ,  , '}, clear=True):
+            result = _mod._resolve_tokens()
+        assert result == ''
 
 
 class TestIntervalArg:

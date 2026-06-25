@@ -53,6 +53,15 @@ _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5
 
 
+def _resolve_tokens() -> str | list[str]:
+    """Return tokens from RACEMONITOR_TOKENS (comma-separated) or fall back to RACEMONITOR_TOKEN."""
+    multi = os.environ.get('RACEMONITOR_TOKENS')
+    if multi:
+        tokens = [t.strip() for t in multi.split(',') if t.strip()]
+        return tokens if len(tokens) > 1 else (tokens[0] if tokens else '')
+    return os.environ.get('RACEMONITOR_TOKEN', '')
+
+
 class MonitorStatus(enum.Enum):
     """Return values from monitor_routine indicating how polling ended."""
 
@@ -147,9 +156,9 @@ def main():
     # Pandas default max rows truncating lap times. I don't expect a team to do more than 1024 laps.
     pandas.set_option("display.max_rows", 1024)
 
-    token = os.environ.get('RACEMONITOR_TOKEN')
-    if not token:
-        logging.error("RACEMONITOR_TOKEN environment variable not set")
+    tokens = _resolve_tokens()
+    if not tokens:
+        logging.error("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN environment variable not set")
         sys.exit(1)
 
     influx_token = None
@@ -173,7 +182,7 @@ def main():
     )
 
     try:
-        with RaceMonitorClient(api_token=token) as client:
+        with RaceMonitorClient(api_token=tokens) as client:
             race_details = client.race.details(race_id)
 
             start_epoc = 0
