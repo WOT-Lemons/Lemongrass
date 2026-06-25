@@ -34,7 +34,8 @@ Usage:
     lemongrass race-backfill --upgrade-stored
 
 Required environment variables:
-    RACEMONITOR_TOKEN      — RaceMonitor API token (always required)
+    RACEMONITOR_TOKENS     — comma-separated RaceMonitor API tokens (preferred)
+    RACEMONITOR_TOKEN      — single RaceMonitor API token (fallback)
     INFLUX_TELEMETRY_TOKEN — InfluxDB token (read-only sufficient for --validate;
                              full backfill requires write access via the laps command)
 """
@@ -47,6 +48,8 @@ import sys
 from datetime import datetime, timezone
 
 from race_monitor import RaceMonitorClient
+
+from lemongrass._env import resolve_tokens
 
 LEMONS_SEARCH_TERMS = ['Real Hoopties', 'GP du Lac', 'Halloween Hoop']
 DEFAULT_CAR_NUMBER = '252'
@@ -306,8 +309,7 @@ def main():
             sys.exit(130)
         sys.exit(1 if failures else 0)
 
-    from lemongrass.laps import _resolve_tokens
-    tokens = _resolve_tokens()
+    tokens = resolve_tokens()
     if not tokens:
         logging.error("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN environment variable not set")
         sys.exit(1)
