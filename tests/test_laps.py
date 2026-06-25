@@ -2654,3 +2654,69 @@ class TestPushInfluxStandingsHistorical:
             _mod.push_influx_standings_historical(ctx, entry)
         lp = mock_write.call_args[0][1][0].to_line_protocol()
         assert 'class_position' not in lp
+
+
+class TestBuildLapPointsCorruptedLapNumber:
+    """Corrupted Lap field (e.g. '$J') must not crash the write — the lap is skipped."""
+
+    def _ctx(self):
+        write_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 0)
+        return ctx, write_api
+
+    def _lap(self, lap_num='1'):
+        return {'Lap': lap_num, 'LapTime': '0:01:30.000', 'Position': '3',
+                'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'}
+
+    def test_skips_lap_when_lap_number_unparseable(self):
+        ctx, write_api = self._ctx()
+        laps = [self._lap('$J')]
+        _mod.push_influx(ctx, laps, False)
+        write_api.write.assert_not_called()
+
+    def test_logs_warning_when_lap_number_unparseable(self, caplog):
+        ctx, _ = self._ctx()
+        with caplog.at_level(logging.WARNING):
+            _mod.push_influx(ctx, [self._lap('$J')], False)
+        assert any('$J' in r.message for r in caplog.records)
+
+    def test_other_laps_still_written_when_one_has_bad_lap_number(self):
+        ctx, write_api = self._ctx()
+        laps = [self._lap('$J'), self._lap('2')]
+        _mod.push_influx(ctx, laps, False)
+        write_api.write.assert_called_once()
+        record = write_api.write.call_args[1]['record']
+        assert len(record) == 1
+        assert 'lap_no=2i' in record[0].to_line_protocol()
+
+
+class TestMonitorRoutineCorruptedLapNumber:
+    """A new lap with a corrupted Lap field must not crash the monitor loop."""
+
+    def _ctx(self):
+        write_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 0)
+        ctx.client.live.get_session.return_value = {'Successful': False}
+        return ctx
+
+    def test_bad_lap_number_does_not_crash_monitor_in_network_mode(self):
+        stop = threading.Event()
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        corrupted_lap = {'Lap': '$J', 'LapTime': '0:01:30.000', 'Position': '3',
+                         'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'}
+
+        call_count = 0
+        def fake_refresh(c):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                stop.set()
+            return [corrupted_lap]
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+                with patch.object(_mod, 'push_influx') as mock_push:
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        mock_push.assert_not_called()
