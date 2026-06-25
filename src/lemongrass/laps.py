@@ -12,7 +12,6 @@
 #   writes are the during-race approximation; the backfill makes the final record authoritative.
 
 import argparse
-import contextlib
 import csv
 import enum
 import logging
@@ -27,7 +26,7 @@ from datetime import datetime, timezone
 import pandas
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
-from race_monitor import RaceMonitorClient
+from race_monitor import RaceMonitorClient, get_streaming_command
 
 UNDERLINE = "-" * 80
 
@@ -60,6 +59,17 @@ def _resolve_tokens() -> str | list[str]:
         tokens = [t.strip() for t in multi.split(',') if t.strip()]
         return tokens if len(tokens) > 1 else (tokens[0] if tokens else '')
     return os.environ.get('RACEMONITOR_TOKEN', '')
+
+
+def _describe_bad_value(value: object, field: str) -> str:
+    """Return a log string distinguishing known streaming tokens from random garbage."""
+    cmd = get_streaming_command(value)
+    if cmd is not None:
+        return (
+            f"streaming command token {value!r} ({cmd.name}) in {field} field"
+            " — known API quirk, not data corruption"
+        )
+    return f"unparseable {field} value {value!r}"
 
 
 class MonitorStatus(enum.Enum):
@@ -649,7 +659,8 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                             new_lap_num = int(lap['Lap'])
                         except (ValueError, TypeError):
                             logging.warning(
-                                "unparseable lap number %r in monitor; skipping", lap['Lap'])
+                                "%s in monitor; skipping",
+                                _describe_bad_value(lap['Lap'], 'Lap'))
                             continue
                         class_positions = (
                             {new_lap_num: class_position} if class_position is not None else None)
@@ -697,7 +708,7 @@ def _time_to_ms(value):
         minutes = int(parts[-2]) if len(parts) >= 2 else 0
         return hours * 3600000 + minutes * 60000 + int(sec) * 1000 + int(ms or 0)
     except (ValueError, AttributeError):
-        logging.warning("unparseable lap time %r; omitting field", value)
+        logging.warning("%s; omitting field", _describe_bad_value(value, 'time'))
         return None
 
 
@@ -726,15 +737,15 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
         try:
             lap_num = int(lap['Lap'])
         except (ValueError, TypeError):
-            logging.warning("unparseable lap number %r for %s; skipping lap", lap['Lap'],
-                            competitor_name)
+            logging.warning("%s for %s; skipping lap",
+                            _describe_bad_value(lap['Lap'], 'Lap'), competitor_name)
             continue
         try:
             position = int(lap['Position'])
         except (ValueError, TypeError):
             logging.warning(
-                "unparseable position %r on lap %s for %s; omitting field",
-                lap['Position'], lap_num, competitor_name,
+                "%s on lap %s for %s; omitting field",
+                _describe_bad_value(lap['Position'], 'Position'), lap_num, competitor_name,
             )
             position = None
         point = (
@@ -927,8 +938,11 @@ def _resolve_class_historical(car_number, session_details):
         if competitor['Number'] == car_number:
             tracked_category = competitor['Category']
             for lap in competitor['LapTimes']:
-                with contextlib.suppress(ValueError, TypeError):
+                try:
                     tracked_laps[int(lap['Lap'])] = int(lap['Position'])
+                except (ValueError, TypeError):
+                    logging.debug("%s in class resolution; skipping",
+                                  _describe_bad_value(lap['Lap'], 'Lap'))
             break
 
     if tracked_category is None:
@@ -944,8 +958,11 @@ def _resolve_class_historical(car_number, session_details):
         if competitor['Number'] == car_number or competitor['Category'] != tracked_category:
             continue
         for lap in competitor['LapTimes']:
-            with contextlib.suppress(ValueError, TypeError):
+            try:
                 class_lap_positions[int(lap['Lap'])].append(int(lap['Position']))
+            except (ValueError, TypeError):
+                logging.debug("%s in class position resolution; skipping",
+                              _describe_bad_value(lap['Lap'], 'Lap'))
 
     class_positions = {
         lap_num: 1 + sum(1 for pos in class_lap_positions.get(lap_num, []) if pos < tracked_pos)

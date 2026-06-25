@@ -321,6 +321,28 @@ class TestMonitorRoutine:
         _, _, _, second_prev = mock_standings.call_args_list[1][0]
         assert second_prev == sentinel
 
+    def test_skips_lap_with_streaming_command_number_and_logs_command_name(self, caplog):
+        import logging
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        bad_lap = {'Lap': '$J', 'LapTime': '1:00.000'}
+        call_count = 0
+
+        def fake_refresh(c):
+            nonlocal call_count
+            call_count += 1
+            stop.set()
+            return [bad_lap]
+
+        ctx.client.live.get_session.return_value = {'Successful': False}
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with caplog.at_level(logging.WARNING):
+                _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+
+        assert 'Passing Information' in caplog.text
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
@@ -540,6 +562,20 @@ class TestTimeToMs:
         with caplog.at_level(logging.WARNING):
             _mod._time_to_ms('3$H')
         assert '3$H' in caplog.text
+
+    def test_returns_none_for_streaming_command_and_logs_command_name(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            result = _mod._time_to_ms('$F')
+        assert result is None
+        assert 'Heartbeat' in caplog.text
+
+    def test_returns_none_for_garbage_and_logs_unparseable(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            result = _mod._time_to_ms('not-a-time')
+        assert result is None
+        assert 'unparseable' in caplog.text
 
 
 class TestPushInfluxClassInfo:
@@ -2782,3 +2818,45 @@ class TestMonitorRoutineCorruptedLapNumber:
                 with caplog.at_level(logging.WARNING):
                     _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
         assert any('$J' in r.message for r in caplog.records)
+
+
+class TestDescribeBadValue:
+    def test_known_streaming_command_includes_token_and_name(self):
+        result = _mod._describe_bad_value('$J', 'Lap')
+        assert '$J' in result
+        assert 'Passing Information' in result
+        assert 'known API quirk' in result
+
+    def test_unknown_garbage_says_unparseable(self):
+        result = _mod._describe_bad_value('????', 'Lap')
+        assert 'unparseable' in result
+
+    def test_includes_field_name_in_garbage_message(self):
+        result = _mod._describe_bad_value('????', 'LapTime')
+        assert 'LapTime' in result
+
+    def test_non_string_says_unparseable(self):
+        result = _mod._describe_bad_value(None, 'Lap')
+        assert 'unparseable' in result
+
+
+class TestBuildLapPoints:
+    def test_skips_streaming_command_in_lap_field_and_logs_command_name(self, caplog):
+        import logging
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000000)
+        laps = [{'Lap': '$J', 'LapTime': '1:00.000', 'TotalTime': '1:00.000',
+                 'FlagStatus': 'Green', 'Position': '1'}]
+        with caplog.at_level(logging.WARNING):
+            points = _mod._build_lap_points(ctx, laps, 'Driver', None, None, None, 1000000, '42')
+        assert points == []
+        assert 'Passing Information' in caplog.text
+
+    def test_omits_position_for_streaming_command_and_logs_command_name(self, caplog):
+        import logging
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000000)
+        laps = [{'Lap': '1', 'LapTime': '1:00.000', 'TotalTime': '1:00.000',
+                 'FlagStatus': 'Green', 'Position': '$G'}]
+        with caplog.at_level(logging.WARNING):
+            points = _mod._build_lap_points(ctx, laps, 'Driver', None, None, None, 1000000, '42')
+        assert len(points) == 1  # lap still written, position omitted
+        assert 'Race Information' in caplog.text
