@@ -322,17 +322,17 @@ class TestMonitorRoutine:
         assert second_prev == sentinel
 
     def test_skips_lap_with_streaming_command_number_and_logs_command_name(self, caplog):
+        # This test asserts the human-readable command name appears; see
+        # TestMonitorRoutineCorruptedLapNumber.test_bad_lap_number_logs_warning_in_monitor
+        # for the test that asserts the token value itself appears.
         import logging
         stop = threading.Event()
         ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
         opts = _mod.RaceOptions(network_mode=True, interval=0)
 
         bad_lap = {'Lap': '$J', 'LapTime': '1:00.000'}
-        call_count = 0
 
         def fake_refresh(c):
-            nonlocal call_count
-            call_count += 1
             stop.set()
             return [bad_lap]
 
@@ -2840,7 +2840,7 @@ class TestDescribeBadValue:
         assert 'unparseable' in result
 
 
-class TestBuildLapPoints:
+class TestBuildLapPointsStreamingToken:
     def test_skips_streaming_command_in_lap_field_and_logs_command_name(self, caplog):
         import logging
         ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000000)
