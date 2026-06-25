@@ -306,15 +306,16 @@ def main():
             sys.exit(130)
         sys.exit(1 if failures else 0)
 
-    token = os.environ.get('RACEMONITOR_TOKEN')
-    if not token:
-        logging.error("RACEMONITOR_TOKEN environment variable not set")
+    from lemongrass.laps import _resolve_tokens
+    tokens = _resolve_tokens()
+    if not tokens:
+        logging.error("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN environment variable not set")
         sys.exit(1)
 
     start_year_epoc = int(datetime(args.start_year, 1, 1, tzinfo=timezone.utc).timestamp())
 
     try:
-        with RaceMonitorClient(api_token=token) as client:
+        with RaceMonitorClient(api_token=tokens) as client:
             races = find_matching_races(client, start_year_epoc)
             logging.info("Found %d matching races", len(races))
 
