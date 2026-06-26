@@ -1,5 +1,9 @@
+import os
+import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 import lemongrass.race_backfill as _mod
 
@@ -453,4 +457,36 @@ class TestArgParsing:
     def test_force_defaults_to_false(self):
         args = _mod._build_parser().parse_args([])
         assert args.force is False
+
+
+class TestMainTokenResolution:
+    def _run_main(self, env):
+        mock_client = MagicMock()
+        with patch.dict(os.environ, env, clear=True):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
+                    mock_rm_cls.return_value.__enter__.return_value = mock_client
+                    with patch.object(_mod, 'find_matching_races', return_value=[]):
+                        with patch.object(_mod, 'run_backfill', return_value=[]):
+                            _mod.main()
+        return mock_rm_cls
+
+    def test_uses_racemonitor_tokens_when_set(self):
+        mock_rm_cls = self._run_main({'RACEMONITOR_TOKENS': 'TOKEN1'})
+        mock_rm_cls.assert_called_once_with(api_token='TOKEN1')
+
+    def test_uses_multi_token_list_when_multiple_tokens_set(self):
+        mock_rm_cls = self._run_main({'RACEMONITOR_TOKENS': 'TOKEN1,TOKEN2'})
+        mock_rm_cls.assert_called_once_with(api_token=['TOKEN1', 'TOKEN2'])
+
+    def test_falls_back_to_racemonitor_token(self):
+        mock_rm_cls = self._run_main({'RACEMONITOR_TOKEN': 'FALLBACK'})
+        mock_rm_cls.assert_called_once_with(api_token='FALLBACK')
+
+    def test_exits_when_no_token_set(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                with pytest.raises(SystemExit) as exc_info:
+                    _mod.main()
+        assert exc_info.value.code == 1
 

@@ -16,5 +16,8 @@ try:
 
     _race_monitor_mock.get_streaming_command = _real_race_monitor.get_streaming_command
     del _real_race_monitor
+except ImportError:
+    sys.modules['race_monitor'] = _race_monitor_mock
+    raise
 finally:
     sys.modules['race_monitor'] = _race_monitor_mock

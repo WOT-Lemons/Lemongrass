@@ -59,3 +59,4 @@ class TestMainTokenResolution:
                     _mod.main()
         out = capsys.readouterr().out
         assert 'RACEMONITOR_TOKENS' in out
+        assert 'RACEMONITOR_TOKEN' in out

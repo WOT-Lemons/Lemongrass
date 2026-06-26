@@ -62,6 +62,25 @@ class TestResolveTokens:
             result = _env_mod.resolve_tokens()
         assert result == 'FALLBACK'
 
+    def test_empty_string_racemonitor_tokens_falls_back_to_single_token(self):
+        with patch.dict(os.environ,
+                        {'RACEMONITOR_TOKENS': '', 'RACEMONITOR_TOKEN': 'FALLBACK'},
+                        clear=True):
+            result = _env_mod.resolve_tokens()
+        assert result == 'FALLBACK'
+
+    def test_bare_comma_falls_back_to_single_token(self):
+        with patch.dict(os.environ,
+                        {'RACEMONITOR_TOKENS': ',', 'RACEMONITOR_TOKEN': 'FALLBACK'},
+                        clear=True):
+            result = _env_mod.resolve_tokens()
+        assert result == 'FALLBACK'
+
+    def test_middle_empty_slot_is_silently_dropped(self):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN1,,TOKEN2'}, clear=True):
+            result = _env_mod.resolve_tokens()
+        assert result == ['TOKEN1', 'TOKEN2']
+
 
 class TestIntervalArg:
     def test_default_interval_is_30(self):
@@ -337,9 +356,6 @@ class TestMonitorRoutine:
         assert second_prev == sentinel
 
     def test_skips_lap_with_streaming_command_number_and_logs_command_name(self, caplog):
-        # This test asserts the human-readable command name appears; see
-        # TestMonitorRoutineCorruptedLapNumber.test_bad_lap_number_logs_warning_in_monitor
-        # for the test that asserts the token value itself appears.
         import logging
         stop = threading.Event()
         ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
@@ -2841,6 +2857,7 @@ class TestDescribeBadValue:
         assert '$J' in result
         assert 'Passing Information' in result
         assert 'known API quirk' in result
+        assert 'Lap' in result
 
     def test_unknown_garbage_says_unparseable(self):
         result = _mod._describe_bad_value('????', 'Lap')
@@ -2875,3 +2892,15 @@ class TestBuildLapPointsStreamingToken:
             points = _mod._build_lap_points(ctx, laps, 'Driver', None, None, None, 1000000, '42')
         assert len(points) == 1  # lap still written, position omitted
         assert 'Race Information' in caplog.text
+
+
+class TestMainMissingToken:
+    def test_logs_error_and_exits_when_no_token_set(self, caplog):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(_mod.sys, 'argv', ['laps', '12345', '42']):
+                with caplog.at_level(logging.ERROR):
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        assert any('RACEMONITOR_TOKENS' in r.message and 'RACEMONITOR_TOKEN' in r.message
+                   for r in caplog.records)
