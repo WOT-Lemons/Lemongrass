@@ -7,5 +7,8 @@ def resolve_tokens() -> str | list[str]:
     multi = os.environ.get('RACEMONITOR_TOKENS')
     if multi:
         tokens = [t.strip() for t in multi.split(',') if t.strip()]
-        return tokens if len(tokens) > 1 else (tokens[0] if tokens else '')
+        if len(tokens) > 1:
+            return tokens
+        if tokens:
+            return tokens[0]
     return os.environ.get('RACEMONITOR_TOKEN', '')

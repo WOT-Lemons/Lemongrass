@@ -48,6 +48,13 @@ class TestResolveTokens:
             result = _env_mod.resolve_tokens()
         assert result == ''
 
+    def test_whitespace_only_racemonitor_tokens_falls_back_to_single_token(self):
+        with patch.dict(os.environ,
+                        {'RACEMONITOR_TOKENS': '  ,  , ', 'RACEMONITOR_TOKEN': 'FALLBACK'},
+                        clear=True):
+            result = _env_mod.resolve_tokens()
+        assert result == 'FALLBACK'
+
 
 class TestIntervalArg:
     def test_default_interval_is_30(self):
