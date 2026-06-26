@@ -55,6 +55,13 @@ class TestResolveTokens:
             result = _env_mod.resolve_tokens()
         assert result == 'FALLBACK'
 
+    def test_whitespace_only_no_commas_falls_back_to_single_token(self):
+        with patch.dict(os.environ,
+                        {'RACEMONITOR_TOKENS': '  ', 'RACEMONITOR_TOKEN': 'FALLBACK'},
+                        clear=True):
+            result = _env_mod.resolve_tokens()
+        assert result == 'FALLBACK'
+
 
 class TestIntervalArg:
     def test_default_interval_is_30(self):
