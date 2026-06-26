@@ -15,7 +15,8 @@ Example:
     lemongrass race-diagnose 144185 252
 
 Required environment variables:
-    RACEMONITOR_TOKEN      — RaceMonitor API token
+    RACEMONITOR_TOKENS     — comma-separated RaceMonitor API tokens (preferred)
+    RACEMONITOR_TOKEN      — single RaceMonitor API token (fallback)
     INFLUX_TELEMETRY_TOKEN — InfluxDB read token
 """
 
@@ -25,6 +26,8 @@ from datetime import datetime, timezone
 
 from influxdb_client import InfluxDBClient
 from race_monitor import RaceMonitorClient
+
+from lemongrass._env import resolve_tokens
 
 INFLUX_URL = 'https://influxdb.focism.com'
 INFLUX_ORG = 'focism'
@@ -121,11 +124,11 @@ def main():
 
     race_id, car_number = sys.argv[1], sys.argv[2]
 
-    rm_token = os.environ.get('RACEMONITOR_TOKEN')
+    rm_token = resolve_tokens()
     influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
 
     if not rm_token:
-        print("RACEMONITOR_TOKEN not set")
+        print("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN not set")
         sys.exit(1)
     if not influx_token:
         print("INFLUX_TELEMETRY_TOKEN not set")
