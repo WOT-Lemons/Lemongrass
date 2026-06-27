@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import pandas
@@ -92,6 +92,7 @@ class RaceContext:
     metadata: RaceMetadata | None = None
     delete_api: object = None
     query_api: object = None
+    car_info_cache: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -1076,6 +1077,16 @@ def push_influx_standings_live(ctx, session_response, session_id, prev_standings
         )
         car_info = comp.get('AdditionalData') or None
         car_number = comp['Number']
+        if car_info is not None:
+            cached = ctx.car_info_cache.get(car_number)
+            if cached is None or len(car_info) >= len(cached):
+                ctx.car_info_cache[car_number] = car_info
+            else:
+                logging.warning(
+                    "car_info for car %s shrank from %r to %r — "
+                    "using cached value to prevent InfluxDB series split",
+                    car_number, cached, car_info)
+                car_info = cached
         best_lap_ms = _time_to_ms(comp.get('BestLapTime', ''))
         last_lap_ms = _time_to_ms(comp.get('LastLapTime', ''))
         class_position = class_positions.get(car_number)
