@@ -409,6 +409,29 @@ class TestRunUpgradeStored:
             _mod.run_upgrade_stored(query_api)
         assert mock_run.call_count == 1
 
+    def test_force_rebackfills_race_already_at_current_schema(self):
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 10},  # already fully current
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _mod.run_upgrade_stored(query_api, force=True)
+        assert mock_run.call_count == 1
+        cmd = mock_run.call_args.args[0]
+        assert cmd == ['lemongrass', 'laps', '-n', '101']
+
+    def test_force_still_skips_race_with_no_stored_laps(self):
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 0},
+            current_by_race={},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            _mod.run_upgrade_stored(query_api, force=True)
+        mock_run.assert_not_called()
+
 
 class TestUpgradeStoredArgParsing:
     def test_upgrade_stored_flag_accepted(self):
@@ -418,6 +441,12 @@ class TestUpgradeStoredArgParsing:
     def test_upgrade_stored_default_false(self):
         args = _mod._build_parser().parse_args([])
         assert args.upgrade_stored is False
+
+    def test_upgrade_stored_and_force_accepted_together(self):
+        # Previously mutually exclusive — must now parse without error
+        args = _mod._build_parser().parse_args(['--upgrade-stored', '--force'])
+        assert args.upgrade_stored is True
+        assert args.force is True
 
 
 class TestArgParsing:

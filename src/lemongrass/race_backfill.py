@@ -89,7 +89,7 @@ def _build_parser():
     parser.add_argument('--upgrade-stored', dest='upgrade_stored', action='store_true',
                        default=False,
                        help='Re-backfill stored races with schema versions older than current; '
-                            'mutually exclusive with --force, --override, --start-year, '
+                            'mutually exclusive with --override, --start-year, '
                             '--car, and --validate')
     return parser
 
@@ -210,11 +210,11 @@ def run_backfill(races, default_car, overrides, dry_run=False, force=False):
     return failures
 
 
-def run_upgrade_stored(query_api, dry_run=False):
+def run_upgrade_stored(query_api, dry_run=False, force=False):
     """Query InfluxDB for stored races with stale schema versions and re-backfill them.
 
-    Races already at the current SCHEMA_VERSION are skipped. Re-backfill calls
-    `lemongrass laps -n <race_id>` with no car_number (fieldwide mode).
+    Races already at the current SCHEMA_VERSION are skipped unless force is True.
+    Re-backfill calls `lemongrass laps -n <race_id>` with no car_number (fieldwide mode).
     """
     from lemongrass.laps import SCHEMA_VERSION
 
@@ -254,14 +254,19 @@ def run_upgrade_stored(query_api, dry_run=False):
             logging.info("race %s (%s): no laps stored, skipping", race_id, race_name)
             continue
 
-        if current == total:
+        if current == total and not force:
             logging.info("race %s (%s): already at schema v%d, skipping",
                         race_id, race_name, SCHEMA_VERSION)
             continue
 
-        logging.info("race %s (%s): stale (%d/%d at current schema), %s",
-                    race_id, race_name, current, total,
-                    "would re-backfill" if dry_run else "re-backfilling")
+        if force and current == total:
+            logging.info("race %s (%s): already current, %s",
+                        race_id, race_name,
+                        "would force re-backfill" if dry_run else "force re-backfilling")
+        else:
+            logging.info("race %s (%s): stale (%d/%d at current schema), %s",
+                        race_id, race_name, current, total,
+                        "would re-backfill" if dry_run else "re-backfilling")
         if dry_run:
             continue
 
@@ -284,7 +289,6 @@ def main():
 
     if args.upgrade_stored:
         exclusive = [
-            args.force,
             bool(args.overrides),
             args.start_year != DEFAULT_START_YEAR,
             args.car_number != DEFAULT_CAR_NUMBER,
@@ -292,7 +296,7 @@ def main():
         ]
         if any(exclusive):
             logging.error(
-                "--upgrade-stored is mutually exclusive with --force, --override, "
+                "--upgrade-stored is mutually exclusive with --override, "
                 "--start-year, --car, and --validate")
             sys.exit(1)
         influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
@@ -303,7 +307,8 @@ def main():
         try:
             with InfluxDBClient(url='https://influxdb.focism.com',
                                token=influx_token, org='focism') as influx_client:
-                failures = run_upgrade_stored(influx_client.query_api(), dry_run=args.dry_run)
+                failures = run_upgrade_stored(influx_client.query_api(),
+                                              dry_run=args.dry_run, force=args.force)
         except KeyboardInterrupt:
             logging.info("Interrupted, exiting.")
             sys.exit(130)
