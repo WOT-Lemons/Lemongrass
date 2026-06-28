@@ -324,7 +324,7 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
 1. Start the stack (InfluxDB on `:8086`, Grafana on `:3000`):
 
    ```bash
-   docker compose -f docker-compose.local.yml up -d
+   docker compose -f local-testing/docker-compose.yml up -d
    ```
 
    First start creates org `lemongrass`, a pinned operator token
@@ -334,7 +334,7 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
 2. Point the CLI at the local stack by sourcing the committed app env:
 
    ```bash
-   set -a && source .env.local && set +a
+   set -a && source local-testing/.env.local && set +a
    ```
 
    This sets `INFLUX_URL=http://localhost:8086`, `INFLUX_ORG=lemongrass`, and
@@ -360,7 +360,7 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
 5. Tear down (add `-v` to wipe data and re-trigger bucket init next start):
 
    ```bash
-   docker compose -f docker-compose.local.yml down
+   docker compose -f local-testing/docker-compose.yml down
    ```
 
 **Note:** telemetry/OBD commands (`telem`, `pisugar-monitor`) are out of scope for

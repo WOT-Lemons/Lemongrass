@@ -1,5 +1,5 @@
 # Local-only test stack. Non-secret credentials are inlined on purpose so that
-#   docker compose -f docker-compose.local.yml up
+#   docker compose -f local-testing/docker-compose.yml up
 # works with no --env-file flag. Do NOT use these values anywhere real.
 name: lemongrass-local
 
@@ -17,7 +17,7 @@ services:
       DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: local-dev-token
     volumes:
       - influxdb-data:/var/lib/influxdb2
-      - ./scripts/influx-init:/docker-entrypoint-initdb.d:ro
+      - ./influx-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "influx", "ping"]
       interval: 5s
