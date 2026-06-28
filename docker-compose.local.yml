@@ -1,0 +1,42 @@
+# Local-only test stack. Non-secret credentials are inlined on purpose so that
+#   docker compose -f docker-compose.local.yml up
+# works with no --env-file flag. Do NOT use these values anywhere real.
+name: lemongrass-local
+
+services:
+  influxdb:
+    image: influxdb:2@sha256:003e028b675205f6148e5f30369fd3e854993b385f1e5e4d2d85bc9f8701bf28
+    ports:
+      - "127.0.0.1:8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: local-dev-password
+      DOCKER_INFLUXDB_INIT_ORG: lemongrass
+      DOCKER_INFLUXDB_INIT_BUCKET: laps
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: local-dev-token
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - ./scripts/influx-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  grafana:
+    image: grafana/grafana:12.4@sha256:378f94b054e5384cd74322cbf7542cff6a43e068e4011f81ea5e75323247df02
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: local-dev-password
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+
+volumes:
+  influxdb-data:
+  grafana-data:
