@@ -2680,6 +2680,33 @@ class TestPushInfluxStandingsLive:
             result = _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
         assert result == prev
 
+    def test_car_info_is_field_not_tag(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        comp = self._comp()
+        comp['AdditionalData'] = '2009/Saab/9-3'
+        resp = self._resp([comp])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'car_info="2009/Saab/9-3"' in lp
+
+    def test_differing_car_info_yields_same_series_key(self):
+        # The production bug: two values for the same car must NOT split the series.
+        # Tag set (everything before the first space, minus measurement) must match.
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        full = self._comp()
+        full['AdditionalData'] = '2009/Saab/9-3'
+        trunc = self._comp(laps='6')
+        trunc['AdditionalData'] = '2009/Sa'
+        with patch.object(_mod, '_write_points_chunked') as w1:
+            prev = _mod.push_influx_standings_live(ctx, self._resp([full]), 'sess-1')
+        with patch.object(_mod, '_write_points_chunked') as w2:
+            _mod.push_influx_standings_live(ctx, self._resp([trunc]), 'sess-1', prev)
+        key1 = w1.call_args[0][1][0].to_line_protocol().split(' ', 1)[0]
+        key2 = w2.call_args[0][1][0].to_line_protocol().split(' ', 1)[0]
+        assert key1 == key2
+        assert 'car_info' not in key1
+
 class TestPushInfluxStandingsHistorical:
     def _entry(self, competitors):
         return {
@@ -2760,6 +2787,17 @@ class TestPushInfluxStandingsHistorical:
             _mod.push_influx_standings_historical(ctx, entry)
         lp = mock_write.call_args[0][1][0].to_line_protocol()
         assert 'class_position' not in lp
+
+    def test_car_info_is_field_not_tag(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        comp = self._comp()
+        comp['car_info'] = '2009/Saab/9-3'
+        entry = self._entry([comp])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'car_info="2009/Saab/9-3"' in lp
+        assert 'car_info=2009/Saab/9-3,' not in lp.split(' ', 1)[0]
 
 
 class TestBuildLapPointsCorruptedLapNumber:
