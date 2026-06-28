@@ -452,14 +452,25 @@ def old_race(ctx, opts):
         if opts.skip_if_complete and expected > 0:
             total, current = existing_lap_counts_fieldwide(ctx)
             if total == expected and current == expected:
-                race_ts_ms = (
-                    ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-                )
-                push_influx_race(ctx, race_ts_ms)
+                # Laps are complete and current, but only skip if standings are too —
+                # otherwise a prior run whose standings phase failed would be skipped
+                # forever with stale/missing standings. Treat standings as fresh when
+                # some exist and none predate the current schema (approximate: standings
+                # are written one atomic batch per session, so a partial-but-all-current
+                # state is rare).
+                std_total, std_current = existing_standings_counts_fieldwide(ctx)
+                if std_total > 0 and std_current == std_total:
+                    race_ts_ms = (
+                        ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+                    )
+                    push_influx_race(ctx, race_ts_ms)
+                    logging.info(
+                        "SKIP: race %s already complete and current (%d laps, schema v%d)",
+                        ctx.race_id, total, SCHEMA_VERSION)
+                    return
                 logging.info(
-                    "SKIP: race %s already complete and current (%d laps, schema v%d)",
-                    ctx.race_id, total, SCHEMA_VERSION)
-                return
+                    "Race %s laps complete but standings stale/missing (%d of %d "
+                    "current) — rewriting", ctx.race_id, std_current, std_total)
 
         delete_existing_laps(ctx)
         total_competitors = sum(len(s['competitors']) for s in pending_writes)
@@ -488,9 +499,15 @@ def old_race(ctx, opts):
             push_influx_session(
                 ctx, session['session_id'], session['session_name'], session['start_epoc'])
 
-        delete_existing_standings(ctx)
+        standings_ok = delete_existing_standings(ctx)
         for session in pending_writes:
-            push_influx_standings_historical(ctx, session)
+            if not push_influx_standings_historical(ctx, session):
+                standings_ok = False
+        if not standings_ok:
+            logging.error(
+                "Standings incomplete for race %s — rerun the backfill; a "
+                "--skip-if-complete run will not skip until standings are fresh",
+                ctx.race_id)
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
@@ -921,7 +938,11 @@ def delete_existing_laps(ctx):
 
 
 def delete_existing_standings(ctx):
-    """Delete all standings points for this race so a backfill can replace them."""
+    """Delete all standings points for this race so a backfill can replace them.
+
+    Returns True on success, False if the delete failed (logged, not raised) so
+    the caller can tell the operator that standings need a re-run.
+    """
     try:
         ctx.delete_api.delete(
             start='1970-01-01T00:00:00Z',
@@ -929,8 +950,33 @@ def delete_existing_standings(ctx):
             predicate=f'_measurement="standings" AND race_id="{ctx.race_id}"',
             bucket='laps',
         )
+        return True
     except Exception as e:
         logging.error("Deleting existing standings failed: %s", e)
+        return False
+
+
+def existing_standings_counts_fieldwide(ctx):
+    """Return (total_standings, current_standings) for all cars in this race.
+
+    total counts every standings point (one position field each); current counts
+    those stamped with the current SCHEMA_VERSION. Used by old_race to confirm
+    standings are fresh before skipping a race whose laps are already complete.
+    """
+    def _count(field_filter):
+        tables = ctx.query_api.query(
+            f'from(bucket: "laps")\n'
+            f'  |> range(start: {EPOCH_START})\n'
+            f'  |> filter(fn: (r) => r._measurement == "standings"\n'
+            f'      and r.race_id == "{ctx.race_id}")\n'
+            f'  |> filter(fn: (r) => {field_filter})\n'
+            f'  |> count()'
+        )
+        return sum(r.get_value() for t in tables for r in t.records)
+
+    total = _count('r._field == "position"')
+    current = _count(f'r._field == "schema_version" and r._value == {SCHEMA_VERSION}')
+    return total, current
 
 
 def _resolve_class_historical(car_number, session_details):
@@ -1179,6 +1225,8 @@ def push_influx_standings_historical(ctx, session_entry):
             logging.error(
                 "Writing historical standings failed for race %s session %s: %s",
                 ctx.race_id, session_id, e)
+            return False
+    return True
 
 
 def _resolve_race_metadata(race_details, client):

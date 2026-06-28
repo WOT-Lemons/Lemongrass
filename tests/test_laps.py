@@ -826,12 +826,13 @@ class TestOldRaceSkip:
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
-            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-                with patch.object(_mod, 'push_influx') as mock_push:
-                    with patch.object(_mod, 'push_influx_race') as mock_race:
-                        with patch.object(_mod, 'delete_existing_laps') as mock_del:
-                            with patch.object(_mod, 'print_rankings'):
-                                _mod.old_race(ctx, opts)
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(1, 1)):
+                with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                    with patch.object(_mod, 'push_influx') as mock_push:
+                        with patch.object(_mod, 'push_influx_race') as mock_race:
+                            with patch.object(_mod, 'delete_existing_laps') as mock_del:
+                                with patch.object(_mod, 'print_rankings'):
+                                    _mod.old_race(ctx, opts)
         mock_push.assert_not_called()
         mock_race.assert_called_once()
         mock_del.assert_not_called()
@@ -840,13 +841,47 @@ class TestOldRaceSkip:
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
-            with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-                with patch.object(_mod, 'push_influx'):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(1, 1)):
+                with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                    with patch.object(_mod, 'push_influx'):
+                        with patch.object(_mod, 'push_influx_race'):
+                            with patch.object(_mod, 'print_rankings'):
+                                with caplog.at_level(logging.INFO):
+                                    _mod.old_race(ctx, opts)
+        assert any('SKIP' in r.message and '999' in r.message for r in caplog.records)
+
+    def test_writes_when_laps_complete_but_standings_stale(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(1, 0)):
+                with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
                     with patch.object(_mod, 'push_influx_race'):
                         with patch.object(_mod, 'print_rankings'):
-                            with caplog.at_level(logging.INFO):
-                                _mod.old_race(ctx, opts)
-        assert any('SKIP' in r.message and '999' in r.message for r in caplog.records)
+                            _mod.old_race(ctx, opts)
+        assert ctx.write_api.write.called
+
+    def test_writes_when_laps_complete_but_standings_missing(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(0, 0)):
+                with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        assert ctx.write_api.write.called
+
+    def test_does_not_query_standings_when_laps_incomplete(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 0)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide') as mock_std:
+                with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+                    with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_std.assert_not_called()
 
     def test_writes_when_laps_incomplete(self):
         ctx = self._ctx()
@@ -974,6 +1009,48 @@ class TestExistingLapCountsFieldwide:
         flux_calls = [c.args[0] for c in ctx.query_api.query.call_args_list]
         assert all('car_number' not in q for q in flux_calls)
         assert all('race_id == "999"' in q for q in flux_calls)
+
+
+class TestExistingStandingsCountsFieldwide:
+    def _query_api(self, total_count=0, current_count=0):
+        responses = iter([total_count, current_count])
+
+        def fake_query(flux):
+            count = next(responses)
+            table = MagicMock()
+            rec = MagicMock()
+            rec.get_value.return_value = count
+            table.records = [rec]
+            return [table]
+
+        api = MagicMock()
+        api.query.side_effect = fake_query
+        return api
+
+    def test_returns_total_and_current_schema_counts(self):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = self._query_api(total_count=12, current_count=5)
+        total, current = _mod.existing_standings_counts_fieldwide(ctx)
+        assert total == 12
+        assert current == 5
+
+    def test_total_query_filters_standings_position_field(self):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = self._query_api(total_count=1, current_count=1)
+        _mod.existing_standings_counts_fieldwide(ctx)
+        total_flux = ctx.query_api.query.call_args_list[0].args[0]
+        assert '_measurement == "standings"' in total_flux
+        assert '_field == "position"' in total_flux
+        assert 'race_id == "999"' in total_flux
+
+    def test_current_query_filters_on_schema_version_value(self):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = self._query_api(total_count=1, current_count=1)
+        _mod.existing_standings_counts_fieldwide(ctx)
+        current_flux = ctx.query_api.query.call_args_list[1].args[0]
+        assert '_measurement == "standings"' in current_flux
+        assert '_field == "schema_version"' in current_flux
+        assert f'_value == {_mod.SCHEMA_VERSION}' in current_flux
 
 
 class TestOldRaceFieldwide:
@@ -1385,6 +1462,24 @@ class TestOldRaceClassWiring:
                                                   return_value=('A', {1: 1})):
                                     _mod.old_race(ctx, opts)
         assert order == ['delete_standings', 'write_standings']
+
+    def test_logs_error_when_standings_write_fails(self, caplog):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'delete_existing_laps'):
+            with patch.object(_mod, 'delete_existing_standings', return_value=True):
+                with patch.object(_mod, 'push_influx_standings_historical', return_value=False):
+                    with patch.object(_mod, '_write_points_chunked'):
+                        with patch.object(_mod, 'push_influx_race'):
+                            with patch.object(_mod, 'print_rankings'):
+                                with patch.object(_mod, '_resolve_class_historical',
+                                                  return_value=('A', {1: 1})):
+                                    _mod.old_race(ctx, opts)
+        assert any(r.levelno == logging.ERROR and 'standings' in r.message.lower()
+                   and '999' in r.message for r in caplog.records)
 
     def test_delete_fires_once_across_multiple_sessions(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -2164,6 +2259,17 @@ class TestDeleteExistingStandings:
         _mod.delete_existing_standings(ctx)  # must not raise
         assert any(r.levelno == logging.ERROR for r in caplog.records)
 
+    def test_returns_true_on_success(self):
+        ctx = _mod.RaceContext('777', None, MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        assert _mod.delete_existing_standings(ctx) is True
+
+    def test_returns_false_on_failure(self):
+        ctx = _mod.RaceContext('777', None, MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        ctx.delete_api.delete.side_effect = Exception("influx down")
+        assert _mod.delete_existing_standings(ctx) is False
+
 
 class TestOldRaceFullField:
     def _make_competitor(self, number, comp_id, position):
@@ -2785,6 +2891,18 @@ class TestPushInfluxStandingsHistorical:
             _mod.push_influx_standings_historical(ctx, entry)
         mock_write.assert_called_once()
         assert len(mock_write.call_args[0][1]) == 2
+
+    def test_returns_true_on_success(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp()])
+        with patch.object(_mod, '_write_points_chunked'):
+            assert _mod.push_influx_standings_historical(ctx, entry) is True
+
+    def test_returns_false_on_write_failure(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp()])
+        with patch.object(_mod, '_write_points_chunked', side_effect=Exception("influx down")):
+            assert _mod.push_influx_standings_historical(ctx, entry) is False
 
     def test_measurement_is_standings(self):
         ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
