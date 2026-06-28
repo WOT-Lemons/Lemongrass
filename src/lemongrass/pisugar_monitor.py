@@ -4,6 +4,8 @@
 import base64
 import json
 import logging
+import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -110,6 +112,12 @@ def write_points(write_api, points):
 
 def main():
     """Main loop: read PiSugar metrics and push to InfluxDB."""
+    # Validate the influx token up front so we fail fast before the pisugar login
+    # below; _influx.connect() reads it again at construction time.
+    if not os.environ.get('INFLUX_TELEMETRY_TOKEN'):
+        logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+        sys.exit(1)
+
     pisugar_token = None
     username, password = read_credentials()
     if username and password:

@@ -1,6 +1,8 @@
 import base64
 import json
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
+
+import pytest
 
 import lemongrass.pisugar_monitor as _mod
 
@@ -51,3 +53,18 @@ class TestReadCredentials:
         data = json.dumps({"other": "value"})
         with patch("builtins.open", mock_open(read_data=data)):
             assert read_credentials() == (None, None)
+
+
+class TestMain:
+    def test_missing_influx_token_exits_before_pisugar_login(self):
+        """A missing INFLUX_TELEMETRY_TOKEN must fail fast: exit before attempting
+        a pisugar login (a network call)."""
+        login = MagicMock()
+        with patch.dict('os.environ', {}, clear=True):
+            with patch.object(_mod, 'login', login):
+                with patch.object(_mod, 'read_credentials',
+                                  return_value=('admin', 'secret')):
+                    with pytest.raises(SystemExit) as exc:
+                        _mod.main()
+        assert exc.value.code == 1
+        login.assert_not_called()
