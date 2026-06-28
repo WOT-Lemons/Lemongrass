@@ -48,7 +48,7 @@ EPOCH_START = '1970-01-01T00:00:00Z'
 # them, rewriting historical data under the new schema. That "rewrite everything"
 # behavior is itself a useful migration tool — bump the version and re-run the
 # backfill to bring all historical races up to the current schema.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5
@@ -1088,6 +1088,7 @@ def push_influx_standings_live(ctx, session_response, session_id, prev_standings
             .tag("class", class_name)
             .field("position", position)
             .field("lap_count", lap_count)
+            .field("schema_version", SCHEMA_VERSION)
             .field("competitor_name", competitor_name)
             .field("car_info", car_info)
             .time(timestamp_ms, WritePrecision.MS)
@@ -1142,6 +1143,7 @@ def push_influx_standings_historical(ctx, session_entry):
             .tag("session_id", str(session_id))
             .field("position", position)
             .field("lap_count", lap_count)
+            .field("schema_version", SCHEMA_VERSION)
             .field("competitor_name", comp['competitor_name'])
             .field("car_info", comp['car_info'])
             .time(timestamp_ms, WritePrecision.MS)

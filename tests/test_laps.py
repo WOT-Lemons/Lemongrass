@@ -2707,6 +2707,14 @@ class TestPushInfluxStandingsLive:
         assert key1 == key2
         assert 'car_info' not in key1
 
+    def test_schema_version_field_present(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp()])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert f'schema_version={_mod.SCHEMA_VERSION}i' in lp
+
 class TestPushInfluxStandingsHistorical:
     def _entry(self, competitors):
         return {
@@ -2798,6 +2806,14 @@ class TestPushInfluxStandingsHistorical:
         lp = mock_write.call_args[0][1][0].to_line_protocol()
         assert 'car_info="2009/Saab/9-3"' in lp
         assert 'car_info=2009/Saab/9-3,' not in lp.split(' ', 1)[0]
+
+    def test_schema_version_field_present(self):
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([self._comp()])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert f'schema_version={_mod.SCHEMA_VERSION}i' in lp
 
 
 class TestBuildLapPointsCorruptedLapNumber:
