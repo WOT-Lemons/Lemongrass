@@ -221,7 +221,8 @@ class TestHandlePrune:
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     _mod._handle_prune()
         delete_api = fake_client.delete_api.return_value
-        assert delete_api.delete.call_count == 8  # 4 deletes x 2 races (race, session, lap, standings)
+        # 4 deletes (race, session, lap, standings) x 2 races
+        assert delete_api.delete.call_count == 8
         buckets = [c.kwargs.get('bucket') for c in delete_api.delete.call_args_list]
         assert buckets.count('laps') == 4  # 2 for laps + 2 for standings
         assert buckets.count('races') == 2
