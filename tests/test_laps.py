@@ -1366,6 +1366,26 @@ class TestOldRaceClassWiring:
         assert order[0] == 'delete'
         assert 'write' in order
 
+    def test_deletes_existing_standings_before_historical_write(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        order = []
+        with patch.object(_mod, 'delete_existing_laps'):
+            with patch.object(_mod, 'delete_existing_standings',
+                              side_effect=lambda c: order.append('delete_standings')):
+                with patch.object(_mod, 'push_influx_standings_historical',
+                                  side_effect=lambda *a, **k: order.append('write_standings')):
+                    with patch.object(_mod, '_write_points_chunked'):
+                        with patch.object(_mod, 'push_influx_race'):
+                            with patch.object(_mod, 'print_rankings'):
+                                with patch.object(_mod, '_resolve_class_historical',
+                                                  return_value=('A', {1: 1})):
+                                    _mod.old_race(ctx, opts)
+        assert order == ['delete_standings', 'write_standings']
+
     def test_delete_fires_once_across_multiple_sessions(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
         ctx.delete_api = MagicMock()
@@ -2125,6 +2145,24 @@ class TestDeleteExistingLaps:
         delete_api.delete.side_effect = Exception("network error")
         _mod.delete_existing_laps(ctx)  # must not raise
         assert "Deleting existing laps failed" in caplog.text
+
+
+class TestDeleteExistingStandings:
+    def test_deletes_standings_measurement_for_race(self):
+        ctx = _mod.RaceContext('777', None, MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        _mod.delete_existing_standings(ctx)
+        ctx.delete_api.delete.assert_called_once()
+        kwargs = ctx.delete_api.delete.call_args.kwargs
+        assert kwargs['predicate'] == '_measurement="standings" AND race_id="777"'
+        assert kwargs['bucket'] == 'laps'
+
+    def test_exception_is_logged_not_raised(self, caplog):
+        ctx = _mod.RaceContext('777', None, MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        ctx.delete_api.delete.side_effect = Exception("influx down")
+        _mod.delete_existing_standings(ctx)  # must not raise
+        assert any(r.levelno == logging.ERROR for r in caplog.records)
 
 
 class TestOldRaceFullField:

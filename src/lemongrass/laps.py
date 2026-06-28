@@ -488,6 +488,7 @@ def old_race(ctx, opts):
             push_influx_session(
                 ctx, session['session_id'], session['session_name'], session['start_epoc'])
 
+        delete_existing_standings(ctx)
         for session in pending_writes:
             push_influx_standings_historical(ctx, session)
 
@@ -917,6 +918,19 @@ def delete_existing_laps(ctx):
         )
     except Exception as e:
         logging.error("Deleting existing laps failed: %s", e)
+
+
+def delete_existing_standings(ctx):
+    """Delete all standings points for this race so a backfill can replace them."""
+    try:
+        ctx.delete_api.delete(
+            start='1970-01-01T00:00:00Z',
+            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            predicate=f'_measurement="standings" AND race_id="{ctx.race_id}"',
+            bucket='laps',
+        )
+    except Exception as e:
+        logging.error("Deleting existing standings failed: %s", e)
 
 
 def _resolve_class_historical(car_number, session_details):
