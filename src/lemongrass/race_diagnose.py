@@ -95,7 +95,7 @@ def diagnose_influx(query_api, race_id, car_number, start_epoc=0, end_epoc=0):
                   if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
 
     tables = query_api.query(
-        f'from(bucket: "laps")\n'
+        f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
         f'  |> range(start: {range_start}, stop: {range_stop})\n'
         f'  |> filter(fn: (r) => r._measurement == "lap"\n'
         f'      and r.race_id == "{race_id}"\n'

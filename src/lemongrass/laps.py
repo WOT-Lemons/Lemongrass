@@ -737,7 +737,7 @@ def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
     chunks = range(0, len(points), batch_size)
     total = len(chunks)
     for batch_num, i in enumerate(chunks, 1):
-        write_api.write(bucket='laps', record=points[i:i + batch_size])
+        write_api.write(bucket=_influx.BUCKET_LAPS, record=points[i:i + batch_size])
         if total > 1:
             logging.info("Batch %d of %d written successfully", batch_num, total)
 
@@ -838,7 +838,7 @@ def push_influx_race(ctx, timestamp_ms):
             start='1970-01-01T00:00:00Z',
             stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="race" AND race_id="{ctx.race_id}"',
-            bucket='races',
+            bucket=_influx.BUCKET_RACES,
         )
         meta = ctx.metadata
         point = (
@@ -850,7 +850,7 @@ def push_influx_race(ctx, timestamp_ms):
             .field("end_time_epoc", meta.end_time_epoc)
             .time(timestamp_ms, WritePrecision.MS)
         )
-        ctx.write_api.write(bucket='races', record=point)
+        ctx.write_api.write(bucket=_influx.BUCKET_RACES, record=point)
     except Exception as e:
         logging.error("Writing race failed: %s", e)
 
@@ -862,7 +862,7 @@ def push_influx_session(ctx, session_id, session_name, start_epoc):
             start=EPOCH_START,
             stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="session" AND session_id="{session_id}"',
-            bucket='race_sessions',
+            bucket=_influx.BUCKET_SESSIONS,
         )
         start_epoc_ms = (start_epoc or 0) * 1000
         point = (
@@ -873,7 +873,7 @@ def push_influx_session(ctx, session_id, session_name, start_epoc):
             .field("start_epoc", start_epoc or 0)
             .time(start_epoc_ms, WritePrecision.MS)
         )
-        ctx.write_api.write(bucket='race_sessions', record=point)
+        ctx.write_api.write(bucket=_influx.BUCKET_SESSIONS, record=point)
     except Exception as e:
         logging.error("Writing session failed: %s", e)
 
@@ -895,7 +895,7 @@ def existing_lap_counts(ctx):
     """
     def _count(field_filter):
         tables = ctx.query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "lap"\n'
             f'      and r.race_id == "{ctx.race_id}"\n'
@@ -918,7 +918,7 @@ def existing_lap_counts_fieldwide(ctx):
     """
     def _count(field_filter):
         tables = ctx.query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "lap"\n'
             f'      and r.race_id == "{ctx.race_id}")\n'
@@ -939,7 +939,7 @@ def delete_existing_laps(ctx):
             start='1970-01-01T00:00:00Z',
             stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="lap" AND race_id="{ctx.race_id}"',
-            bucket='laps',
+            bucket=_influx.BUCKET_LAPS,
         )
     except Exception as e:
         logging.error("Deleting existing laps failed: %s", e)
@@ -956,7 +956,7 @@ def delete_existing_standings(ctx):
             start='1970-01-01T00:00:00Z',
             stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="standings" AND race_id="{ctx.race_id}"',
-            bucket='laps',
+            bucket=_influx.BUCKET_LAPS,
         )
         return True
     except Exception as e:
@@ -973,7 +973,7 @@ def existing_standings_counts_fieldwide(ctx):
     """
     def _count(field_filter):
         tables = ctx.query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "standings"\n'
             f'      and r.race_id == "{ctx.race_id}")\n'

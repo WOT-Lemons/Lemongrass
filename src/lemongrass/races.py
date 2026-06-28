@@ -40,7 +40,7 @@ def _handle_list():
         query_api = client.query_api()
 
         races_tables = query_api.query(
-            f'from(bucket: "races")\n'
+            f'from(bucket: "{_influx.BUCKET_RACES}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "race" and r._field == "end_time_epoc")\n'
         )
@@ -56,7 +56,7 @@ def _handle_list():
                 }
 
         total_tables = query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "lap" and r._field == "lap_no")\n'
             f'  |> group(columns: ["race_id"])\n'
@@ -69,7 +69,7 @@ def _handle_list():
                     races[rid]['total'] = record.get_value()
 
         current_tables = query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "lap"\n'
             f'      and r._field == "schema_version" and r._value == {SCHEMA_VERSION})\n'
@@ -119,7 +119,7 @@ def _handle_prune():
         # safe: all ids validated against [A-Za-z0-9_-]+ above; no Flux metacharacters possible
         ids_set = '["' + '", "'.join(race_ids) + '"]'
         races_tables = query_api.query(
-            f'from(bucket: "races")\n'
+            f'from(bucket: "{_influx.BUCKET_RACES}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "race" and r._field == "end_time_epoc"\n'
             f'      and contains(value: r.race_id, set: {ids_set}))\n'
@@ -157,22 +157,22 @@ def _handle_prune():
                 # failure can still clean up orphaned session/lap/standings rows.
                 delete_api.delete(start=EPOCH_START, stop=now,
                                   predicate=f'_measurement="session" AND race_id="{rid}"',
-                                  bucket='race_sessions')
+                                  bucket=_influx.BUCKET_SESSIONS)
                 print(f"Deleted sessions for race {rid}")
 
                 delete_api.delete(start=EPOCH_START, stop=now,
                                   predicate=f'_measurement="lap" AND race_id="{rid}"',
-                                  bucket='laps')
+                                  bucket=_influx.BUCKET_LAPS)
                 print(f"Deleted laps for race {rid}")
 
                 delete_api.delete(start=EPOCH_START, stop=now,
                                   predicate=f'_measurement="standings" AND race_id="{rid}"',
-                                  bucket='laps')
+                                  bucket=_influx.BUCKET_LAPS)
                 print(f"Deleted standings for race {rid}")
 
                 delete_api.delete(start=EPOCH_START, stop=now,
                                   predicate=f'_measurement="race" AND race_id="{rid}"',
-                                  bucket='races')
+                                  bucket=_influx.BUCKET_RACES)
                 print(f"Deleted race metadata for race {rid}")
             except Exception as e:
                 print(f"error pruning race {rid}: {e}", file=sys.stderr)

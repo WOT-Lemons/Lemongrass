@@ -13,6 +13,12 @@ from urllib3 import Retry
 INFLUX_URL = os.environ.get('INFLUX_URL', 'https://influxdb.focism.com')
 INFLUX_ORG = os.environ.get('INFLUX_ORG', 'focism')
 
+# Bucket names, shared across the write paths and Flux queries (and created by
+# local-testing/influx-init). Single source of truth so a rename touches one place.
+BUCKET_LAPS = 'laps'
+BUCKET_RACES = 'races'
+BUCKET_SESSIONS = 'race_sessions'
+
 # Bounded retry for transient failures (connection blips, retryable 5xx). We do
 # NOT honor Retry-After: a downed Cloudflare tunnel returns 530 with
 # Retry-After: 120, which would otherwise hang the CLI for minutes. allowed_methods

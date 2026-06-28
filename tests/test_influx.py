@@ -26,6 +26,12 @@ def test_env_overrides(monkeypatch):
     importlib.reload(influx_mod)  # restore default module state for later tests
 
 
+def test_bucket_names():
+    assert influx_mod.BUCKET_LAPS == 'laps'
+    assert influx_mod.BUCKET_RACES == 'races'
+    assert influx_mod.BUCKET_SESSIONS == 'race_sessions'
+
+
 def test_retry_policy_shape():
     assert isinstance(influx_mod.INFLUX_RETRIES, Retry)
     assert influx_mod.INFLUX_RETRIES.total == 3

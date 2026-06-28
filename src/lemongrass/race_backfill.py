@@ -130,7 +130,7 @@ def validate_backfill(pairs, query_api):
     all_ok = True
     for race_id, expected_cars in sorted(by_race.items()):
         race_tables = query_api.query(
-            f'from(bucket: "races")\n'
+            f'from(bucket: "{_influx.BUCKET_RACES}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "race"\n'
             f'      and r.race_id == "{race_id}")\n'
@@ -155,7 +155,7 @@ def validate_backfill(pairs, query_api):
         )
 
         lap_tables = query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {range_start}, stop: {range_stop})\n'
             f'  |> filter(fn: (r) => r._measurement == "lap"\n'
             f'      and r.race_id == "{race_id}"\n'
@@ -223,7 +223,7 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     from lemongrass.laps import SCHEMA_VERSION
 
     races_tables = query_api.query(
-        f'from(bucket: "races")\n'
+        f'from(bucket: "{_influx.BUCKET_RACES}")\n'
         f'  |> range(start: {EPOCH_START})\n'
         f'  |> filter(fn: (r) => r._measurement == "race" and r._field == "end_time_epoc")\n'
     )
@@ -236,7 +236,7 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     failures = []
     for race_id, race_name in sorted(stored_races.items()):
         total_tables = query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "lap"\n'
             f'      and r.race_id == "{race_id}" and r._field == "lap_no")\n'
@@ -245,7 +245,7 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
         total = sum(r.get_value() for t in total_tables for r in t.records)
 
         current_tables = query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "lap"\n'
             f'      and r.race_id == "{race_id}"\n'
@@ -265,7 +265,7 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
             # wrongly treat as migrated. Standings are queried lazily, only once
             # laps are current. (--force bypasses this and re-backfills regardless.)
             std_total_tables = query_api.query(
-                f'from(bucket: "laps")\n'
+                f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
                 f'  |> range(start: {EPOCH_START})\n'
                 f'  |> filter(fn: (r) => r._measurement == "standings"\n'
                 f'      and r.race_id == "{race_id}" and r._field == "position")\n'
@@ -274,7 +274,7 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
             std_total = sum(r.get_value() for t in std_total_tables for r in t.records)
 
             std_current_tables = query_api.query(
-                f'from(bucket: "laps")\n'
+                f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
                 f'  |> range(start: {EPOCH_START})\n'
                 f'  |> filter(fn: (r) => r._measurement == "standings"\n'
                 f'      and r.race_id == "{race_id}"\n'
