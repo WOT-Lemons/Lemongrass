@@ -18,6 +18,15 @@ _COMMANDS = {
 }
 
 
+def _influx_unreachable(exc):
+    """True if exc means InfluxDB could not be reached (connection failure or a
+    5xx/upstream error), False if the server was reached but rejected the request
+    (a 4xx such as 401/403/404)."""
+    if isinstance(exc, ApiException):
+        return exc.status is None or exc.status >= 500
+    return True  # a urllib3 HTTPError is a connection-level failure
+
+
 def _format_influx_error(exc):
     """Return a one-line human reason for an InfluxDB connection/API failure."""
     if isinstance(exc, ApiException):
@@ -49,11 +58,15 @@ def main():
 
     cmd = sys.argv.pop(1)
     sys.argv[0] = f"lemongrass-{cmd}"
+    # The only urllib3/HTTP traffic in these commands is the InfluxDB client, so
+    # any ApiException/HTTPError is an InfluxDB failure. Report it cleanly (no
+    # traceback), distinguishing "unreachable" from a reached-but-rejected request.
     try:
         importlib.import_module(_COMMANDS[cmd]).main()
-    # The only urllib3/HTTP traffic in these commands is the InfluxDB client, so
-    # treating any ApiException/HTTPError as "InfluxDB unreachable" is correct today.
     except (ApiException, HTTPError) as exc:
-        print(f"Error: cannot reach InfluxDB at {_influx.INFLUX_URL}", file=sys.stderr)
+        if _influx_unreachable(exc):
+            print(f"Error: cannot reach InfluxDB at {_influx.INFLUX_URL}", file=sys.stderr)
+        else:
+            print(f"Error: InfluxDB request failed at {_influx.INFLUX_URL}", file=sys.stderr)
         print(f"  {_format_influx_error(exc)}", file=sys.stderr)
         sys.exit(1)

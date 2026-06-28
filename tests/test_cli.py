@@ -94,3 +94,24 @@ class TestInfluxErrorHandling:
                 with pytest.raises(SystemExit) as wrapped:
                     cli.main()
         assert wrapped.value.code == 0
+
+    def test_4xx_reported_as_request_failed_not_unreachable(self, capsys):
+        """A 4xx (e.g. bad token) is reached-but-rejected, so it must NOT be
+        labeled 'cannot reach' — but still exits cleanly without a traceback."""
+        from influxdb_client.rest import ApiException
+
+        exc = ApiException(status=401)
+        exc.body = '{"message":"unauthorized access"}'
+
+        def raise_api():
+            raise exc
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_api):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        err = capsys.readouterr().err
+        assert 'cannot reach InfluxDB' not in err
+        assert 'request failed' in err
+        assert '401' in err
