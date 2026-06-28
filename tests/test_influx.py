@@ -19,7 +19,9 @@ def test_env_overrides(monkeypatch):
     reloaded = importlib.reload(influx_mod)
     assert reloaded.INFLUX_URL == 'http://localhost:8086'
     assert reloaded.INFLUX_ORG == 'lemongrass'
-    importlib.reload(influx_mod)  # restore module-level defaults for other tests
+    monkeypatch.delenv('INFLUX_URL', raising=False)
+    monkeypatch.delenv('INFLUX_ORG', raising=False)
+    importlib.reload(influx_mod)  # restore default module state for later tests
 
 
 def test_retry_policy_shape():
@@ -27,3 +29,5 @@ def test_retry_policy_shape():
     assert influx_mod.INFLUX_RETRIES.total == 3
     assert 530 in influx_mod.INFLUX_RETRIES.status_forcelist
     assert influx_mod.INFLUX_RETRIES.respect_retry_after_header is False
+    assert influx_mod.INFLUX_RETRIES.allowed_methods is None
+    assert influx_mod.INFLUX_RETRIES.backoff_max == 10

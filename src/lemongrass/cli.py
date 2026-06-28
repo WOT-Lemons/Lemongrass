@@ -51,6 +51,8 @@ def main():
     sys.argv[0] = f"lemongrass-{cmd}"
     try:
         importlib.import_module(_COMMANDS[cmd]).main()
+    # The only urllib3/HTTP traffic in these commands is the InfluxDB client, so
+    # treating any ApiException/HTTPError as "InfluxDB unreachable" is correct today.
     except (ApiException, HTTPError) as exc:
         print(f"Error: cannot reach InfluxDB at {_influx.INFLUX_URL}", file=sys.stderr)
         print(f"  {_format_influx_error(exc)}", file=sys.stderr)
