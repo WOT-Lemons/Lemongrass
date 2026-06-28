@@ -116,6 +116,18 @@ class TestHandlePrune:
         assert any('_measurement="standings"' in p and 'race_id="12345"' in p
                    for p in predicates)
 
+    def test_prune_deletes_race_metadata_last(self):
+        # The not-found guard keys off the race measurement, so a retry after a
+        # partial failure only works if race metadata is the last thing deleted.
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
+            fake_client = self._make_influx_client()
+            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    _mod._handle_prune()
+        delete_api = fake_client.delete_api.return_value
+        predicates = [c.kwargs.get('predicate') for c in delete_api.delete.call_args_list]
+        assert '_measurement="race"' in predicates[-1]
+
     def test_prune_exits_when_no_influx_token(self):
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
             with patch.dict('os.environ', {}, clear=True):
