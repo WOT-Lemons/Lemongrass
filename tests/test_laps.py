@@ -691,7 +691,7 @@ class TestPushInfluxClassInfo:
         _mod.push_influx(ctx, self._laps(), False, competitor_name='Jane Doe')
         assert 'competitor_name="Jane Doe"' in self._record(write_api)
 
-    def test_omits_competitor_name_tag_when_none(self):
+    def test_omits_competitor_name_field_when_none(self):
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False)
         assert 'competitor_name' not in self._record(write_api)
@@ -701,7 +701,7 @@ class TestPushInfluxClassInfo:
         _mod.push_influx(ctx, self._laps(), False, car_info='2005/Toy/Celica')
         assert 'car_info="2005/Toy/Celica"' in self._record(write_api)
 
-    def test_omits_car_info_tag_when_none(self):
+    def test_omits_car_info_field_when_none(self):
         ctx, write_api = self._ctx()
         _mod.push_influx(ctx, self._laps(), False)
         assert 'car_info' not in self._record(write_api)
@@ -1450,11 +1450,18 @@ class TestOldRaceClassWiring:
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
         order = []
+
+        def _del(c):
+            order.append('delete_standings')
+            return True
+
+        def _write(*a, **k):
+            order.append('write_standings')
+            return True
+
         with patch.object(_mod, 'delete_existing_laps'):
-            with patch.object(_mod, 'delete_existing_standings',
-                              side_effect=lambda c: order.append('delete_standings')):
-                with patch.object(_mod, 'push_influx_standings_historical',
-                                  side_effect=lambda *a, **k: order.append('write_standings')):
+            with patch.object(_mod, 'delete_existing_standings', side_effect=_del):
+                with patch.object(_mod, 'push_influx_standings_historical', side_effect=_write):
                     with patch.object(_mod, '_write_points_chunked'):
                         with patch.object(_mod, 'push_influx_race'):
                             with patch.object(_mod, 'print_rankings'):
@@ -1463,14 +1470,17 @@ class TestOldRaceClassWiring:
                                     _mod.old_race(ctx, opts)
         assert order == ['delete_standings', 'write_standings']
 
-    def test_logs_error_when_standings_write_fails(self, caplog):
+    def test_clears_partial_standings_when_write_fails(self, caplog):
+        # A partial standings write must be wiped so the next run self-heals,
+        # rather than left looking "complete" to the skip checks.
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
         ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
         with patch.object(_mod, 'delete_existing_laps'):
-            with patch.object(_mod, 'delete_existing_standings', return_value=True):
+            with patch.object(_mod, 'delete_existing_standings',
+                              return_value=True) as mock_del_std:
                 with patch.object(_mod, 'push_influx_standings_historical', return_value=False):
                     with patch.object(_mod, '_write_points_chunked'):
                         with patch.object(_mod, 'push_influx_race'):
@@ -1478,7 +1488,28 @@ class TestOldRaceClassWiring:
                                 with patch.object(_mod, '_resolve_class_historical',
                                                   return_value=('A', {1: 1})):
                                     _mod.old_race(ctx, opts)
-        assert any(r.levelno == logging.ERROR and 'standings' in r.message.lower()
+        # initial delete + cleanup delete on failure
+        assert mock_del_std.call_count == 2
+        assert any(r.levelno == logging.ERROR and 'cleared partial standings' in r.message
+                   and '999' in r.message for r in caplog.records)
+
+    def test_cleanup_delete_failure_directs_to_force(self, caplog):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        with patch.object(_mod, 'delete_existing_laps'):
+            # initial delete succeeds, cleanup delete fails
+            with patch.object(_mod, 'delete_existing_standings', side_effect=[True, False]):
+                with patch.object(_mod, 'push_influx_standings_historical', return_value=False):
+                    with patch.object(_mod, '_write_points_chunked'):
+                        with patch.object(_mod, 'push_influx_race'):
+                            with patch.object(_mod, 'print_rankings'):
+                                with patch.object(_mod, '_resolve_class_historical',
+                                                  return_value=('A', {1: 1})):
+                                    _mod.old_race(ctx, opts)
+        assert any(r.levelno == logging.ERROR and '--force' in r.message
                    and '999' in r.message for r in caplog.records)
 
     def test_delete_fires_once_across_multiple_sessions(self):

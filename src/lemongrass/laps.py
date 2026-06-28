@@ -504,10 +504,19 @@ def old_race(ctx, opts):
             if not push_influx_standings_historical(ctx, session):
                 standings_ok = False
         if not standings_ok:
-            logging.error(
-                "Standings incomplete for race %s — rerun the backfill; a "
-                "--skip-if-complete run will not skip until standings are fresh",
-                ctx.race_id)
+            # A partial write (some sessions stored, others failed) would otherwise
+            # look "complete and current" to the skip checks — std_total and
+            # std_current would match on just the sessions that succeeded — and
+            # strand the race forever. Wipe the whole race's standings so std_total
+            # drops to 0 and the next run re-backfills from scratch.
+            if delete_existing_standings(ctx):
+                logging.error(
+                    "Standings incomplete for race %s — cleared partial standings; "
+                    "the next backfill will rewrite them", ctx.race_id)
+            else:
+                logging.error(
+                    "Standings incomplete for race %s and the cleanup delete failed; "
+                    "rerun with --force to rewrite standings", ctx.race_id)
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
