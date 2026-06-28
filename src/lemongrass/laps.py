@@ -744,13 +744,13 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
         point = (
             Point("lap")
             .tag("race_id", ctx.race_id)
-            .tag("competitor_name", competitor_name)
-            .tag("car_info", car_info)
             .tag("class", class_name)
             .tag("car_number", car_number)
             .field("lap_no", lap_num)
             .field("flag_status", lap['FlagStatus'])
             .field("schema_version", SCHEMA_VERSION)
+            .field("competitor_name", competitor_name)
+            .field("car_info", car_info)
             .time(time_lap_completed_ms, WritePrecision.MS)
         )
         if lap_time_ms is not None:
