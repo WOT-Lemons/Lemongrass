@@ -46,3 +46,51 @@ class TestDispatcher:
 
         assert captured['argv'][1] == 'R001'
         assert captured['argv'][2] == '42'
+
+
+class TestInfluxErrorHandling:
+    def test_api_exception_exits_1_with_clean_message(self, capsys):
+        from influxdb_client.rest import ApiException
+
+        exc = ApiException(status=530)
+        exc.body = (
+            '{"title":"Error 1033: Cloudflare Tunnel error",'
+            '"detail":"The host is currently unable to be reached."}'
+        )
+
+        def raise_api():
+            raise exc
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_api):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        err = capsys.readouterr().err
+        assert 'cannot reach InfluxDB' in err
+        assert '530' in err
+        assert 'host is currently unable to be reached' in err
+
+    def test_connection_error_exits_1_with_clean_message(self, capsys):
+        from urllib3.exceptions import MaxRetryError
+
+        def raise_conn():
+            raise MaxRetryError(pool=None, url='http://localhost:8086', reason='refused')
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_conn):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        assert 'cannot reach InfluxDB' in capsys.readouterr().err
+
+    def test_normal_systemexit_passes_through(self):
+        """A command exiting 0 must not be swallowed or rewritten by the handler."""
+        def clean_exit():
+            sys.exit(0)
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', clean_exit):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 0
