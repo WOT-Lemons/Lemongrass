@@ -37,8 +37,10 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
    `INFLUX_TELEMETRY_TOKEN=local-dev-token`. (In prod these are unset and the CLI
    falls back to `https://influxdb.focism.com` / `focism`.)
 
-3. Seed data by running a real backfill (needs a RaceMonitor token; rate-limited
-   to ~6 req/min, so a full race is slow):
+3. Seed data by running a real backfill. This calls the RaceMonitor API, so it
+   needs your own RaceMonitor API token — this requires a Race Monitor account
+   with API access; get a token at <https://www.race-monitor.com/Home/API>. The
+   API is rate-limited to ~6 req/min, so backfilling a full race is slow:
 
    ```bash
    RACEMONITOR_TOKEN=<token> uv run lemongrass races backfill <race_id>
