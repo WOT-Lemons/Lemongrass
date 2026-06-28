@@ -19,8 +19,8 @@ class TestMainTokenResolution:
             with patch.object(sys, 'argv', ['race-diagnose', '12345', '42']):
                 with patch('lemongrass.race_diagnose.RaceMonitorClient') as mock_rm_cls:
                     mock_rm_cls.return_value.__enter__.return_value = mock_client
-                    with patch('lemongrass.race_diagnose.InfluxDBClient') as mock_influx_cls:
-                        mock_influx_cls.return_value.__enter__.return_value = mock_influx
+                    with patch('lemongrass._influx.connect') as mock_connect:
+                        mock_connect.return_value.__enter__.return_value = mock_influx
                         _mod.main()
         return mock_rm_cls
 

@@ -6,15 +6,11 @@ Run `lemongrass races <subcommand> --help` for per-subcommand options.
 """
 
 import argparse
-import logging
-import os
 import re
 import sys
 from datetime import datetime, timezone
 
-from influxdb_client import InfluxDBClient
-
-from lemongrass._influx import INFLUX_ORG, INFLUX_RETRIES, INFLUX_URL
+from lemongrass import _influx
 
 EPOCH_START = '1970-01-01T00:00:00Z'
 
@@ -35,23 +31,12 @@ def main():
      'backfill': _handle_backfill, 'diagnose': _handle_diagnose}[subcmd]()
 
 
-def _require_influx_token():
-    """Read INFLUX_TELEMETRY_TOKEN from the environment, exiting with an error if unset."""
-    token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
-    if not token:
-        logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-        sys.exit(1)
-    return token
-
-
 def _handle_list():
     """Print a table of all races in the races bucket with their total lap count and
     schema version status (current, stale, or no laps)."""
     from lemongrass.laps import SCHEMA_VERSION
 
-    token = _require_influx_token()
-    with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG,
-                        retries=INFLUX_RETRIES) as client:
+    with _influx.connect() as client:
         query_api = client.query_api()
 
         races_tables = query_api.query(
@@ -128,10 +113,7 @@ def _handle_prune():
         print("invalid race ID(s):", ", ".join(f'"{r}"' for r in invalid_ids), file=sys.stderr)
         sys.exit(1)
 
-    token = _require_influx_token()
-
-    with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG,
-                        retries=INFLUX_RETRIES) as client:
+    with _influx.connect() as client:
         query_api = client.query_api()
 
         # safe: all ids validated against [A-Za-z0-9_-]+ above; no Flux metacharacters possible

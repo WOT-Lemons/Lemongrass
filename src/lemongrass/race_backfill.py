@@ -42,15 +42,14 @@ Required environment variables:
 
 import argparse
 import logging
-import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 
 from race_monitor import RaceMonitorClient
 
+from lemongrass import _influx
 from lemongrass._env import resolve_tokens
-from lemongrass._influx import INFLUX_ORG, INFLUX_RETRIES, INFLUX_URL
 
 LEMONS_SEARCH_TERMS = ['Real Hoopties', 'GP du Lac', 'Halloween Hoop']
 DEFAULT_CAR_NUMBER = '252'
@@ -333,14 +332,8 @@ def main():
                 "--upgrade-stored is mutually exclusive with --override, "
                 "--start-year, --car, and --validate")
             sys.exit(1)
-        influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
-        if not influx_token:
-            logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-            sys.exit(1)
-        from influxdb_client import InfluxDBClient
         try:
-            with InfluxDBClient(url=INFLUX_URL, token=influx_token,
-                               org=INFLUX_ORG, retries=INFLUX_RETRIES) as influx_client:
+            with _influx.connect() as influx_client:
                 failures = run_upgrade_stored(influx_client.query_api(),
                                               dry_run=args.dry_run, force=args.force)
         except KeyboardInterrupt:
@@ -361,14 +354,8 @@ def main():
             logging.info("Found %d matching races", len(races))
 
             if args.validate:
-                influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
-                if not influx_token:
-                    logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-                    sys.exit(1)
-                from influxdb_client import InfluxDBClient
                 pairs = build_pairs(races, args.car_number, args.overrides)
-                with InfluxDBClient(url=INFLUX_URL, token=influx_token,
-                                    org=INFLUX_ORG, retries=INFLUX_RETRIES) as influx_client:
+                with _influx.connect() as influx_client:
                     ok = validate_backfill(pairs, influx_client.query_api())
                 sys.exit(0 if ok else 1)
 

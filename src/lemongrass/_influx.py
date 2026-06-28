@@ -1,9 +1,12 @@
 """Shared InfluxDB connection settings for lemongrass commands.
 
-Centralizes the URL/org (env-overridable, defaulting to prod) and the retry
-policy so every command constructs its InfluxDBClient the same way.
+Centralizes the URL/org (env-overridable, defaulting to prod), the retry policy,
+and the token-reading client factory so every command constructs its
+InfluxDBClient the same way.
 """
+import logging
 import os
+import sys
 
 from urllib3 import Retry
 
@@ -22,3 +25,20 @@ INFLUX_RETRIES = Retry(
     respect_retry_after_header=False,
     allowed_methods=None,
 )
+
+
+def connect():
+    """Return an InfluxDBClient wired with the shared URL/org/retries.
+
+    Reads the token from INFLUX_TELEMETRY_TOKEN; logs an error and exits with
+    status 1 if it is unset. The InfluxDBClient import is deferred so importing
+    this module (which every command does) stays cheap.
+    """
+    token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
+    if not token:
+        logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+        sys.exit(1)
+    from influxdb_client import InfluxDBClient
+    return InfluxDBClient(
+        url=INFLUX_URL, token=token, org=INFLUX_ORG, retries=INFLUX_RETRIES
+    )

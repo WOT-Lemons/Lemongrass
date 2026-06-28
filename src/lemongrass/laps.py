@@ -24,12 +24,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pandas
-from influxdb_client import InfluxDBClient, Point, WritePrecision
+from influxdb_client import Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from race_monitor import RaceMonitorClient, get_streaming_command
 
+from lemongrass import _influx
 from lemongrass._env import resolve_tokens
-from lemongrass._influx import INFLUX_ORG, INFLUX_RETRIES, INFLUX_URL
 
 UNDERLINE = "-" * 80
 
@@ -165,12 +165,12 @@ def main():
         logging.error("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN environment variable not set")
         sys.exit(1)
 
-    influx_token = None
-    if args.network_mode and not args.dry_run:
-        influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
-        if not influx_token:
-            logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-            sys.exit(1)
+    # Validate the influx token up front so we fail fast before the RaceMonitor
+    # setup work below; _influx.connect() reads it again at construction time.
+    if (args.network_mode and not args.dry_run
+            and not os.environ.get('INFLUX_TELEMETRY_TOKEN')):
+        logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+        sys.exit(1)
 
     race_id = str(args.race_id[0])
     car_number = str(args.car_number) if args.car_number is not None else None
@@ -233,10 +233,7 @@ def main():
                     RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
                     opts, response)
 
-            with InfluxDBClient(
-                url=INFLUX_URL, token=influx_token, org=INFLUX_ORG,
-                retries=INFLUX_RETRIES
-            ) as influx_client:
+            with _influx.connect() as influx_client:
                 write_api = influx_client.write_api(write_options=SYNCHRONOUS)
                 delete_api = influx_client.delete_api()
                 query_api = influx_client.query_api()

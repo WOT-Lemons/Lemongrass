@@ -24,11 +24,10 @@ import os
 import sys
 from datetime import datetime, timezone
 
-from influxdb_client import InfluxDBClient
 from race_monitor import RaceMonitorClient
 
+from lemongrass import _influx
 from lemongrass._env import resolve_tokens
-from lemongrass._influx import INFLUX_ORG, INFLUX_RETRIES, INFLUX_URL
 
 EPOCH_START = '1970-01-01T00:00:00Z'
 
@@ -136,8 +135,7 @@ def main():
     with RaceMonitorClient(api_token=rm_token) as client:
         start_epoc, end_epoc = diagnose_api(client, race_id, car_number)
 
-    with InfluxDBClient(url=INFLUX_URL, token=influx_token, org=INFLUX_ORG,
-                        retries=INFLUX_RETRIES) as influx:
+    with _influx.connect() as influx:
         diagnose_influx(influx.query_api(), race_id, car_number, start_epoc, end_epoc)
 
 

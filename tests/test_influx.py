@@ -1,5 +1,7 @@
 import importlib
+from unittest import mock
 
+import pytest
 from urllib3 import Retry
 
 import lemongrass._influx as influx_mod
@@ -31,3 +33,24 @@ def test_retry_policy_shape():
     assert influx_mod.INFLUX_RETRIES.respect_retry_after_header is False
     assert influx_mod.INFLUX_RETRIES.allowed_methods is None
     assert influx_mod.INFLUX_RETRIES.backoff_max == 10
+
+
+def test_connect_exits_when_token_missing(monkeypatch, caplog):
+    monkeypatch.delenv('INFLUX_TELEMETRY_TOKEN', raising=False)
+    with pytest.raises(SystemExit) as exc_info:
+        influx_mod.connect()
+    assert exc_info.value.code == 1
+    assert 'INFLUX_TELEMETRY_TOKEN' in caplog.text
+
+
+def test_connect_builds_client_with_shared_settings(monkeypatch):
+    monkeypatch.setenv('INFLUX_TELEMETRY_TOKEN', 'secret-token')
+    with mock.patch('influxdb_client.InfluxDBClient') as client_cls:
+        result = influx_mod.connect()
+    assert result is client_cls.return_value
+    client_cls.assert_called_once_with(
+        url=influx_mod.INFLUX_URL,
+        token='secret-token',
+        org=influx_mod.INFLUX_ORG,
+        retries=influx_mod.INFLUX_RETRIES,
+    )
