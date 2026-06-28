@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 
 from influxdb_client import InfluxDBClient
 
-INFLUX_URL = 'https://influxdb.focism.com'
-INFLUX_ORG = 'focism'
+from lemongrass._influx import INFLUX_ORG, INFLUX_RETRIES, INFLUX_URL
+
 EPOCH_START = '1970-01-01T00:00:00Z'
 
 _SUBCOMMANDS = ('list', 'prune', 'backfill', 'diagnose')
@@ -50,7 +50,8 @@ def _handle_list():
     from lemongrass.laps import SCHEMA_VERSION
 
     token = _require_influx_token()
-    with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG) as client:
+    with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG,
+                        retries=INFLUX_RETRIES) as client:
         query_api = client.query_api()
 
         races_tables = query_api.query(
@@ -129,7 +130,8 @@ def _handle_prune():
 
     token = _require_influx_token()
 
-    with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG) as client:
+    with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG,
+                        retries=INFLUX_RETRIES) as client:
         query_api = client.query_api()
 
         # safe: all ids validated against [A-Za-z0-9_-]+ above; no Flux metacharacters possible

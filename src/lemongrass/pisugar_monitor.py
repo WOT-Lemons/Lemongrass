@@ -14,6 +14,8 @@ from time import sleep, time
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
+from lemongrass._influx import INFLUX_ORG, INFLUX_RETRIES, INFLUX_URL
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('pisugar-monitor')
 
@@ -121,7 +123,7 @@ def main():
         logger.info("Authenticated with pisugar-server")
 
     with InfluxDBClient(
-        url='https://influxdb.focism.com', token=influx_token, org='focism'
+        url=INFLUX_URL, token=influx_token, org=INFLUX_ORG, retries=INFLUX_RETRIES
     ) as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
