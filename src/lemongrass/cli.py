@@ -23,7 +23,9 @@ def _influx_unreachable(exc):
     5xx/upstream error), False if the server was reached but rejected the request
     (a 4xx such as 401/403/404)."""
     if isinstance(exc, ApiException):
-        return exc.status is None or exc.status >= 500
+        # status 0: the rest layer wraps a urllib3 SSLError as ApiException(status=0),
+        # which is a connectivity failure, not a reached-but-rejected request.
+        return exc.status in (None, 0) or exc.status >= 500
     return True  # a urllib3 HTTPError is a connection-level failure
 
 
@@ -34,7 +36,10 @@ def _format_influx_error(exc):
         if exc.body:
             try:
                 payload = json.loads(exc.body)
-                detail = payload.get('detail') or payload.get('title')
+                # InfluxDB 2.x API errors use "message"; the Cloudflare 530 tunnel
+                # page uses "detail"/"title". Prefer whichever is present.
+                detail = (payload.get('message') or payload.get('detail')
+                          or payload.get('title'))
             except (ValueError, TypeError):
                 detail = None
         msg = f"HTTP {exc.status}"

@@ -84,6 +84,23 @@ class TestInfluxErrorHandling:
         assert wrapped.value.code == 1
         assert 'cannot reach InfluxDB' in capsys.readouterr().err
 
+    def test_status_zero_reported_as_unreachable(self, capsys):
+        """The rest layer turns a urllib3 SSLError into ApiException(status=0);
+        that's a connectivity failure, so it must read 'cannot reach', not 'request failed'."""
+        from influxdb_client.rest import ApiException
+
+        def raise_ssl():
+            raise ApiException(status=0, reason='SSL handshake failed')
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_ssl):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        err = capsys.readouterr().err
+        assert 'cannot reach InfluxDB' in err
+        assert 'request failed' not in err
+
     def test_normal_systemexit_passes_through(self):
         """A command exiting 0 must not be swallowed or rewritten by the handler."""
         def clean_exit():
@@ -115,3 +132,23 @@ class TestInfluxErrorHandling:
         assert 'cannot reach InfluxDB' not in err
         assert 'request failed' in err
         assert '401' in err
+        # InfluxDB 2.x puts the human-readable reason under "message"; surface it.
+        assert 'unauthorized access' in err
+
+    def test_4xx_message_field_is_surfaced(self, capsys):
+        """InfluxDB 2.x API errors (404 bucket, 422 write) carry their reason in
+        the JSON 'message' field, not 'detail'/'title'."""
+        from influxdb_client.rest import ApiException
+
+        exc = ApiException(status=404)
+        exc.body = '{"code":"not found","message":"bucket \\"laps\\" not found"}'
+
+        def raise_api():
+            raise exc
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_api):
+                with pytest.raises(SystemExit):
+                    cli.main()
+        err = capsys.readouterr().err
+        assert 'bucket "laps" not found' in err
