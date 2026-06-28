@@ -317,58 +317,10 @@ The `backfill` subcommand delegates to `lemongrass race-backfill` and supports t
 
 All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata is stored in the `race_sessions` bucket.
 
-## Local testing
+## Contributing
 
-When prod is unavailable, run the full pipeline against a local InfluxDB.
-
-1. Start the stack (InfluxDB on `:8086`, Grafana on `:3000`):
-
-   ```bash
-   docker compose -f local-testing/docker-compose.yml up -d
-   ```
-
-   First start creates org `lemongrass`, a pinned operator token
-   (`local-dev-token`), and the `laps`, `races`, and `race_sessions` buckets.
-   These are non-secret, local-only values.
-
-2. Point the CLI at the local stack by sourcing the committed app env:
-
-   ```bash
-   set -a && source local-testing/.env.local && set +a
-   ```
-
-   This sets `INFLUX_URL=http://localhost:8086`, `INFLUX_ORG=lemongrass`, and
-   `INFLUX_TELEMETRY_TOKEN=local-dev-token`. (In prod these are unset and the CLI
-   falls back to `https://influxdb.focism.com` / `focism`.)
-
-3. Seed data by running a real backfill (needs a RaceMonitor token; rate-limited
-   to ~6 req/min, so a full race is slow):
-
-   ```bash
-   RACEMONITOR_TOKEN=<token> uv run lemongrass races backfill <race_id>
-   ```
-
-4. Inspect the result:
-
-   ```bash
-   uv run lemongrass races list
-   ```
-
-   or open Grafana at http://localhost:3000 (login `admin` / `local-dev-password`)
-   — the InfluxDB datasource is pre-provisioned.
-
-5. Tear down (add `-v` to wipe data and re-trigger bucket init next start):
-
-   ```bash
-   docker compose -f local-testing/docker-compose.yml down
-   ```
-
-**Note:** telemetry/OBD commands (`telem`, `pisugar-monitor`) are out of scope for
-local testing — they write to a `stats_252` bucket that this stack does not create.
-
-**Unreachable InfluxDB:** if the server is down or unreachable, commands retry a few
-times, then exit non-zero with a one-line `cannot reach InfluxDB at …` message
-rather than a traceback.
+For development setup, running the test suite, and testing against a local
+InfluxDB stack instead of prod, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Upgrading from v1.x
 
