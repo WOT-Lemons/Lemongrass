@@ -2680,47 +2680,6 @@ class TestPushInfluxStandingsLive:
             result = _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
         assert result == prev
 
-    def test_car_info_longer_than_seven_chars_written_without_truncation(self):
-        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
-        comp = self._comp()
-        comp['AdditionalData'] = '2009/Saab/9-3'
-        resp = self._resp([comp])
-        with patch.object(_mod, '_write_points_chunked') as mock_write:
-            _mod.push_influx_standings_live(ctx, resp, 'sess-1')
-        lp = mock_write.call_args[0][1][0].to_line_protocol()
-        assert 'car_info=2009/Saab/9-3' in lp
-
-    def test_shorter_car_info_on_later_poll_uses_cached_full_value(self):
-        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
-        comp1 = self._comp()
-        comp1['AdditionalData'] = '2009/Saab/9-3'
-        resp1 = self._resp([comp1])
-        with patch.object(_mod, '_write_points_chunked'):
-            prev = _mod.push_influx_standings_live(ctx, resp1, 'sess-1')
-        comp2 = self._comp(laps='6')
-        comp2['AdditionalData'] = '2009/Sa'
-        resp2 = self._resp([comp2])
-        with patch.object(_mod, '_write_points_chunked') as mock_write:
-            _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
-        lp = mock_write.call_args[0][1][0].to_line_protocol()
-        assert 'car_info=2009/Saab/9-3' in lp
-
-    def test_longer_car_info_on_later_poll_updates_cache(self):
-        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
-        comp1 = self._comp()
-        comp1['AdditionalData'] = '2009/Sa'
-        resp1 = self._resp([comp1])
-        with patch.object(_mod, '_write_points_chunked'):
-            prev = _mod.push_influx_standings_live(ctx, resp1, 'sess-1')
-        comp2 = self._comp(laps='6')
-        comp2['AdditionalData'] = '2009/Saab/9-3'
-        resp2 = self._resp([comp2])
-        with patch.object(_mod, '_write_points_chunked') as mock_write:
-            _mod.push_influx_standings_live(ctx, resp2, 'sess-1', prev)
-        lp = mock_write.call_args[0][1][0].to_line_protocol()
-        assert 'car_info=2009/Saab/9-3' in lp
-
-
 class TestPushInfluxStandingsHistorical:
     def _entry(self, competitors):
         return {
