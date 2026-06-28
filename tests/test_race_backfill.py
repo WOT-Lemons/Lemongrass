@@ -287,15 +287,29 @@ class TestValidateBackfill:
 
 
 class TestRunUpgradeStored:
-    def _query_api(self, stored_races=None, total_by_race=None, current_by_race=None):
+    def _query_api(self, stored_races=None, total_by_race=None, current_by_race=None,
+                   std_total_by_race=None, std_current_by_race=None):
         """
         stored_races: dict of race_id -> race_name
         total_by_race: dict of race_id -> total lap count
         current_by_race: dict of race_id -> current-schema lap count
+        std_total_by_race: dict of race_id -> total standings count
+        std_current_by_race: dict of race_id -> current-schema standings count
         """
         stored_races = stored_races or {}
         total_by_race = total_by_race or {}
         current_by_race = current_by_race or {}
+        std_total_by_race = std_total_by_race or {}
+        std_current_by_race = std_current_by_race or {}
+
+        def _count_for(source, flux):
+            count = 0
+            for race_id, c in source.items():
+                if f'race_id == "{race_id}"' in flux:
+                    count = c
+            rec = MagicMock()
+            rec.get_value.return_value = count
+            return [rec]
 
         def fake_query(flux):
             table = MagicMock()
@@ -305,6 +319,10 @@ class TestRunUpgradeStored:
                     rec = MagicMock()
                     rec.values = {'race_id': race_id, 'race_name': name}
                     table.records.append(rec)
+            elif '_measurement == "standings"' in flux:
+                # standings query — current (schema_version) vs total (position)
+                source = std_current_by_race if '"schema_version"' in flux else std_total_by_race
+                table.records = _count_for(source, flux)
             elif '"schema_version"' in flux:
                 table.records = []
                 for race_id, count in current_by_race.items():
@@ -314,14 +332,7 @@ class TestRunUpgradeStored:
                         table.records.append(rec)
             else:
                 # total laps query
-                # return single record with count for the race_id embedded in the flux
-                count = 0
-                for race_id, c in total_by_race.items():
-                    if f'race_id == "{race_id}"' in flux:
-                        count = c
-                rec = MagicMock()
-                rec.get_value.return_value = count
-                table.records = [rec]
+                table.records = _count_for(total_by_race, flux)
             return [table]
 
         api = MagicMock()
@@ -334,12 +345,41 @@ class TestRunUpgradeStored:
             stored_races={'101': 'Lemons 2024'},
             total_by_race={'101': 10},
             current_by_race={'101': 10},
+            std_total_by_race={'101': 8},
+            std_current_by_race={'101': 8},
         )
         with patch.object(_mod.subprocess, 'run') as mock_run:
             with caplog.at_level(logging.INFO):
                 _mod.run_upgrade_stored(query_api)
         mock_run.assert_not_called()
         assert any('skipping' in r.message and '101' in r.message for r in caplog.records)
+
+    def test_rebackfills_when_laps_current_but_standings_stale(self):
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 10},
+            std_total_by_race={'101': 8},
+            std_current_by_race={'101': 3},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _mod.run_upgrade_stored(query_api)
+        assert mock_run.call_count == 1
+        assert mock_run.call_args.args[0] == ['lemongrass', 'laps', '-n', '101']
+
+    def test_rebackfills_when_laps_current_but_standings_missing(self):
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 10},
+            std_total_by_race={'101': 0},
+            std_current_by_race={'101': 0},
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _mod.run_upgrade_stored(query_api)
+        assert mock_run.call_count == 1
 
     def test_rebackfills_stale_race(self):
         query_api = self._query_api(

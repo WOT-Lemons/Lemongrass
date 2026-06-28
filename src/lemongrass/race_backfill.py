@@ -255,13 +255,42 @@ def run_upgrade_stored(query_api, dry_run=False):
             continue
 
         if current == total:
-            logging.info("race %s (%s): already at schema v%d, skipping",
-                        race_id, race_name, SCHEMA_VERSION)
-            continue
+            # Laps are current; only skip if standings are fresh too. A prior
+            # re-backfill whose standings phase failed leaves v4 laps but stale or
+            # missing standings, which a lap-only check would wrongly treat as
+            # migrated. Standings are queried lazily, only once laps are current.
+            std_total_tables = query_api.query(
+                f'from(bucket: "laps")\n'
+                f'  |> range(start: {EPOCH_START})\n'
+                f'  |> filter(fn: (r) => r._measurement == "standings"\n'
+                f'      and r.race_id == "{race_id}" and r._field == "position")\n'
+                f'  |> count()'
+            )
+            std_total = sum(r.get_value() for t in std_total_tables for r in t.records)
 
-        logging.info("race %s (%s): stale (%d/%d at current schema), %s",
-                    race_id, race_name, current, total,
-                    "would re-backfill" if dry_run else "re-backfilling")
+            std_current_tables = query_api.query(
+                f'from(bucket: "laps")\n'
+                f'  |> range(start: {EPOCH_START})\n'
+                f'  |> filter(fn: (r) => r._measurement == "standings"\n'
+                f'      and r.race_id == "{race_id}"\n'
+                f'      and r._field == "schema_version" and r._value == {SCHEMA_VERSION})\n'
+                f'  |> count()'
+            )
+            std_current = sum(r.get_value() for t in std_current_tables for r in t.records)
+
+            if std_total > 0 and std_current == std_total:
+                logging.info("race %s (%s): already at schema v%d, skipping",
+                            race_id, race_name, SCHEMA_VERSION)
+                continue
+
+            logging.info(
+                "race %s (%s): laps current but standings stale/missing (%d/%d), %s",
+                race_id, race_name, std_current, std_total,
+                "would re-backfill" if dry_run else "re-backfilling")
+        else:
+            logging.info("race %s (%s): stale (%d/%d at current schema), %s",
+                        race_id, race_name, current, total,
+                        "would re-backfill" if dry_run else "re-backfilling")
         if dry_run:
             continue
 
