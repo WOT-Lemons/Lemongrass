@@ -105,6 +105,29 @@ class TestHandlePrune:
         assert 'races' in buckets_deleted
         assert 'race_sessions' in buckets_deleted
 
+    def test_prune_deletes_standings_measurement(self):
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
+            fake_client = self._make_influx_client()
+            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    _mod._handle_prune()
+        delete_api = fake_client.delete_api.return_value
+        predicates = [c.kwargs.get('predicate') for c in delete_api.delete.call_args_list]
+        assert any('_measurement="standings"' in p and 'race_id="12345"' in p
+                   for p in predicates)
+
+    def test_prune_deletes_race_metadata_last(self):
+        # The not-found guard keys off the race measurement, so a retry after a
+        # partial failure only works if race metadata is the last thing deleted.
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
+            fake_client = self._make_influx_client()
+            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    _mod._handle_prune()
+        delete_api = fake_client.delete_api.return_value
+        predicates = [c.kwargs.get('predicate') for c in delete_api.delete.call_args_list]
+        assert '_measurement="race"' in predicates[-1]
+
     def test_prune_exits_when_no_influx_token(self):
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
             with patch.dict('os.environ', {}, clear=True):
@@ -210,9 +233,10 @@ class TestHandlePrune:
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     _mod._handle_prune()
         delete_api = fake_client.delete_api.return_value
-        assert delete_api.delete.call_count == 6  # 3 buckets x 2 races
+        # 4 deletes (race, session, lap, standings) x 2 races
+        assert delete_api.delete.call_count == 8
         buckets = [c.kwargs.get('bucket') for c in delete_api.delete.call_args_list]
-        assert buckets.count('laps') == 2
+        assert buckets.count('laps') == 4  # 2 for laps + 2 for standings
         assert buckets.count('races') == 2
         assert buckets.count('race_sessions') == 2
 

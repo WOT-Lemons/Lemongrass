@@ -215,7 +215,9 @@ def run_backfill(races, default_car, overrides, dry_run=False, force=False):
 def run_upgrade_stored(query_api, dry_run=False, force=False):
     """Query InfluxDB for stored races with stale schema versions and re-backfill them.
 
-    Races already at the current SCHEMA_VERSION are skipped unless force is True.
+    A race is skipped only when both its laps and its standings are at the current
+    SCHEMA_VERSION; laps that are current but whose standings are stale or missing
+    are re-backfilled. force=True re-backfills every stored race regardless.
     Re-backfill calls `lemongrass laps -n <race_id>` with no car_number (fieldwide mode).
     """
     from lemongrass.laps import SCHEMA_VERSION
@@ -257,11 +259,40 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
             continue
 
         if current == total and not force:
-            logging.info("race %s (%s): already at schema v%d, skipping",
-                        race_id, race_name, SCHEMA_VERSION)
-            continue
+            # Laps are current and we're not forcing; only skip if standings are
+            # fresh too. A prior re-backfill whose standings phase failed leaves v4
+            # laps but stale or missing standings, which a lap-only check would
+            # wrongly treat as migrated. Standings are queried lazily, only once
+            # laps are current. (--force bypasses this and re-backfills regardless.)
+            std_total_tables = query_api.query(
+                f'from(bucket: "laps")\n'
+                f'  |> range(start: {EPOCH_START})\n'
+                f'  |> filter(fn: (r) => r._measurement == "standings"\n'
+                f'      and r.race_id == "{race_id}" and r._field == "position")\n'
+                f'  |> count()'
+            )
+            std_total = sum(r.get_value() for t in std_total_tables for r in t.records)
 
-        if current == total:  # force is implied here (the non-force case returned above)
+            std_current_tables = query_api.query(
+                f'from(bucket: "laps")\n'
+                f'  |> range(start: {EPOCH_START})\n'
+                f'  |> filter(fn: (r) => r._measurement == "standings"\n'
+                f'      and r.race_id == "{race_id}"\n'
+                f'      and r._field == "schema_version" and r._value == {SCHEMA_VERSION})\n'
+                f'  |> count()'
+            )
+            std_current = sum(r.get_value() for t in std_current_tables for r in t.records)
+
+            if std_total > 0 and std_current == std_total:
+                logging.info("race %s (%s): already at schema v%d, skipping",
+                            race_id, race_name, SCHEMA_VERSION)
+                continue
+
+            logging.info(
+                "race %s (%s): laps current but standings stale/missing (%d/%d), %s",
+                race_id, race_name, std_current, std_total,
+                "would re-backfill" if dry_run else "re-backfilling")
+        elif current == total:  # current == total and force
             logging.info("race %s (%s): already current, %s",
                         race_id, race_name,
                         "would force re-backfill" if dry_run else "force re-backfilling")

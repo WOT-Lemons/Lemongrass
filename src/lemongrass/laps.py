@@ -48,7 +48,7 @@ EPOCH_START = '1970-01-01T00:00:00Z'
 # them, rewriting historical data under the new schema. That "rewrite everything"
 # behavior is itself a useful migration tool — bump the version and re-run the
 # backfill to bring all historical races up to the current schema.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5
@@ -452,14 +452,25 @@ def old_race(ctx, opts):
         if opts.skip_if_complete and expected > 0:
             total, current = existing_lap_counts_fieldwide(ctx)
             if total == expected and current == expected:
-                race_ts_ms = (
-                    ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-                )
-                push_influx_race(ctx, race_ts_ms)
+                # Laps are complete and current, but only skip if standings are too —
+                # otherwise a prior run whose standings phase failed would be skipped
+                # forever with stale/missing standings. Treat standings as fresh when
+                # some exist and none predate the current schema (approximate: standings
+                # are written one atomic batch per session, so a partial-but-all-current
+                # state is rare).
+                std_total, std_current = existing_standings_counts_fieldwide(ctx)
+                if std_total > 0 and std_current == std_total:
+                    race_ts_ms = (
+                        ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+                    )
+                    push_influx_race(ctx, race_ts_ms)
+                    logging.info(
+                        "SKIP: race %s already complete and current (%d laps, schema v%d)",
+                        ctx.race_id, total, SCHEMA_VERSION)
+                    return
                 logging.info(
-                    "SKIP: race %s already complete and current (%d laps, schema v%d)",
-                    ctx.race_id, total, SCHEMA_VERSION)
-                return
+                    "Race %s laps complete but standings stale/missing (%d of %d "
+                    "current) — rewriting", ctx.race_id, std_current, std_total)
 
         delete_existing_laps(ctx)
         total_competitors = sum(len(s['competitors']) for s in pending_writes)
@@ -488,8 +499,24 @@ def old_race(ctx, opts):
             push_influx_session(
                 ctx, session['session_id'], session['session_name'], session['start_epoc'])
 
+        standings_ok = delete_existing_standings(ctx)
         for session in pending_writes:
-            push_influx_standings_historical(ctx, session)
+            if not push_influx_standings_historical(ctx, session):
+                standings_ok = False
+        if not standings_ok:
+            # A partial write (some sessions stored, others failed) would otherwise
+            # look "complete and current" to the skip checks — std_total and
+            # std_current would match on just the sessions that succeeded — and
+            # strand the race forever. Wipe the whole race's standings so std_total
+            # drops to 0 and the next run re-backfills from scratch.
+            if delete_existing_standings(ctx):
+                logging.error(
+                    "Standings incomplete for race %s — cleared partial standings; "
+                    "the next backfill will rewrite them", ctx.race_id)
+            else:
+                logging.error(
+                    "Standings incomplete for race %s and the cleanup delete failed; "
+                    "rerun with --force to rewrite standings", ctx.race_id)
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
@@ -744,13 +771,13 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
         point = (
             Point("lap")
             .tag("race_id", ctx.race_id)
-            .tag("competitor_name", competitor_name)
-            .tag("car_info", car_info)
             .tag("class", class_name)
             .tag("car_number", car_number)
             .field("lap_no", lap_num)
             .field("flag_status", lap['FlagStatus'])
             .field("schema_version", SCHEMA_VERSION)
+            .field("competitor_name", competitor_name)
+            .field("car_info", car_info)
             .time(time_lap_completed_ms, WritePrecision.MS)
         )
         if lap_time_ms is not None:
@@ -919,6 +946,48 @@ def delete_existing_laps(ctx):
         logging.error("Deleting existing laps failed: %s", e)
 
 
+def delete_existing_standings(ctx):
+    """Delete all standings points for this race so a backfill can replace them.
+
+    Returns True on success, False if the delete failed (logged, not raised) so
+    the caller can tell the operator that standings need a re-run.
+    """
+    try:
+        ctx.delete_api.delete(
+            start='1970-01-01T00:00:00Z',
+            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            predicate=f'_measurement="standings" AND race_id="{ctx.race_id}"',
+            bucket='laps',
+        )
+        return True
+    except Exception as e:
+        logging.error("Deleting existing standings failed: %s", e)
+        return False
+
+
+def existing_standings_counts_fieldwide(ctx):
+    """Return (total_standings, current_standings) for all cars in this race.
+
+    total counts every standings point (one position field each); current counts
+    those stamped with the current SCHEMA_VERSION. Used by old_race to confirm
+    standings are fresh before skipping a race whose laps are already complete.
+    """
+    def _count(field_filter):
+        tables = ctx.query_api.query(
+            f'from(bucket: "laps")\n'
+            f'  |> range(start: {EPOCH_START})\n'
+            f'  |> filter(fn: (r) => r._measurement == "standings"\n'
+            f'      and r.race_id == "{ctx.race_id}")\n'
+            f'  |> filter(fn: (r) => {field_filter})\n'
+            f'  |> count()'
+        )
+        return sum(r.get_value() for t in tables for r in t.records)
+
+    total = _count('r._field == "position"')
+    current = _count(f'r._field == "schema_version" and r._value == {SCHEMA_VERSION}')
+    return total, current
+
+
 def _resolve_class_historical(car_number, session_details):
     """Return (class_name, {lap_num: class_position}) for the given car_number."""
     session = session_details['Session']
@@ -1085,11 +1154,12 @@ def push_influx_standings_live(ctx, session_response, session_id, prev_standings
             Point("standings")
             .tag("race_id", ctx.race_id)
             .tag("car_number", car_number)
-            .tag("competitor_name", competitor_name)
-            .tag("car_info", car_info)
             .tag("class", class_name)
             .field("position", position)
             .field("lap_count", lap_count)
+            .field("schema_version", SCHEMA_VERSION)
+            .field("competitor_name", competitor_name)
+            .field("car_info", car_info)
             .time(timestamp_ms, WritePrecision.MS)
         )
         if session_id is not None:
@@ -1138,12 +1208,13 @@ def push_influx_standings_historical(ctx, session_entry):
             Point("standings")
             .tag("race_id", ctx.race_id)
             .tag("car_number", comp['car_number'])
-            .tag("competitor_name", comp['competitor_name'])
-            .tag("car_info", comp['car_info'])
             .tag("class", comp['class_name'])
             .tag("session_id", str(session_id))
             .field("position", position)
             .field("lap_count", lap_count)
+            .field("schema_version", SCHEMA_VERSION)
+            .field("competitor_name", comp['competitor_name'])
+            .field("car_info", comp['car_info'])
             .time(timestamp_ms, WritePrecision.MS)
         )
         if class_position is not None:
@@ -1163,6 +1234,8 @@ def push_influx_standings_historical(ctx, session_entry):
             logging.error(
                 "Writing historical standings failed for race %s session %s: %s",
                 ctx.race_id, session_id, e)
+            return False
+    return True
 
 
 def _resolve_race_metadata(race_details, client):

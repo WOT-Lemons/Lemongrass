@@ -168,11 +168,9 @@ def _handle_prune():
         failed = []
         for rid in race_ids:
             try:
-                delete_api.delete(start=EPOCH_START, stop=now,
-                                  predicate=f'_measurement="race" AND race_id="{rid}"',
-                                  bucket='races')
-                print(f"Deleted race metadata for race {rid}")
-
+                # Delete race metadata LAST: the not-found guard above keys off the
+                # race measurement, so as long as it survives, a retry after a partial
+                # failure can still clean up orphaned session/lap/standings rows.
                 delete_api.delete(start=EPOCH_START, stop=now,
                                   predicate=f'_measurement="session" AND race_id="{rid}"',
                                   bucket='race_sessions')
@@ -182,6 +180,16 @@ def _handle_prune():
                                   predicate=f'_measurement="lap" AND race_id="{rid}"',
                                   bucket='laps')
                 print(f"Deleted laps for race {rid}")
+
+                delete_api.delete(start=EPOCH_START, stop=now,
+                                  predicate=f'_measurement="standings" AND race_id="{rid}"',
+                                  bucket='laps')
+                print(f"Deleted standings for race {rid}")
+
+                delete_api.delete(start=EPOCH_START, stop=now,
+                                  predicate=f'_measurement="race" AND race_id="{rid}"',
+                                  bucket='races')
+                print(f"Deleted race metadata for race {rid}")
             except Exception as e:
                 print(f"error pruning race {rid}: {e}", file=sys.stderr)
                 failed.append(rid)
