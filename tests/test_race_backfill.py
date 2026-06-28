@@ -422,6 +422,33 @@ class TestRunUpgradeStored:
         cmd = mock_run.call_args.args[0]
         assert cmd == ['lemongrass', 'laps', '-n', '101']
 
+    def test_force_logs_already_current_message(self, caplog):
+        import logging
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 10},  # already fully current
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            with caplog.at_level(logging.INFO):
+                _mod.run_upgrade_stored(query_api, force=True)
+        assert any('already current' in r.message and 'force re-backfilling' in r.message
+                   for r in caplog.records)
+
+    def test_dry_run_force_does_not_call_subprocess(self, caplog):
+        import logging
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 10},  # already current; only --force would touch it
+        )
+        with patch.object(_mod.subprocess, 'run') as mock_run:
+            with caplog.at_level(logging.INFO):
+                _mod.run_upgrade_stored(query_api, dry_run=True, force=True)
+        mock_run.assert_not_called()
+        assert any('would force re-backfill' in r.message for r in caplog.records)
+
     def test_force_still_skips_race_with_no_stored_laps(self):
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},

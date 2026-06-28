@@ -90,7 +90,9 @@ def _build_parser():
                        default=False,
                        help='Re-backfill stored races with schema versions older than current; '
                             'mutually exclusive with --override, --start-year, '
-                            '--car, and --validate')
+                            '--car, and --validate. Combine with --force to also re-fetch '
+                            'races already at the current schema (re-queries every race from '
+                            'RaceMonitor, subject to its rate limit)')
     return parser
 
 
@@ -259,7 +261,7 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
                         race_id, race_name, SCHEMA_VERSION)
             continue
 
-        if force and current == total:
+        if current == total:  # force is implied here (the non-force case returned above)
             logging.info("race %s (%s): already current, %s",
                         race_id, race_name,
                         "would force re-backfill" if dry_run else "force re-backfilling")
