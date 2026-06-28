@@ -2727,6 +2727,7 @@ class TestPushInfluxStandingsLive:
             _mod.push_influx_standings_live(ctx, resp, 'sess-1')
         lp = mock_write.call_args[0][1][0].to_line_protocol()
         assert 'car_info="2009/Saab/9-3"' in lp
+        assert 'competitor_name="Ben K"' in lp
 
     def test_differing_car_info_yields_same_series_key(self):
         # The production bug: two values for the same car must NOT split the series.
@@ -2843,7 +2844,8 @@ class TestPushInfluxStandingsHistorical:
             _mod.push_influx_standings_historical(ctx, entry)
         lp = mock_write.call_args[0][1][0].to_line_protocol()
         assert 'car_info="2009/Saab/9-3"' in lp
-        assert 'car_info=2009/Saab/9-3,' not in lp.split(' ', 1)[0]
+        assert 'competitor_name="Ben K"' in lp
+        assert 'car_info=' not in lp.split(' ', 1)[0]
 
     def test_schema_version_field_present(self):
         ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
