@@ -42,6 +42,11 @@ def _format_influx_error(exc):
                           or payload.get('title'))
             except (ValueError, TypeError):
                 detail = None
+        # Bodyless ApiExceptions (e.g. status-0 SSL/connection failures) carry
+        # their text in .reason, not the body; fall back to it so we don't print
+        # a bare "HTTP 0". Collapse whitespace to keep the message one line.
+        if not detail and exc.reason:
+            detail = ' '.join(str(exc.reason).split())
         msg = f"HTTP {exc.status}"
         if detail:
             msg += f": {detail}"

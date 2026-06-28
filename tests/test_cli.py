@@ -90,7 +90,7 @@ class TestInfluxErrorHandling:
         from influxdb_client.rest import ApiException
 
         def raise_ssl():
-            raise ApiException(status=0, reason='SSL handshake failed')
+            raise ApiException(status=0, reason='SSLError\nbad handshake')
 
         with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
             with patch('lemongrass.races.main', raise_ssl):
@@ -100,6 +100,9 @@ class TestInfluxErrorHandling:
         err = capsys.readouterr().err
         assert 'cannot reach InfluxDB' in err
         assert 'request failed' not in err
+        # Bodyless ApiExceptions carry their reason in .reason; surface it (collapsed
+        # to one line) rather than printing a bare "HTTP 0".
+        assert 'SSLError bad handshake' in err
 
     def test_normal_systemexit_passes_through(self):
         """A command exiting 0 must not be swallowed or rewritten by the handler."""
