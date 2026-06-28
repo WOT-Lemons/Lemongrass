@@ -182,6 +182,11 @@ def _handle_prune():
                                   predicate=f'_measurement="lap" AND race_id="{rid}"',
                                   bucket='laps')
                 print(f"Deleted laps for race {rid}")
+
+                delete_api.delete(start=EPOCH_START, stop=now,
+                                  predicate=f'_measurement="standings" AND race_id="{rid}"',
+                                  bucket='laps')
+                print(f"Deleted standings for race {rid}")
             except Exception as e:
                 print(f"error pruning race {rid}: {e}", file=sys.stderr)
                 failed.append(rid)
