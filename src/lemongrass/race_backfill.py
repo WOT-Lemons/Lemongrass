@@ -215,7 +215,9 @@ def run_backfill(races, default_car, overrides, dry_run=False, force=False):
 def run_upgrade_stored(query_api, dry_run=False, force=False):
     """Query InfluxDB for stored races with stale schema versions and re-backfill them.
 
-    Races already at the current SCHEMA_VERSION are skipped unless force is True.
+    A race is skipped only when both its laps and its standings are at the current
+    SCHEMA_VERSION; laps that are current but whose standings are stale or missing
+    are re-backfilled. force=True re-backfills every stored race regardless.
     Re-backfill calls `lemongrass laps -n <race_id>` with no car_number (fieldwide mode).
     """
     from lemongrass.laps import SCHEMA_VERSION

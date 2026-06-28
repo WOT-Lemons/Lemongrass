@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import lemongrass.race_backfill as _mod
+from lemongrass.laps import SCHEMA_VERSION
 
 
 def _make_race(id, name, start_epoc):
@@ -320,8 +321,14 @@ class TestRunUpgradeStored:
                     rec.values = {'race_id': race_id, 'race_name': name}
                     table.records.append(rec)
             elif '_measurement == "standings"' in flux:
-                # standings query — current (schema_version) vs total (position)
-                source = std_current_by_race if '"schema_version"' in flux else std_total_by_race
+                # standings query — current (schema_version == SCHEMA_VERSION) vs total (position)
+                if 'r._field == "schema_version"' in flux:
+                    # the freshness contract requires filtering on the current value,
+                    # not merely the presence of a schema_version field
+                    assert f'r._value == {SCHEMA_VERSION}' in flux
+                    source = std_current_by_race
+                else:
+                    source = std_total_by_race
                 table.records = _count_for(source, flux)
             elif '"schema_version"' in flux:
                 table.records = []
