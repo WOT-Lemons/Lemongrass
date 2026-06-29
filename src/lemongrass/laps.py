@@ -1110,6 +1110,30 @@ def _compute_class_positions_live(session_response):
     return result
 
 
+def _compute_class_positions_final(competitors):
+    """Return {car_number: class_position} for a completed session, ranking
+    same-class competitors by their final overall position.
+
+    Mirrors _compute_class_positions_live. Used for the standings snapshot instead
+    of the per-lap class_positions dict: that dict holds each car's class position
+    at its own last lap, computed only against same-class cars that reached that
+    lap, so cars finishing at different lap counts collide on the same value.
+    """
+    by_class = defaultdict(list)
+    for comp in competitors:
+        try:
+            pos = int(comp['final_position'])
+        except (ValueError, TypeError):
+            continue
+        by_class[comp['class_name']].append((pos, comp['car_number']))
+    result = {}
+    for entries in by_class.values():
+        entries.sort()
+        for rank, (_, car_number) in enumerate(entries, 1):
+            result[car_number] = rank
+    return result
+
+
 def push_influx_standings_live(ctx, session_response, session_id, prev_standings=None):
     """Write one standings point per competitor when standings have changed.
 
@@ -1187,6 +1211,7 @@ def push_influx_standings_historical(ctx, session_entry):
     start_epoc = session_entry.get('start_epoc') or 0
     timestamp_ms = start_epoc * 1000
     session_id = session_entry['session_id']
+    class_positions_final = _compute_class_positions_final(session_entry['competitors'])
     points = []
     for comp in session_entry['competitors']:
         try:
@@ -1197,10 +1222,7 @@ def push_influx_standings_historical(ctx, session_entry):
             lap_count = int(comp['final_laps'])
         except (ValueError, TypeError):
             continue
-        class_positions = comp.get('class_positions') or {}
-        class_position = (
-            class_positions[max(class_positions)] if class_positions else None
-        )
+        class_position = class_positions_final.get(comp['car_number'])
         best_lap_ms = _time_to_ms(comp.get('best_lap_time') or '')
         last_lap_ms = _time_to_ms(comp.get('last_lap_time') or '')
         point = (

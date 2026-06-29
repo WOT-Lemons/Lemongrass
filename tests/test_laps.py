@@ -2943,14 +2943,49 @@ class TestPushInfluxStandingsHistorical:
         lp = mock_write.call_args[0][1][0].to_line_protocol()
         assert lp.startswith('standings,')
 
-    def test_uses_final_class_position(self):
+    def test_class_position_ranks_by_final_position_within_class(self):
+        # Regression: final class position must rank same-class cars by their final
+        # overall position. Previously it read each car's last-lap value from the
+        # per-lap class_positions dict — computed at each car's own (differing) last
+        # lap — so cars finishing at different lap counts collided on the same class
+        # position. Here all three cars carry a colliding per-lap dict ({1: 9}) but
+        # distinct final positions, so they must come out 1/2/3.
         ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
-        comp = self._comp(class_positions={1: 3, 2: 2, 3: 1})
-        entry = self._entry([comp])
+        entry = self._entry([
+            self._comp(car_number='974', position='33', class_name='B',
+                       class_positions={1: 9}),
+            self._comp(car_number='60', position='46', class_name='B',
+                       class_positions={1: 9}),
+            self._comp(car_number='151', position='81', class_name='B',
+                       class_positions={1: 9}),
+        ])
         with patch.object(_mod, '_write_points_chunked') as mock_write:
             _mod.push_influx_standings_historical(ctx, entry)
-        lp = mock_write.call_args[0][1][0].to_line_protocol()
-        assert 'class_position=1i' in lp
+        by_car = {
+            p.to_line_protocol().split('car_number=', 1)[1].split(',', 1)[0]:
+                p.to_line_protocol()
+            for p in mock_write.call_args[0][1]
+        }
+        assert 'class_position=1i' in by_car['974']
+        assert 'class_position=2i' in by_car['60']
+        assert 'class_position=3i' in by_car['151']
+
+    def test_class_positions_independent_across_classes(self):
+        # Each class is ranked independently, both starting at 1.
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        entry = self._entry([
+            self._comp(car_number='1', position='2', class_name='A'),
+            self._comp(car_number='2', position='5', class_name='B'),
+        ])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_historical(ctx, entry)
+        by_car = {
+            p.to_line_protocol().split('car_number=', 1)[1].split(',', 1)[0]:
+                p.to_line_protocol()
+            for p in mock_write.call_args[0][1]
+        }
+        assert 'class_position=1i' in by_car['1']
+        assert 'class_position=1i' in by_car['2']
 
     def test_session_id_tagged(self):
         ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
@@ -2976,13 +3011,15 @@ class TestPushInfluxStandingsHistorical:
         assert 'best_lap_time' not in lp
         assert 'last_lap_time' not in lp
 
-    def test_empty_class_positions_omits_class_position_field(self):
+    def test_empty_per_lap_class_positions_still_ranks_by_final_position(self):
+        # The standings class position is derived from final overall position, so an
+        # empty per-lap class_positions dict no longer suppresses it.
         ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
         entry = self._entry([self._comp(class_positions={})])
         with patch.object(_mod, '_write_points_chunked') as mock_write:
             _mod.push_influx_standings_historical(ctx, entry)
         lp = mock_write.call_args[0][1][0].to_line_protocol()
-        assert 'class_position' not in lp
+        assert 'class_position=1i' in lp
 
     def test_car_info_is_field_not_tag(self):
         ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
