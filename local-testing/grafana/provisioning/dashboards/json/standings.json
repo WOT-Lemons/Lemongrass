@@ -152,6 +152,10 @@
                 }
               },
               {
+                "id": "fieldMinMax",
+                "value": true
+              },
+              {
                 "id": "thresholds",
                 "value": {
                   "mode": "percentage",
@@ -174,7 +178,8 @@
               {
                 "id": "custom.cellOptions",
                 "value": {
-                  "type": "color-background-solid"
+                  "type": "color-background",
+                  "mode": "basic"
                 }
               }
             ]
