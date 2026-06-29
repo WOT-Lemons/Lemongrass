@@ -37,13 +37,14 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
    `INFLUX_TELEMETRY_TOKEN=local-dev-token`. (In prod these are unset and the CLI
    falls back to `https://influxdb.focism.com` / `focism`.)
 
-3. Seed data by running a real backfill. This calls the RaceMonitor API, so it
+3. Seed data by running a one-shot pull from RaceMonitor. This calls the RaceMonitor API, so it
    needs your own RaceMonitor API token — this requires a Race Monitor account
    with API access; get a token at <https://www.race-monitor.com/Home/API>. The
-   API is rate-limited to ~6 req/min, so backfilling a full race is slow:
+   `-n`/`--network` flag does a one-shot pull of a completed race and writes it to the local
+   buckets. The API is rate-limited to ~6 req/min, so pulling a full race takes a few minutes:
 
    ```bash
-   RACEMONITOR_TOKEN=<token> uv run lemongrass races backfill <race_id>
+   RACEMONITOR_TOKEN=<token> uv run lemongrass laps 161198 -n
    ```
 
 4. Inspect the result:
@@ -53,7 +54,10 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
    ```
 
    or open Grafana at http://localhost:3000 (login `admin` / `local-dev-password`)
-   — the InfluxDB datasource is pre-provisioned.
+   — the InfluxDB datasource and lemongrass dashboards (**laps**, **race-control**, **standings**)
+   are pre-provisioned. The OBD dashboards (**telegraf**, **car252-pisugar-ups**) and OBD panels
+   in **race-control** show no data locally because OBD/`stats_252` collection is not configured
+   for local testing.
 
 5. Tear down (add `-v` to wipe data and re-trigger bucket init next start):
 
