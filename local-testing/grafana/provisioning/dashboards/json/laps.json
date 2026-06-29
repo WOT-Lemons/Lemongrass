@@ -1290,12 +1290,12 @@
           "type": "influxdb",
           "uid": "wotl-laps-flux"
         },
-        "definition": "from(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and r._field == \"lap_no\") |> group(columns: [\"car_number\"]) |> last() |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])",
+        "definition": "from(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and (r._field == \"lap_no\" or r._field == \"competitor_name\")) |> pivot(rowKey: [\"_time\", \"car_number\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> group(columns: [\"car_number\"]) |> last(column: \"lap_no\") |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])",
         "label": "Competitor",
         "name": "carno",
         "options": [],
         "query": {
-          "query": "from(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and r._field == \"lap_no\") |> group(columns: [\"car_number\"]) |> last() |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])"
+          "query": "from(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and (r._field == \"lap_no\" or r._field == \"competitor_name\")) |> pivot(rowKey: [\"_time\", \"car_number\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> group(columns: [\"car_number\"]) |> last(column: \"lap_no\") |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])"
         },
         "regex": "/(?<text>.+);(?<value>.+)/",
         "refresh": 2,
