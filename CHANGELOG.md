@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/WOT-Lemons/Lemongrass/compare/v3.0.0...v3.0.1) (2026-06-29)
+
+
+### Bug Fixes
+
+* **deps:** require race-monitor&gt;=0.6.1 for token rate-limit fix ([#161](https://github.com/WOT-Lemons/Lemongrass/issues/161)) ([50614b0](https://github.com/WOT-Lemons/Lemongrass/commit/50614b06cd016daacd5cfa08d8bce3e3dbe2ce53))
+
 ## [3.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v2.1.1...v3.0.0) (2026-06-29)
 
 
