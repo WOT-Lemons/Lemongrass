@@ -94,35 +94,12 @@
             "type": "influxdb",
             "uid": "wotl-laps-ql"
           },
-          "groupBy": [],
-          "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
           "refId": "A",
-          "resultFormat": "time_series",
-          "select": [
-            [
-              {
-                "params": [
-                  "lap_time"
-                ],
-                "type": "field"
-              }
-            ]
-          ],
-          "tags": [
-            {
-              "key": "race_id",
-              "operator": "=",
-              "value": "$raceid"
-            },
-            {
-              "condition": "AND",
-              "key": "car_number",
-              "operator": "=",
-              "value": "$carno"
-            }
-          ]
+          "resultFormat": "time_series"
         }
       ],
       "timeFrom": "1d",
