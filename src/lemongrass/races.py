@@ -6,16 +6,12 @@ Run `lemongrass races <subcommand> --help` for per-subcommand options.
 """
 
 import argparse
-import logging
-import os
 import re
 import sys
 from datetime import datetime, timezone
 
-from influxdb_client import InfluxDBClient
+from lemongrass import _influx
 
-INFLUX_URL = 'https://influxdb.focism.com'
-INFLUX_ORG = 'focism'
 EPOCH_START = '1970-01-01T00:00:00Z'
 
 _SUBCOMMANDS = ('list', 'prune', 'backfill', 'diagnose')
@@ -35,26 +31,16 @@ def main():
      'backfill': _handle_backfill, 'diagnose': _handle_diagnose}[subcmd]()
 
 
-def _require_influx_token():
-    """Read INFLUX_TELEMETRY_TOKEN from the environment, exiting with an error if unset."""
-    token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
-    if not token:
-        logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-        sys.exit(1)
-    return token
-
-
 def _handle_list():
     """Print a table of all races in the races bucket with their total lap count and
     schema version status (current, stale, or no laps)."""
     from lemongrass.laps import SCHEMA_VERSION
 
-    token = _require_influx_token()
-    with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG) as client:
+    with _influx.connect() as client:
         query_api = client.query_api()
 
         races_tables = query_api.query(
-            f'from(bucket: "races")\n'
+            f'from(bucket: "{_influx.BUCKET_RACES}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "race" and r._field == "end_time_epoc")\n'
         )
@@ -70,7 +56,7 @@ def _handle_list():
                 }
 
         total_tables = query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "lap" and r._field == "lap_no")\n'
             f'  |> group(columns: ["race_id"])\n'
@@ -83,7 +69,7 @@ def _handle_list():
                     races[rid]['total'] = record.get_value()
 
         current_tables = query_api.query(
-            f'from(bucket: "laps")\n'
+            f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "lap"\n'
             f'      and r._field == "schema_version" and r._value == {SCHEMA_VERSION})\n'
@@ -127,15 +113,13 @@ def _handle_prune():
         print("invalid race ID(s):", ", ".join(f'"{r}"' for r in invalid_ids), file=sys.stderr)
         sys.exit(1)
 
-    token = _require_influx_token()
-
-    with InfluxDBClient(url=INFLUX_URL, token=token, org=INFLUX_ORG) as client:
+    with _influx.connect() as client:
         query_api = client.query_api()
 
         # safe: all ids validated against [A-Za-z0-9_-]+ above; no Flux metacharacters possible
         ids_set = '["' + '", "'.join(race_ids) + '"]'
         races_tables = query_api.query(
-            f'from(bucket: "races")\n'
+            f'from(bucket: "{_influx.BUCKET_RACES}")\n'
             f'  |> range(start: {EPOCH_START})\n'
             f'  |> filter(fn: (r) => r._measurement == "race" and r._field == "end_time_epoc"\n'
             f'      and contains(value: r.race_id, set: {ids_set}))\n'
@@ -173,22 +157,22 @@ def _handle_prune():
                 # failure can still clean up orphaned session/lap/standings rows.
                 delete_api.delete(start=EPOCH_START, stop=now,
                                   predicate=f'_measurement="session" AND race_id="{rid}"',
-                                  bucket='race_sessions')
+                                  bucket=_influx.BUCKET_SESSIONS)
                 print(f"Deleted sessions for race {rid}")
 
                 delete_api.delete(start=EPOCH_START, stop=now,
                                   predicate=f'_measurement="lap" AND race_id="{rid}"',
-                                  bucket='laps')
+                                  bucket=_influx.BUCKET_LAPS)
                 print(f"Deleted laps for race {rid}")
 
                 delete_api.delete(start=EPOCH_START, stop=now,
                                   predicate=f'_measurement="standings" AND race_id="{rid}"',
-                                  bucket='laps')
+                                  bucket=_influx.BUCKET_LAPS)
                 print(f"Deleted standings for race {rid}")
 
                 delete_api.delete(start=EPOCH_START, stop=now,
                                   predicate=f'_measurement="race" AND race_id="{rid}"',
-                                  bucket='races')
+                                  bucket=_influx.BUCKET_RACES)
                 print(f"Deleted race metadata for race {rid}")
             except Exception as e:
                 print(f"error pruning race {rid}: {e}", file=sys.stderr)

@@ -8,8 +8,10 @@ from datetime import datetime, timezone
 from time import sleep
 
 import obd
-from influxdb_client import InfluxDBClient, Point
+from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+
+from lemongrass import _influx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
@@ -100,14 +102,7 @@ def flush_points(write_api):
 
 def main():
     """Main loop of OBD-II scraping"""
-    influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
-    if not influx_token:
-        logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-        return
-
-    with InfluxDBClient(
-        url='https://influxdb.focism.com', token=influx_token, org='focism'
-    ) as influx_client:
+    with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
         obd.logger.setLevel(obd.logging.DEBUG)

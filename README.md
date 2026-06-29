@@ -317,6 +317,11 @@ The `backfill` subcommand delegates to `lemongrass race-backfill` and supports t
 
 All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata is stored in the `race_sessions` bucket.
 
+## Contributing
+
+For development setup, running the test suite, and testing against a local
+InfluxDB stack instead of prod, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Upgrading from v1.x
 
 As of v2.0.0, the individual entry points (`laps`, `telem`, `race-backfill`, `pisugar-monitor`, `race-diagnose`) were replaced by a single `lemongrass` command. If you have the old package installed, update and prefix commands with `lemongrass`:

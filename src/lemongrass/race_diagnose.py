@@ -24,13 +24,11 @@ import os
 import sys
 from datetime import datetime, timezone
 
-from influxdb_client import InfluxDBClient
 from race_monitor import RaceMonitorClient
 
+from lemongrass import _influx
 from lemongrass._env import resolve_tokens
 
-INFLUX_URL = 'https://influxdb.focism.com'
-INFLUX_ORG = 'focism'
 EPOCH_START = '1970-01-01T00:00:00Z'
 
 
@@ -97,7 +95,7 @@ def diagnose_influx(query_api, race_id, car_number, start_epoc=0, end_epoc=0):
                   if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
 
     tables = query_api.query(
-        f'from(bucket: "laps")\n'
+        f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
         f'  |> range(start: {range_start}, stop: {range_stop})\n'
         f'  |> filter(fn: (r) => r._measurement == "lap"\n'
         f'      and r.race_id == "{race_id}"\n'
@@ -137,7 +135,7 @@ def main():
     with RaceMonitorClient(api_token=rm_token) as client:
         start_epoc, end_epoc = diagnose_api(client, race_id, car_number)
 
-    with InfluxDBClient(url=INFLUX_URL, token=influx_token, org=INFLUX_ORG) as influx:
+    with _influx.connect() as influx:
         diagnose_influx(influx.query_api(), race_id, car_number, start_epoc, end_epoc)
 
 

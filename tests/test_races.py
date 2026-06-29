@@ -72,7 +72,7 @@ class TestHandlePrune:
 
     def test_prune_with_yes_skips_prompt(self, capsys):
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
-            with patch('lemongrass.races.InfluxDBClient',
+            with patch('lemongrass._influx.connect',
                        return_value=self._make_influx_client()):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     _mod._handle_prune()
@@ -83,7 +83,7 @@ class TestHandlePrune:
 
     def test_prune_aborts_on_no_confirmation(self, capsys):
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345']):
-            with patch('lemongrass.races.InfluxDBClient',
+            with patch('lemongrass._influx.connect',
                        return_value=self._make_influx_client()):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     with patch('builtins.input', return_value='n'):
@@ -95,7 +95,7 @@ class TestHandlePrune:
     def test_prune_deletes_from_all_three_buckets(self):
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
             fake_client = self._make_influx_client()
-            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+            with patch('lemongrass._influx.connect', return_value=fake_client):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     _mod._handle_prune()
         delete_api = fake_client.delete_api.return_value
@@ -108,7 +108,7 @@ class TestHandlePrune:
     def test_prune_deletes_standings_measurement(self):
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
             fake_client = self._make_influx_client()
-            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+            with patch('lemongrass._influx.connect', return_value=fake_client):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     _mod._handle_prune()
         delete_api = fake_client.delete_api.return_value
@@ -121,7 +121,7 @@ class TestHandlePrune:
         # partial failure only works if race metadata is the last thing deleted.
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
             fake_client = self._make_influx_client()
-            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+            with patch('lemongrass._influx.connect', return_value=fake_client):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     _mod._handle_prune()
         delete_api = fake_client.delete_api.return_value
@@ -174,7 +174,7 @@ class TestHandlePrune:
     def test_prune_aborts_when_race_not_found_in_influx(self, capsys):
         with patch.object(sys, 'argv',
                           ['lemongrass-races-prune', '99999', '--yes']):
-            with patch('lemongrass.races.InfluxDBClient',
+            with patch('lemongrass._influx.connect',
                        return_value=self._make_influx_client(races={})):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     with pytest.raises(SystemExit) as exc:
@@ -185,7 +185,7 @@ class TestHandlePrune:
     def test_prune_reports_all_not_found_ids(self, capsys):
         with patch.object(sys, 'argv',
                           ['lemongrass-races-prune', '11111', '22222', '--yes']):
-            with patch('lemongrass.races.InfluxDBClient',
+            with patch('lemongrass._influx.connect',
                        return_value=self._make_influx_client(races={})):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     with pytest.raises(SystemExit) as exc:
@@ -199,7 +199,7 @@ class TestHandlePrune:
         with patch.object(sys, 'argv',
                           ['lemongrass-races-prune', '12345', '67890']):
             races = {'12345': 'Le Mans 2026', '67890': 'Sebring 2025'}
-            with patch('lemongrass.races.InfluxDBClient',
+            with patch('lemongrass._influx.connect',
                        return_value=self._make_influx_client(races=races)):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     with patch('builtins.input', return_value='n'):
@@ -216,7 +216,7 @@ class TestHandlePrune:
                           ['lemongrass-races-prune', '12345', '67890', '--yes']):
             races = {'12345': 'Le Mans 2026', '67890': 'Sebring 2025'}
             fake_client = self._make_influx_client(races=races)
-            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+            with patch('lemongrass._influx.connect', return_value=fake_client):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     _mod._handle_prune()
         out = capsys.readouterr().out
@@ -229,7 +229,7 @@ class TestHandlePrune:
                           ['lemongrass-races-prune', '12345', '67890', '--yes']):
             races = {'12345': 'Le Mans 2026', '67890': 'Sebring 2025'}
             fake_client = self._make_influx_client(races=races)
-            with patch('lemongrass.races.InfluxDBClient', return_value=fake_client):
+            with patch('lemongrass._influx.connect', return_value=fake_client):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     _mod._handle_prune()
         delete_api = fake_client.delete_api.return_value
@@ -337,7 +337,7 @@ class TestHandleList:
             totals={},
             currents={},
         )
-        with patch('lemongrass.races.InfluxDBClient', return_value=client):
+        with patch('lemongrass._influx.connect', return_value=client):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         assert 'no laps' in capsys.readouterr().out
@@ -349,7 +349,7 @@ class TestHandleList:
             totals={'R1': 50},
             currents={'R1': 50},
         )
-        with patch('lemongrass.races.InfluxDBClient', return_value=client):
+        with patch('lemongrass._influx.connect', return_value=client):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         assert f'current (v{SCHEMA_VERSION})' in capsys.readouterr().out
@@ -360,7 +360,7 @@ class TestHandleList:
             totals={'R1': 50},
             currents={'R1': 20},
         )
-        with patch('lemongrass.races.InfluxDBClient', return_value=client):
+        with patch('lemongrass._influx.connect', return_value=client):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out
@@ -376,7 +376,7 @@ class TestHandleList:
             totals={'R1': 10, 'R2': 10},
             currents={'R1': 10, 'R2': 10},
         )
-        with patch('lemongrass.races.InfluxDBClient', return_value=client):
+        with patch('lemongrass._influx.connect', return_value=client):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out

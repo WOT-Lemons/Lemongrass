@@ -5,14 +5,17 @@ import base64
 import json
 import logging
 import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from time import sleep, time
 
-from influxdb_client import InfluxDBClient, Point
+from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+
+from lemongrass import _influx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('pisugar-monitor')
@@ -109,10 +112,11 @@ def write_points(write_api, points):
 
 def main():
     """Main loop: read PiSugar metrics and push to InfluxDB."""
-    influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
-    if not influx_token:
+    # Validate the influx token up front so we fail fast before the pisugar login
+    # below; _influx.connect() reads it again at construction time.
+    if not os.environ.get('INFLUX_TELEMETRY_TOKEN'):
         logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
-        return
+        sys.exit(1)
 
     pisugar_token = None
     username, password = read_credentials()
@@ -120,9 +124,7 @@ def main():
         pisugar_token = login(username, password)
         logger.info("Authenticated with pisugar-server")
 
-    with InfluxDBClient(
-        url='https://influxdb.focism.com', token=influx_token, org='focism'
-    ) as influx_client:
+    with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
         device_tags = {
