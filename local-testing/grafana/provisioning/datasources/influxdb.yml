@@ -1,5 +1,6 @@
 apiVersion: 1
 datasources:
+  # Default ad-hoc Flux datasource (kept for Explore; referenced by CONTRIBUTING).
   - name: InfluxDB
     type: influxdb
     access: proxy
@@ -9,5 +10,70 @@ datasources:
       version: Flux
       organization: lemongrass
       defaultBucket: laps
+    secureJsonData:
+      token: local-dev-token
+
+  # InfluxQL datasources (v1 DBRP) — back the dashboard panels.
+  - name: laps
+    uid: wotl-laps-ql
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: false
+    jsonData:
+      dbName: laps
+      httpHeaderName1: Authorization
+    secureJsonData:
+      httpHeaderValue1: Token local-dev-token
+
+  - name: races
+    uid: wotl-races-ql
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: false
+    jsonData:
+      dbName: races
+      httpHeaderName1: Authorization
+    secureJsonData:
+      httpHeaderValue1: Token local-dev-token
+
+  # Flux datasources — back the dashboard template variables.
+  - name: laps_flux
+    uid: wotl-laps-flux
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: false
+    jsonData:
+      version: Flux
+      organization: lemongrass
+      defaultBucket: laps
+    secureJsonData:
+      token: local-dev-token
+
+  - name: races_flux
+    uid: wotl-races-flux
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: false
+    jsonData:
+      version: Flux
+      organization: lemongrass
+      defaultBucket: races
+    secureJsonData:
+      token: local-dev-token
+
+  - name: race_sessions_flux
+    uid: wotl-race-sessions-flux
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: false
+    jsonData:
+      version: Flux
+      organization: lemongrass
+      defaultBucket: race_sessions
     secureJsonData:
       token: local-dev-token
