@@ -1,5 +1,27 @@
 # Changelog
 
+## [3.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v2.1.1...v3.0.0) (2026-06-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **influx:** competitor_name and car_info are now InfluxDB fields, not tags, on the lap and standings measurements. Historical data requires `lemongrass races backfill --upgrade-stored`; Grafana queries grouping/pivoting on these tags must be updated.
+
+### Features
+
+* **backfill:** allow --upgrade-stored and --force together ([#154](https://github.com/WOT-Lemons/Lemongrass/issues/154)) ([7cc6603](https://github.com/WOT-Lemons/Lemongrass/commit/7cc6603aedd210f47d682ecf2414626886cd9257))
+* **influx:** store competitor_name and car_info as fields to prevent series splits ([#153](https://github.com/WOT-Lemons/Lemongrass/issues/153)) ([9fcd424](https://github.com/WOT-Lemons/Lemongrass/commit/9fcd4244d064ed8af4b52b4e38e48f2655d317c7))
+* integrate race-monitor 0.6.0 (multi-token load balancing + streaming command logging) ([7ce5919](https://github.com/WOT-Lemons/Lemongrass/commit/7ce59194af5c8cff9accfeaadf7f463e073620d4))
+* **laps:** add fieldwide standings writes for live and historical races ([edc21d4](https://github.com/WOT-Lemons/Lemongrass/commit/edc21d4968078537b3b9e8df730b925a653e3c2e))
+* local InfluxDB test stack + graceful connection handling ([#155](https://github.com/WOT-Lemons/Lemongrass/issues/155)) ([ad3fd78](https://github.com/WOT-Lemons/Lemongrass/commit/ad3fd78fd8b3806a9bd22685e8164b3ff80f7477))
+* **local-testing:** provision Grafana datasources + dashboards ([#158](https://github.com/WOT-Lemons/Lemongrass/issues/158)) ([578b8c7](https://github.com/WOT-Lemons/Lemongrass/commit/578b8c79e49928de88e7ed39cee10555877220f2))
+
+
+### Bug Fixes
+
+* **laps:** skip laps with corrupted lap numbers instead of crashing ([d063219](https://github.com/WOT-Lemons/Lemongrass/commit/d0632191a83724920a5a351de859c02fc80340f4))
+* **standings:** rank historical class positions by final position ([#159](https://github.com/WOT-Lemons/Lemongrass/issues/159)) ([6c890a0](https://github.com/WOT-Lemons/Lemongrass/commit/6c890a0c62a08dfe215251c6ec2061100d5ced87))
+
 ## [2.1.1](https://github.com/WOT-Lemons/Lemongrass/compare/v2.1.0...v2.1.1) (2026-06-24)
 
 
