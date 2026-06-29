@@ -1,0 +1,356 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "bolt",
+      "includeVars": true,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Set time to race",
+      "tooltip": "Set the time range to the selected race's 3-day window",
+      "type": "link",
+      "url": "/d/wotl-standings/standings?from=${race_from}&to=${race_to}"
+    }
+  ],
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-flux"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "position"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Position"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "car_number"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Car #"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "competitor_name"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Competitor"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "car_info"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Car"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "class"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Class"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "class_position"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Class Pos"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lap_count"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Laps"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "best_lap_time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Best Lap"
+              },
+              {
+                "id": "unit",
+                "value": "clockms"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "percentage",
+                  "steps": [
+                    {
+                      "color": "transparent",
+                      "value": null
+                    },
+                    {
+                      "color": "purple",
+                      "value": 0
+                    },
+                    {
+                      "color": "transparent",
+                      "value": 0.0001
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background-solid"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_lap_time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last Lap"
+              },
+              {
+                "id": "unit",
+                "value": "clockms"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 20,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Position"
+          }
+        ]
+      },
+      "pluginVersion": "12.4.3",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "position": 0,
+              "car_number": 1,
+              "competitor_name": 2,
+              "car_info": 3,
+              "class": 4,
+              "class_position": 5,
+              "lap_count": 6,
+              "best_lap_time": 7,
+              "last_lap_time": 8
+            },
+            "renameByName": {}
+          }
+        }
+      ],
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-flux"
+          },
+          "query": "from(bucket: \"laps\")\n  |> range(start: 0)\n  |> filter(fn: (r) => r._measurement == \"standings\" and r.race_id == \"${raceid}\" and (r._field == \"position\" or r._field == \"class_position\" or r._field == \"lap_count\" or r._field == \"best_lap_time\" or r._field == \"last_lap_time\"))\n  |> filter(fn: (r) => exists r.class)\n  |> group(columns: [\"car_number\", \"competitor_name\", \"car_info\", \"class\", \"_field\"])\n  |> last()\n  |> pivot(rowKey: [\"car_number\", \"competitor_name\", \"car_info\", \"class\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => r.class =~ /^(${class:regex})$/)\n  |> keep(columns: [\"car_number\", \"competitor_name\", \"car_info\", \"class\", \"position\", \"class_position\", \"lap_count\", \"best_lap_time\", \"last_lap_time\"])\n  |> group()\n  |> sort(columns: [\"position\"], desc: false)",
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "Standings",
+      "transparent": true,
+      "type": "table"
+    }
+  ],
+  "preload": false,
+  "refresh": "5s",
+  "schemaVersion": 42,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-races-flux"
+        },
+        "definition": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: if \"${__timezone}\" == \"utc\" then \"UTC\" else \"${__timezone}\")\npad = (n) => if n < 10 then \"0\" + string(v: n) else string(v: n)\nfrom(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r._field == \"end_time_epoc\") |> map(fn: (r) => ({_time: r._time, _value: r.race_name + \" (\" + pad(n: date.month(t: r._time)) + \"/\" + pad(n: date.monthDay(t: r._time)) + \"/\" + pad(n: date.year(t: r._time) % 100) + \");\" + r.race_id})) |> group() |> sort(columns: [\"_time\"], desc: true) |> keep(columns: [\"_value\"])",
+        "label": "Race",
+        "name": "raceid",
+        "options": [],
+        "query": {
+          "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: if \"${__timezone}\" == \"utc\" then \"UTC\" else \"${__timezone}\")\npad = (n) => if n < 10 then \"0\" + string(v: n) else string(v: n)\nfrom(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r._field == \"end_time_epoc\") |> map(fn: (r) => ({_time: r._time, _value: r.race_name + \" (\" + pad(n: date.month(t: r._time)) + \"/\" + pad(n: date.monthDay(t: r._time)) + \"/\" + pad(n: date.year(t: r._time) % 100) + \");\" + r.race_id})) |> group() |> sort(columns: [\"_time\"], desc: true) |> keep(columns: [\"_value\"])"
+        },
+        "regex": "/(?<text>.+);(?<value>\\d+)$/",
+        "refresh": 2,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "name": "race_from",
+        "type": "query",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-races-flux"
+        },
+        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 - 259200000)})) |> keep(columns: [\"_value\"])",
+        "query": {
+          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 - 259200000)})) |> keep(columns: [\"_value\"])"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "race_to",
+        "type": "query",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-races-flux"
+        },
+        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])",
+        "query": {
+          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-laps-flux"
+        },
+        "definition": "from(bucket: \"laps\")\n  |> range(start: 0)\n  |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and r._field == \"lap_no\")\n  |> filter(fn: (r) => exists r.class)\n  |> group(columns: [\"class\"])\n  |> last()\n  |> keep(columns: [\"class\"])\n  |> rename(columns: {class: \"_value\"})\n  |> group()\n  |> sort(columns: [\"_value\"])",
+        "allValue": ".*",
+        "includeAll": true,
+        "label": "Class",
+        "multi": true,
+        "name": "class",
+        "options": [],
+        "query": {
+          "query": "from(bucket: \"laps\")\n  |> range(start: 0)\n  |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and r._field == \"lap_no\")\n  |> filter(fn: (r) => exists r.class)\n  |> group(columns: [\"class\"])\n  |> last()\n  |> keep(columns: [\"class\"])\n  |> rename(columns: {class: \"_value\"})\n  |> group()\n  |> sort(columns: [\"_value\"])"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Standings",
+  "uid": "wotl-standings",
+  "version": 4,
+  "weekStart": ""
+}

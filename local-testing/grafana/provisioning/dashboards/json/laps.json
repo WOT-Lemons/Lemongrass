@@ -1,0 +1,1338 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "bolt",
+      "includeVars": true,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Set time to race",
+      "tooltip": "Set the time range to the selected race's 3-day window",
+      "type": "link",
+      "url": "/d/SI7eTlIMk/laps?from=${race_from}&to=${race_to}"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "rgb(255, 255, 255)",
+                "value": null
+              }
+            ]
+          },
+          "unit": "clockms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 5,
+        "x": 0,
+        "y": 0
+      },
+      "hideTimeOverride": true,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {},
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "groupBy": [],
+          "measurement": "lap",
+          "orderByTime": "ASC",
+          "policy": "default",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "select": [
+            [
+              {
+                "params": [
+                  "lap_time"
+                ],
+                "type": "field"
+              }
+            ]
+          ],
+          "tags": [
+            {
+              "key": "race_id",
+              "operator": "=",
+              "value": "$raceid"
+            },
+            {
+              "condition": "AND",
+              "key": "car_number",
+              "operator": "=",
+              "value": "$carno"
+            }
+          ]
+        }
+      ],
+      "timeFrom": "1d",
+      "timeShift": "1d",
+      "title": "Last Lap Time",
+      "transparent": true,
+      "type": "stat",
+      "id": 9
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "rgb(255, 255, 255)",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "clockms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 5,
+        "x": 5,
+        "y": 0
+      },
+      "hideTimeOverride": true,
+      "id": 16,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "min"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {},
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeFrom": "2d",
+      "timeShift": "1d",
+      "title": "Best Lap Time",
+      "transparent": true,
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "rgb(255, 255, 255)",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 10,
+        "y": 0
+      },
+      "hideTimeOverride": true,
+      "id": 13,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {},
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT \"position\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeFrom": "1d",
+      "timeShift": "1d",
+      "title": "Overall Position",
+      "transparent": true,
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "rgb(255, 255, 255)",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 13,
+        "y": 0
+      },
+      "hideTimeOverride": true,
+      "id": 20,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {},
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT LAST(\"class_position\") FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeFrom": "1d",
+      "timeShift": "1d",
+      "title": "Class Position",
+      "transparent": true,
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "rgb(255, 255, 255)",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 2,
+        "x": 16,
+        "y": 0
+      },
+      "hideTimeOverride": true,
+      "id": 19,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "/class$/",
+          "values": false
+        },
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/ GROUP BY \"class\"::tag",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeFrom": "1d",
+      "timeShift": "1d",
+      "title": "Class",
+      "transparent": true,
+      "type": "stat",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "rgb(255, 255, 255)",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 18,
+        "y": 0
+      },
+      "hideTimeOverride": true,
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {},
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeFrom": "1d",
+      "timeShift": "1d",
+      "title": "Laps",
+      "transparent": true,
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 100,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "links": [],
+          "mappings": [],
+          "max": 120000,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 88200
+              }
+            ]
+          },
+          "unit": "clockms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 13,
+        "x": 0,
+        "y": 3
+      },
+      "hideTimeOverride": true,
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull",
+            "max",
+            "min"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "alias": "Lap time",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeFrom": "1d",
+      "timeShift": "1d",
+      "title": "Lap Times",
+      "transparent": true,
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "links": [],
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 11,
+        "x": 13,
+        "y": 3
+      },
+      "hideTimeOverride": true,
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "min"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "alias": "Overall",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT \"position\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "refId": "A",
+          "resultFormat": "time_series"
+        },
+        {
+          "alias": "Class",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT \"class_position\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "refId": "B",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeFrom": "1d",
+      "timeShift": "1d",
+      "title": "Position",
+      "transparent": true,
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "rgb(255, 255, 255)",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "clockms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 0,
+        "y": 15
+      },
+      "id": 18,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "text": {},
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"flag_status\" = 'Green' AND \"session_id\" =~ /^(${session:regex})$/",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeFrom": "1d",
+      "timeShift": "1d",
+      "title": "Average Lap Time (green flag only)",
+      "transparent": true,
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-laps-ql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "fillOpacity": 70,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineWidth": 0,
+            "spanNulls": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "Finish": {
+                  "color": "transparent",
+                  "index": 3
+                },
+                "Green": {
+                  "color": "semi-dark-green",
+                  "index": 0
+                },
+                "Red": {
+                  "color": "red",
+                  "index": 2
+                },
+                "Yellow": {
+                  "color": "yellow",
+                  "index": 1
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "rgb(255, 255, 255)",
+                "value": 0
+              },
+              {
+                "color": "#EAB839",
+                "value": ""
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 18,
+        "x": 6,
+        "y": 15
+      },
+      "hideTimeOverride": false,
+      "id": 11,
+      "options": {
+        "alignValue": "center",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "mergeValues": true,
+        "rowHeight": 0.9,
+        "showValue": "auto",
+        "tooltip": {
+          "hideZeros": false,
+          "maxHeight": 600,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "alias": " ",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-laps-ql"
+          },
+          "orderByTime": "ASC",
+          "policy": "default",
+          "rawQuery": true,
+          "query": "SELECT \"flag_status\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"session_id\" =~ /^(${session:regex})$/",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeFrom": "1d",
+      "timeShift": "1d",
+      "title": "Flag",
+      "transparent": true,
+      "type": "state-timeline"
+    },
+    {
+      "id": 900,
+      "title": "Race Context",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "panels": []
+    },
+    {
+      "id": 901,
+      "title": "Race Name",
+      "type": "stat",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-races-ql"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 0,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "name",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-races-ql"
+          },
+          "measurement": "race",
+          "policy": "default",
+          "orderByTime": "ASC",
+          "resultFormat": "time_series",
+          "refId": "A",
+          "select": [
+            [
+              {
+                "params": [
+                  "end_time_epoc"
+                ],
+                "type": "field"
+              },
+              {
+                "params": [],
+                "type": "last"
+              }
+            ]
+          ],
+          "tags": [
+            {
+              "key": "race_id",
+              "operator": "=",
+              "value": "$raceid"
+            }
+          ],
+          "groupBy": [
+            {
+              "params": [
+                "race_name::tag"
+              ],
+              "type": "tag"
+            }
+          ],
+          "alias": "$tag_race_name"
+        }
+      ]
+    },
+    {
+      "id": 902,
+      "title": "Track",
+      "type": "stat",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-races-ql"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 6,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "name",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-races-ql"
+          },
+          "measurement": "race",
+          "policy": "default",
+          "orderByTime": "ASC",
+          "resultFormat": "time_series",
+          "refId": "A",
+          "select": [
+            [
+              {
+                "params": [
+                  "end_time_epoc"
+                ],
+                "type": "field"
+              },
+              {
+                "params": [],
+                "type": "last"
+              }
+            ]
+          ],
+          "tags": [
+            {
+              "key": "race_id",
+              "operator": "=",
+              "value": "$raceid"
+            }
+          ],
+          "groupBy": [
+            {
+              "params": [
+                "track_name::tag"
+              ],
+              "type": "tag"
+            }
+          ],
+          "alias": "$tag_track_name"
+        }
+      ]
+    },
+    {
+      "id": 903,
+      "title": "Series",
+      "type": "stat",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-races-ql"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 12,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "name",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-races-ql"
+          },
+          "measurement": "race",
+          "policy": "default",
+          "orderByTime": "ASC",
+          "resultFormat": "time_series",
+          "refId": "A",
+          "select": [
+            [
+              {
+                "params": [
+                  "end_time_epoc"
+                ],
+                "type": "field"
+              },
+              {
+                "params": [],
+                "type": "last"
+              }
+            ]
+          ],
+          "tags": [
+            {
+              "key": "race_id",
+              "operator": "=",
+              "value": "$raceid"
+            }
+          ],
+          "groupBy": [
+            {
+              "params": [
+                "series_name::tag"
+              ],
+              "type": "tag"
+            }
+          ],
+          "alias": "$tag_series_name"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-race-sessions-flux"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "session"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Session"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 18,
+        "y": 20
+      },
+      "id": 904,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": false
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-race-sessions-flux"
+          },
+          "query": "import \"date\"\nfrom(bucket: \"race_sessions\")\n  |> range(start: 0)\n  |> filter(fn: (r) => r._measurement == \"session\" and r.race_id == \"${raceid}\" and r._field == \"session_name\")\n  |> filter(fn: (r) => r.session_id =~ /^(${session:regex})$/)\n  |> last()\n  |> map(fn: (r) => ({session: r._value + \" (\" + string(v: date.month(t: r._time)) + \"/\" + string(v: date.monthDay(t: r._time)) + \"/\" + string(v: date.year(t: r._time) % 100) + \")\"}))\n  |> group()\n  |> keep(columns: [\"session\"])",
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "Session",
+      "transparent": true,
+      "type": "table"
+    }
+  ],
+  "preload": false,
+  "refresh": "5s",
+  "schemaVersion": 42,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "name": "raceid",
+        "label": "Race",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-races-flux"
+        },
+        "definition": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: if \"${__timezone}\" == \"utc\" then \"UTC\" else \"${__timezone}\")\npad = (n) => if n < 10 then \"0\" + string(v: n) else string(v: n)\nfrom(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r._field == \"end_time_epoc\") |> map(fn: (r) => ({_time: r._time, _value: r.race_name + \" (\" + pad(n: date.month(t: r._time)) + \"/\" + pad(n: date.monthDay(t: r._time)) + \"/\" + pad(n: date.year(t: r._time) % 100) + \");\" + r.race_id})) |> group() |> sort(columns: [\"_time\"], desc: true) |> keep(columns: [\"_value\"])",
+        "query": {
+          "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: if \"${__timezone}\" == \"utc\" then \"UTC\" else \"${__timezone}\")\npad = (n) => if n < 10 then \"0\" + string(v: n) else string(v: n)\nfrom(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r._field == \"end_time_epoc\") |> map(fn: (r) => ({_time: r._time, _value: r.race_name + \" (\" + pad(n: date.month(t: r._time)) + \"/\" + pad(n: date.monthDay(t: r._time)) + \"/\" + pad(n: date.year(t: r._time) % 100) + \");\" + r.race_id})) |> group() |> sort(columns: [\"_time\"], desc: true) |> keep(columns: [\"_value\"])"
+        },
+        "regex": "/(?<text>.+);(?<value>\\d+)$/",
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "race_from",
+        "type": "query",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-races-flux"
+        },
+        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 - 259200000)})) |> keep(columns: [\"_value\"])",
+        "query": {
+          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 - 259200000)})) |> keep(columns: [\"_value\"])"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "race_to",
+        "type": "query",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-races-flux"
+        },
+        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])",
+        "query": {
+          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "current": {
+          "text": "252",
+          "value": "252"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-laps-flux"
+        },
+        "definition": "from(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and r._field == \"lap_no\") |> group(columns: [\"car_number\"]) |> last() |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])",
+        "label": "Competitor",
+        "name": "carno",
+        "options": [],
+        "query": {
+          "query": "from(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and r._field == \"lap_no\") |> group(columns: [\"car_number\"]) |> last() |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])"
+        },
+        "regex": "/(?<text>.+);(?<value>.+)/",
+        "refresh": 2,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-race-sessions-flux"
+        },
+        "definition": "import \"date\"\nfrom(bucket: \"race_sessions\")\n  |> range(start: 0)\n  |> filter(fn: (r) => r._measurement == \"session\" and r.race_id == \"${raceid}\" and r._field == \"session_name\")\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({_value: r._value + \" (\" + string(v: date.month(t: r._time)) + \"/\" + string(v: date.monthDay(t: r._time)) + \"/\" + string(v: date.year(t: r._time) % 100) + \");\" + r.session_id}))\n  |> keep(columns: [\"_value\"])",
+        "allValue": ".*",
+        "includeAll": true,
+        "label": "Session",
+        "multi": true,
+        "name": "session",
+        "options": [],
+        "query": {
+          "query": "import \"date\"\nfrom(bucket: \"race_sessions\")\n  |> range(start: 0)\n  |> filter(fn: (r) => r._measurement == \"session\" and r.race_id == \"${raceid}\" and r._field == \"session_name\")\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({_value: r._value + \" (\" + string(v: date.month(t: r._time)) + \"/\" + string(v: date.monthDay(t: r._time)) + \"/\" + string(v: date.year(t: r._time) % 100) + \");\" + r.session_id}))\n  |> keep(columns: [\"_value\"])"
+        },
+        "regex": "/(?<text>.+);(?<value>.+)/",
+        "refresh": 2,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Laps",
+  "uid": "SI7eTlIMk",
+  "version": 23,
+  "weekStart": ""
+}
