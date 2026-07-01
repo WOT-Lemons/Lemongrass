@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.2](https://github.com/WOT-Lemons/Lemongrass/compare/v3.0.1...v3.0.2) (2026-07-01)
+
+
+### Bug Fixes
+
+* **telem:** write fuel status under -Fuel-System-Status not b'0103' ([#165](https://github.com/WOT-Lemons/Lemongrass/issues/165)) ([87131a5](https://github.com/WOT-Lemons/Lemongrass/commit/87131a5790c8c0b6e4497f7449f37f2050cce710))
+
 ## [3.0.1](https://github.com/WOT-Lemons/Lemongrass/compare/v3.0.0...v3.0.1) (2026-06-29)
 
 
