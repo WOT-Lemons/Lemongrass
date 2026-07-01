@@ -2430,7 +2430,7 @@
               "type": "fill"
             }
           ],
-          "measurement": "b'0103'",
+          "measurement": "-Fuel-System-Status",
           "orderByTime": "ASC",
           "policy": "autogen",
           "refId": "A",
@@ -3380,7 +3380,7 @@
               "type": "fill"
             }
           ],
-          "measurement": "0103",
+          "measurement": "-Fuel-System-Status",
           "orderByTime": "ASC",
           "policy": "default",
           "refId": "A",
