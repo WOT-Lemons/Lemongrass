@@ -84,24 +84,39 @@ class TestNewFuelStatus:
 
     def test_appends_known_status(self):
         r = MagicMock()
-        r.command = _Cmd("FUEL_STATUS")
+        r.command = _Cmd("b'0103': Fuel System Status")
         r.value = ["Closed loop, using oxygen sensor feedback to determine fuel mix"]
         _mod.new_fuel_status(r)
         assert len(_mod.pending_points) == 1
 
     def test_skips_falsy_first_element(self):
         r = MagicMock()
-        r.command = _Cmd("FUEL_STATUS")
+        r.command = _Cmd("b'0103': Fuel System Status")
         r.value = [None]
         _mod.new_fuel_status(r)
         assert len(_mod.pending_points) == 0
 
     def test_appends_for_unknown_status(self):
         r = MagicMock()
-        r.command = _Cmd("FUEL_STATUS")
+        r.command = _Cmd("b'0103': Fuel System Status")
         r.value = ["Unknown mode that maps to nothing"]
         _mod.new_fuel_status(r)
         assert len(_mod.pending_points) == 1
+
+    def test_measurement_name_uses_description(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0103': Fuel System Status")
+        r.value = ["Closed loop, using oxygen sensor feedback to determine fuel mix"]
+        captured_name = []
+        original_point = _mod.Point
+
+        def capture_point(name):
+            captured_name.append(name)
+            return original_point(name)
+
+        with patch.object(_mod, "Point", side_effect=capture_point):
+            _mod.new_fuel_status(r)
+        assert captured_name[0] == "-Fuel-System-Status"
 
 
 class TestFlushPoints:
