@@ -103,6 +103,13 @@ class TestNewFuelStatus:
         _mod.new_fuel_status(r)
         assert len(_mod.pending_points) == 1
 
+    def test_returns_early_on_malformed_command(self):
+        r = MagicMock()
+        r.command = _Cmd("no colon here")
+        r.value = ["Closed loop, using oxygen sensor feedback to determine fuel mix"]
+        _mod.new_fuel_status(r)
+        assert len(_mod.pending_points) == 0
+
     def test_measurement_name_uses_description(self):
         r = MagicMock()
         r.command = _Cmd("b'0103': Fuel System Status")
