@@ -62,8 +62,12 @@ def new_fuel_status(r):
         return
 
     ts = datetime.now(timezone.utc)
-    measurement = str(r.command).split(":", maxsplit=1)[0]
-    measurement = measurement.replace(" ", "-")
+    try:
+        measurement = str(r.command).split(":")[1]
+        measurement = measurement.replace(" ", "-")
+    except IndexError:
+        logger.debug("Caught IndexError in new_fuel_status")
+        return
 
     fuel_status = next((v for k, v in FUEL_STATUS_MAP.items() if k in r.value), 255)
     if fuel_status == 3:
