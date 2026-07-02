@@ -72,7 +72,7 @@ def main():
     # any ApiException/HTTPError is an InfluxDB failure. Report it cleanly (no
     # traceback), distinguishing "unreachable" from a reached-but-rejected request.
     try:
-        importlib.import_module(_COMMANDS[cmd]).main()
+        result = importlib.import_module(_COMMANDS[cmd]).main()
     except (ApiException, HTTPError) as exc:
         if _influx_unreachable(exc):
             print(f"Error: cannot reach InfluxDB at {_influx.INFLUX_URL}", file=sys.stderr)
@@ -80,3 +80,4 @@ def main():
             print(f"Error: InfluxDB request failed at {_influx.INFLUX_URL}", file=sys.stderr)
         print(f"  {_format_influx_error(exc)}", file=sys.stderr)
         sys.exit(1)
+    sys.exit(result)
