@@ -278,6 +278,76 @@ class TestNewStatus:
         ]
 
 
+class TestFetchAndStoreDtcs:
+    def setup_method(self):
+        _reset()
+        _mod._connection = None
+
+    def test_no_connection_set_does_nothing(self):
+        _mod._fetch_and_store_dtcs()
+        assert len(_mod.pending_points) == 0
+
+    def test_null_response_does_nothing(self):
+        _mod._connection = MagicMock()
+        r = MagicMock()
+        r.value = None
+        with patch.object(_mod.obd.OBD, "query", return_value=r) as mock_query:
+            _mod._fetch_and_store_dtcs()
+        mock_query.assert_called_once_with(
+            _mod._connection, _mod.obd.commands.GET_DTC, force=True
+        )
+        assert len(_mod.pending_points) == 0
+
+    def test_writes_joined_codes(self):
+        _mod._connection = MagicMock()
+        r = MagicMock()
+        r.value = [
+            ("P0104", "Mass or Volume Air Flow Circuit Intermittent"),
+            ("B0003", ""),
+        ]
+        with patch.object(_mod.obd.OBD, "query", return_value=r):
+            _mod._fetch_and_store_dtcs()
+        assert len(_mod.pending_points) == 1
+
+
+class TestNewStatusDtcTrigger:
+    def setup_method(self):
+        _reset()
+        _mod._last_dtc_count = 0
+        _mod._connection = MagicMock()
+
+    def test_triggers_fetch_on_status_dtc_count_increase(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0101': Status since DTCs cleared", name="STATUS")
+        r.value.MIL = True
+        r.value.DTC_count = 1
+        with patch.object(_mod, "_fetch_and_store_dtcs") as mock_fetch:
+            _mod.new_status(r)
+        mock_fetch.assert_called_once()
+        assert _mod._last_dtc_count == 1
+
+    def test_no_trigger_when_count_unchanged(self):
+        _mod._last_dtc_count = 1
+        r = MagicMock()
+        r.command = _Cmd("b'0101': Status since DTCs cleared", name="STATUS")
+        r.value.MIL = True
+        r.value.DTC_count = 1
+        with patch.object(_mod, "_fetch_and_store_dtcs") as mock_fetch:
+            _mod.new_status(r)
+        mock_fetch.assert_not_called()
+
+    def test_no_trigger_for_status_drive_cycle(self):
+        r = MagicMock()
+        r.command = _Cmd(
+            "b'0141': Monitor status this drive cycle", name="STATUS_DRIVE_CYCLE"
+        )
+        r.value.MIL = True
+        r.value.DTC_count = 5
+        with patch.object(_mod, "_fetch_and_store_dtcs") as mock_fetch:
+            _mod.new_status(r)
+        mock_fetch.assert_not_called()
+
+
 class TestFlushPoints:
     def setup_method(self):
         _reset()

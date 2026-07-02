@@ -36,6 +36,9 @@ AIR_STATUS_MAP = {
 pending_points = []
 pending_lock = threading.Lock()
 
+_connection = None  # set by main(); lets new_status trigger on-demand DTC lookups
+_last_dtc_count = 0  # only ever written from the Async callback thread; no lock needed
+
 
 def new_value(r):
     """Queue new measurement for batch write to InfluxDB."""
@@ -134,8 +137,32 @@ def _query_fuel_type_once(connection):
         )
 
 
+def _fetch_and_store_dtcs():
+    """Force a live GET_DTC read and queue the active codes as one point."""
+    # Async.query() only returns cached watched-command values, and GET_DTC is
+    # deliberately never watched (see _route_command), so the blocking
+    # OBD.query() is called directly -- the same technique Async's own
+    # background thread uses internally (asynchronous.py's run() method).
+    # Safe here because this only ever runs from inside an Async callback,
+    # which already executes on that same background thread.
+    if _connection is None:
+        return
+
+    r = obd.OBD.query(_connection, obd.commands.GET_DTC, force=True)
+    if r.value is None:
+        logger.debug("Caught null value in _fetch_and_store_dtcs")
+        return
+
+    codes = ",".join(code for code, _ in r.value)
+    ts = datetime.now(timezone.utc)
+    with pending_lock:
+        pending_points.append(Point("-Get-DTCs").field("value", codes).time(ts))
+
+
 def new_status(r):
     """Queue MIL and DTC count for batch write to InfluxDB."""
+    global _last_dtc_count
+
     if r.value is None:
         logger.debug("Caught null value in new_status")
         return
@@ -153,10 +180,18 @@ def new_status(r):
             Point(f"{measurement}-MIL").field("value", int(r.value.MIL)).time(ts)
         )
         pending_points.append(
-            Point(f"{measurement}-DTC-Count").field(
-                "value", r.value.DTC_count
-            ).time(ts)
+            Point(f"{measurement}-DTC-Count").field("value", r.value.DTC_count).time(ts)
         )
+
+    # Only the primary STATUS command drives the on-demand DTC lookup;
+    # STATUS_DRIVE_CYCLE just records its own MIL/count.
+    if r.command.name != "STATUS":
+        return
+
+    dtc_count = r.value.DTC_count
+    if dtc_count > _last_dtc_count:
+        _fetch_and_store_dtcs()
+    _last_dtc_count = dtc_count
 
 
 def connect():
