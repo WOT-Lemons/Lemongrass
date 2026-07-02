@@ -17,7 +17,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
 
 EXCLUDED_PATTERNS = ["MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
-SKIP_NAMES = {"FREEZE_DTC", "GET_DTC", "CLEAR_DTC", "FUEL_TYPE"}
+SKIP_NAMES = {"FREEZE_DTC", "GET_DTC", "GET_CURRENT_DTC", "CLEAR_DTC", "FUEL_TYPE"}
+MAX_DTC_FETCH_FAILURES = 3
 STATUS_COMMANDS = {"STATUS", "STATUS_DRIVE_CYCLE"}
 
 FUEL_STATUS_MAP = {
@@ -39,7 +40,9 @@ pending_points = []
 pending_lock = threading.Lock()
 
 _connection = None  # set by main(); lets new_status trigger on-demand DTC lookups
-_last_dtc_count = 0  # only ever written from the Async callback thread; no lock needed
+# Both only ever written from the Async callback thread; no lock needed.
+_last_dtc_count = 0
+_dtc_fetch_failures = 0
 
 
 def _measurement_name(r):
@@ -163,10 +166,12 @@ def _fetch_and_store_dtcs():
     except Exception:
         logger.exception("GET_DTC query failed; skipping this fetch")
         return False
-    if not r.value:
-        logger.debug("Caught falsy value in _fetch_and_store_dtcs")
+    if r.value is None:
+        logger.debug("Caught null value in _fetch_and_store_dtcs")
         return False
 
+    # An empty list is a successful mode-03 answer ("no stored codes"), not a
+    # failure -- store it so a STATUS/GET_DTC disagreement doesn't retry forever.
     codes = ",".join(code for code, _ in r.value)
     ts = datetime.now(timezone.utc)
     with pending_lock:
@@ -180,6 +185,10 @@ def _route_command(command):
         return None
     if command.name in SKIP_NAMES:
         return None
+    # python-obd marks a DTC_-prefixed mode-2 freeze-frame twin as supported for
+    # every supported mode-1 PID; watching them would double per-cycle load.
+    if command.name.startswith("DTC_"):
+        return None
     if command.name in STATUS_COMMANDS:
         return new_status
     if command.name == "AIR_STATUS":
@@ -191,7 +200,7 @@ def _route_command(command):
 
 def new_status(r):
     """Queue MIL and DTC count for batch write to InfluxDB."""
-    global _last_dtc_count
+    global _last_dtc_count, _dtc_fetch_failures
 
     if r.value is None:
         logger.debug("Caught null value in new_status")
@@ -220,6 +229,17 @@ def new_status(r):
     if dtc_count > _last_dtc_count:
         if _fetch_and_store_dtcs():
             _last_dtc_count = dtc_count
+            _dtc_fetch_failures = 0
+        else:
+            # Each forced query costs a blocking serial round-trip on the Async
+            # thread; give up after a few misses rather than retry every STATUS.
+            _dtc_fetch_failures += 1
+            if _dtc_fetch_failures >= MAX_DTC_FETCH_FAILURES:
+                logger.warning(
+                    "Giving up on DTC fetch after %d failures", _dtc_fetch_failures
+                )
+                _last_dtc_count = dtc_count
+                _dtc_fetch_failures = 0
     else:
         _last_dtc_count = dtc_count
 

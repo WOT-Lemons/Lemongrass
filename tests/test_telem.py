@@ -1,3 +1,5 @@
+import importlib
+import sys
 from unittest.mock import MagicMock, patch
 
 import lemongrass.telem as _mod
@@ -15,6 +17,7 @@ class _Cmd:
 def _reset():
     _mod.pending_points.clear()
     _mod._last_dtc_count = 0
+    _mod._dtc_fetch_failures = 0
     _mod._connection = None
 
 
@@ -306,14 +309,17 @@ class TestFetchAndStoreDtcs:
         assert result is False
         assert len(_mod.pending_points) == 0
 
-    def test_empty_list_response_does_nothing(self):
+    def test_empty_list_response_queues_empty_snapshot(self):
+        # [] is a successful mode-03 answer ("no stored codes"), not a failure;
+        # treating it as failure would retry the forced query on every STATUS.
         _mod._connection = MagicMock()
         r = MagicMock()
         r.value = []
         with patch.object(_mod.obd.OBD, "query", return_value=r):
             result = _mod._fetch_and_store_dtcs()
-        assert result is False
-        assert len(_mod.pending_points) == 0
+        assert result is True
+        assert len(_mod.pending_points) == 1
+        assert _mod.pending_points[0]._fields == {"value": ""}
 
     def test_writes_joined_codes(self):
         _mod._connection = MagicMock()
@@ -362,6 +368,29 @@ class TestNewStatusDtcTrigger:
         with patch.object(_mod, "_fetch_and_store_dtcs") as mock_fetch:
             _mod.new_status(r)
         mock_fetch.assert_not_called()
+
+    def test_gives_up_after_max_consecutive_fetch_failures(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0101': Status since DTCs cleared", name="STATUS")
+        r.value.MIL = True
+        r.value.DTC_count = 1
+        with patch.object(_mod, "_fetch_and_store_dtcs", return_value=False) as mock_fetch:
+            for _ in range(3):
+                _mod.new_status(r)
+            assert _mod._last_dtc_count == 1  # gave up; stop hammering the adapter
+            _mod.new_status(r)
+        assert mock_fetch.call_count == 3
+
+    def test_failure_count_resets_on_successful_fetch(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0101': Status since DTCs cleared", name="STATUS")
+        r.value.MIL = True
+        r.value.DTC_count = 1
+        with patch.object(_mod, "_fetch_and_store_dtcs", side_effect=[False, False, True]):
+            for _ in range(3):
+                _mod.new_status(r)
+        assert _mod._last_dtc_count == 1
+        assert _mod._dtc_fetch_failures == 0
 
     def test_no_trigger_for_status_drive_cycle(self):
         r = MagicMock()
@@ -438,3 +467,34 @@ class TestRouteCommand:
 
     def test_routes_generic_numeric_to_new_value(self):
         assert _mod._route_command(_Cmd("RPM")) is _mod.new_value
+
+    def test_excludes_mode2_freeze_frame_twins(self):
+        # python-obd adds a DTC_-prefixed mode-2 twin for every supported
+        # mode-1 PID; watching them doubles per-cycle adapter load.
+        for name in ["DTC_RPM", "DTC_FUEL_STATUS", "DTC_STATUS", "DTC_COOLANT_TEMP"]:
+            assert _mod._route_command(_Cmd(name)) is None
+
+    def test_excludes_get_current_dtc(self):
+        assert _mod._route_command(_Cmd("GET_CURRENT_DTC")) is None
+
+    def test_no_real_dtc_command_is_watched(self):
+        # Guard against the real library inventory, not just names we expect:
+        # no mode-2 freeze-frame twin and no mode-03/07 DTC command may route
+        # to a callback. conftest mocks obd suite-wide, so temporarily import
+        # the real module (same pop/restore idiom conftest uses for race_monitor).
+        mock_obd = sys.modules.pop("obd")
+        try:
+            real_obd = importlib.import_module("obd")
+        finally:
+            sys.modules["obd"] = mock_obd
+
+        dtc_commands = {"GET_DTC", "GET_CURRENT_DTC", "CLEAR_DTC", "FREEZE_DTC"}
+        checked = 0
+        for mode in real_obd.commands.modes:
+            for command in mode:
+                if command is None:
+                    continue
+                if command.name.startswith("DTC_") or command.name in dtc_commands:
+                    assert _mod._route_command(command) is None, command.name
+                    checked += 1
+        assert checked > 90  # the mode-2 twins alone number ~96; 0 means vacuous
