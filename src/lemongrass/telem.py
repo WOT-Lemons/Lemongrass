@@ -158,7 +158,11 @@ def _fetch_and_store_dtcs():
     if _connection is None:
         return False
 
-    r = obd.OBD.query(_connection, obd.commands.GET_DTC, force=True)
+    try:
+        r = obd.OBD.query(_connection, obd.commands.GET_DTC, force=True)
+    except Exception:
+        logger.exception("GET_DTC query failed; skipping this fetch")
+        return False
     if r.value is None:
         logger.debug("Caught null value in _fetch_and_store_dtcs")
         return False
