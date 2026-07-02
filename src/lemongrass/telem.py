@@ -120,7 +120,11 @@ def _query_fuel_type_once(connection):
 
     # Async.query() only returns cached watched-command values; FUEL_TYPE is
     # deliberately never watched, so the blocking OBD.query() is called directly.
-    r = obd.OBD.query(connection, obd.commands.FUEL_TYPE, force=True)
+    try:
+        r = obd.OBD.query(connection, obd.commands.FUEL_TYPE, force=True)
+    except Exception:
+        logger.exception("Fuel-type query failed; continuing without it")
+        return
     if not r.value:
         logger.debug("Caught falsy value in _query_fuel_type_once")
         return
@@ -140,7 +144,11 @@ def _query_fuel_type_once(connection):
 
 
 def _fetch_and_store_dtcs():
-    """Force a live GET_DTC read and queue the active codes as one point."""
+    """Force a live GET_DTC read and queue the active codes as one point.
+
+    Returns True if a snapshot was queued, False otherwise, so callers know
+    whether it's safe to advance their own notion of the last-seen DTC count.
+    """
     # Async.query() only returns cached watched-command values, and GET_DTC is
     # deliberately never watched (see _route_command), so the blocking
     # OBD.query() is called directly -- the same technique Async's own
@@ -148,17 +156,18 @@ def _fetch_and_store_dtcs():
     # Safe here because this only ever runs from inside an Async callback,
     # which already executes on that same background thread.
     if _connection is None:
-        return
+        return False
 
     r = obd.OBD.query(_connection, obd.commands.GET_DTC, force=True)
     if r.value is None:
         logger.debug("Caught null value in _fetch_and_store_dtcs")
-        return
+        return False
 
     codes = ",".join(code for code, _ in r.value)
     ts = datetime.now(timezone.utc)
     with pending_lock:
         pending_points.append(Point("-Get-DTCs").field("value", codes).time(ts))
+    return True
 
 
 def _route_command(command):
@@ -207,8 +216,10 @@ def new_status(r):
 
     dtc_count = r.value.DTC_count
     if dtc_count > _last_dtc_count:
-        _fetch_and_store_dtcs()
-    _last_dtc_count = dtc_count
+        if _fetch_and_store_dtcs():
+            _last_dtc_count = dtc_count
+    else:
+        _last_dtc_count = dtc_count
 
 
 def connect():

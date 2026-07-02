@@ -137,6 +137,7 @@ class TestNewAirStatus:
         r.value = "Upstream"
         _mod.new_air_status(r)
         assert len(_mod.pending_points) == 1
+        assert _mod.pending_points[0]._fields == {"value": 0}
 
     def test_skips_falsy_value(self):
         r = MagicMock()
@@ -199,6 +200,7 @@ class TestQueryFuelTypeOnce:
             connection, _mod.obd.commands.FUEL_TYPE, force=True
         )
         assert len(_mod.pending_points) == 1
+        assert _mod.pending_points[0]._fields == {"value": "Gasoline"}
 
     def test_skips_on_falsy_value(self):
         connection = MagicMock()
@@ -243,10 +245,12 @@ class TestNewStatus:
     def test_writes_mil_and_dtc_count_points(self):
         r = MagicMock()
         r.command = _Cmd("b'0101': Status since DTCs cleared", name="STATUS")
-        r.value.MIL = False
+        r.value.MIL = True
         r.value.DTC_count = 0
         _mod.new_status(r)
         assert len(_mod.pending_points) == 2
+        assert _mod.pending_points[0]._fields == {"value": 1}
+        assert _mod.pending_points[1]._fields == {"value": 0}
 
     def test_returns_early_on_malformed_command(self):
         r = MagicMock()
@@ -284,7 +288,8 @@ class TestFetchAndStoreDtcs:
         _mod._connection = None
 
     def test_no_connection_set_does_nothing(self):
-        _mod._fetch_and_store_dtcs()
+        result = _mod._fetch_and_store_dtcs()
+        assert result is False
         assert len(_mod.pending_points) == 0
 
     def test_null_response_does_nothing(self):
@@ -292,10 +297,11 @@ class TestFetchAndStoreDtcs:
         r = MagicMock()
         r.value = None
         with patch.object(_mod.obd.OBD, "query", return_value=r) as mock_query:
-            _mod._fetch_and_store_dtcs()
+            result = _mod._fetch_and_store_dtcs()
         mock_query.assert_called_once_with(
             _mod._connection, _mod.obd.commands.GET_DTC, force=True
         )
+        assert result is False
         assert len(_mod.pending_points) == 0
 
     def test_writes_joined_codes(self):
@@ -306,8 +312,10 @@ class TestFetchAndStoreDtcs:
             ("B0003", ""),
         ]
         with patch.object(_mod.obd.OBD, "query", return_value=r):
-            _mod._fetch_and_store_dtcs()
+            result = _mod._fetch_and_store_dtcs()
+        assert result is True
         assert len(_mod.pending_points) == 1
+        assert _mod.pending_points[0]._fields == {"value": "P0104,B0003"}
 
 
 class TestNewStatusDtcTrigger:
@@ -325,6 +333,15 @@ class TestNewStatusDtcTrigger:
             _mod.new_status(r)
         mock_fetch.assert_called_once()
         assert _mod._last_dtc_count == 1
+
+    def test_does_not_advance_count_when_fetch_fails(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0101': Status since DTCs cleared", name="STATUS")
+        r.value.MIL = True
+        r.value.DTC_count = 1
+        with patch.object(_mod, "_fetch_and_store_dtcs", return_value=False):
+            _mod.new_status(r)
+        assert _mod._last_dtc_count == 0
 
     def test_no_trigger_when_count_unchanged(self):
         _mod._last_dtc_count = 1
