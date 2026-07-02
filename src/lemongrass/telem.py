@@ -134,6 +134,31 @@ def _query_fuel_type_once(connection):
         )
 
 
+def new_status(r):
+    """Queue MIL and DTC count for batch write to InfluxDB."""
+    if r.value is None:
+        logger.debug("Caught null value in new_status")
+        return
+
+    ts = datetime.now(timezone.utc)
+    try:
+        measurement = str(r.command).split(":")[1]
+        measurement = measurement.replace(" ", "-")
+    except IndexError:
+        logger.debug("Caught IndexError in new_status")
+        return
+
+    with pending_lock:
+        pending_points.append(
+            Point(f"{measurement}-MIL").field("value", int(r.value.MIL)).time(ts)
+        )
+        pending_points.append(
+            Point(f"{measurement}-DTC-Count").field(
+                "value", r.value.DTC_count
+            ).time(ts)
+        )
+
+
 def connect():
     """Open an OBD-II connection on the configured serial port.
 

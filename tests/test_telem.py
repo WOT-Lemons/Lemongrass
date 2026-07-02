@@ -4,8 +4,9 @@ import lemongrass.telem as _mod
 
 
 class _Cmd:
-    def __init__(self, s):
+    def __init__(self, s, name=None):
         self._s = s
+        self.name = name if name is not None else s
 
     def __str__(self):
         return self._s
@@ -226,6 +227,55 @@ class TestQueryFuelTypeOnce:
                 patch.object(_mod, "Point", side_effect=capture_point):
             _mod._query_fuel_type_once(connection)
         assert captured_name[0] == "-Fuel-Type"
+
+
+class TestNewStatus:
+    def setup_method(self):
+        _reset()
+
+    def test_skips_null_value(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0101': Status since DTCs cleared", name="STATUS")
+        r.value = None
+        _mod.new_status(r)
+        assert len(_mod.pending_points) == 0
+
+    def test_writes_mil_and_dtc_count_points(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0101': Status since DTCs cleared", name="STATUS")
+        r.value.MIL = False
+        r.value.DTC_count = 0
+        _mod.new_status(r)
+        assert len(_mod.pending_points) == 2
+
+    def test_returns_early_on_malformed_command(self):
+        r = MagicMock()
+        r.command = _Cmd("no colon here", name="STATUS")
+        r.value.MIL = False
+        r.value.DTC_count = 0
+        _mod.new_status(r)
+        assert len(_mod.pending_points) == 0
+
+    def test_measurement_names_use_description(self):
+        r = MagicMock()
+        r.command = _Cmd(
+            "b'0141': Monitor status this drive cycle", name="STATUS_DRIVE_CYCLE"
+        )
+        r.value.MIL = True
+        r.value.DTC_count = 2
+        captured_names = []
+        original_point = _mod.Point
+
+        def capture_point(name):
+            captured_names.append(name)
+            return original_point(name)
+
+        with patch.object(_mod, "Point", side_effect=capture_point):
+            _mod.new_status(r)
+        assert captured_names == [
+            "-Monitor-status-this-drive-cycle-MIL",
+            "-Monitor-status-this-drive-cycle-DTC-Count",
+        ]
 
 
 class TestFlushPoints:
