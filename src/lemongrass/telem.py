@@ -16,7 +16,9 @@ from lemongrass import _influx
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
 
-EXCLUDED_PATTERNS = ["DTC", "MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
+EXCLUDED_PATTERNS = ["MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
+SKIP_NAMES = {"FREEZE_DTC", "GET_DTC", "CLEAR_DTC", "FUEL_TYPE"}
+STATUS_COMMANDS = {"STATUS", "STATUS_DRIVE_CYCLE"}
 
 FUEL_STATUS_MAP = {
     "Open loop due to insufficient engine temperature": 0,
@@ -26,8 +28,18 @@ FUEL_STATUS_MAP = {
     "Closed loop, using at least one oxygen sensor but there is a fault in the feedback system": 4,
 }
 
+AIR_STATUS_MAP = {
+    "Upstream": 0,
+    "Downstream of catalytic converter": 1,
+    "From the outside atmosphere or off": 2,
+    "Pump commanded on for diagnostics": 3,
+}
+
 pending_points = []
 pending_lock = threading.Lock()
+
+_connection = None  # set by main(); lets new_status trigger on-demand DTC lookups
+_last_dtc_count = 0  # only ever written from the Async callback thread; no lock needed
 
 
 def new_value(r):
@@ -79,6 +91,137 @@ def new_fuel_status(r):
         )
 
 
+def new_air_status(r):
+    """Queue new secondary air status for batch write to InfluxDB."""
+    if not r.value:
+        logger.debug("Caught falsy value in new_air_status")
+        return
+
+    ts = datetime.now(timezone.utc)
+    try:
+        measurement = str(r.command).split(":")[1]
+        measurement = measurement.replace(" ", "-")
+    except IndexError:
+        logger.debug("Caught IndexError in new_air_status")
+        return
+
+    air_status = AIR_STATUS_MAP.get(r.value, 255)
+
+    with pending_lock:
+        pending_points.append(
+            Point(measurement).field("value", air_status).time(ts)
+        )
+
+
+def _query_fuel_type_once(connection):
+    """Query FUEL_TYPE once and queue a single point (it never changes mid-session)."""
+    if not connection.supports(obd.commands.FUEL_TYPE):
+        return
+
+    # Async.query() only returns cached watched-command values; FUEL_TYPE is
+    # deliberately never watched, so the blocking OBD.query() is called directly.
+    try:
+        r = obd.OBD.query(connection, obd.commands.FUEL_TYPE, force=True)
+    except Exception:
+        logger.exception("Fuel-type query failed; continuing without it")
+        return
+    if not r.value:
+        logger.debug("Caught falsy value in _query_fuel_type_once")
+        return
+
+    ts = datetime.now(timezone.utc)
+    try:
+        measurement = str(r.command).split(":")[1]
+        measurement = measurement.replace(" ", "-")
+    except IndexError:
+        logger.debug("Caught IndexError in _query_fuel_type_once")
+        return
+
+    with pending_lock:
+        pending_points.append(
+            Point(measurement).field("value", r.value).time(ts)
+        )
+
+
+def _fetch_and_store_dtcs():
+    """Force a live GET_DTC read and queue the active codes as one point.
+
+    Returns True if a snapshot was queued, False otherwise, so callers know
+    whether it's safe to advance their own notion of the last-seen DTC count.
+    """
+    # Async.query() only returns cached watched-command values, and GET_DTC is
+    # deliberately never watched (see _route_command), so the blocking
+    # OBD.query() is called directly -- the same technique Async's own
+    # background thread uses internally (asynchronous.py's run() method).
+    # Safe here because this only ever runs from inside an Async callback,
+    # which already executes on that same background thread.
+    if _connection is None:
+        return False
+
+    r = obd.OBD.query(_connection, obd.commands.GET_DTC, force=True)
+    if r.value is None:
+        logger.debug("Caught null value in _fetch_and_store_dtcs")
+        return False
+
+    codes = ",".join(code for code, _ in r.value)
+    ts = datetime.now(timezone.utc)
+    with pending_lock:
+        pending_points.append(Point("-Get-DTCs").field("value", codes).time(ts))
+    return True
+
+
+def _route_command(command):
+    """Return the callback to watch a supported command with, or None to skip it."""
+    if any(pattern in command.name for pattern in EXCLUDED_PATTERNS):
+        return None
+    if command.name in SKIP_NAMES:
+        return None
+    if command.name in STATUS_COMMANDS:
+        return new_status
+    if command.name == "AIR_STATUS":
+        return new_air_status
+    if "FUEL_STATUS" in command.name:
+        return new_fuel_status
+    return new_value
+
+
+def new_status(r):
+    """Queue MIL and DTC count for batch write to InfluxDB."""
+    global _last_dtc_count
+
+    if r.value is None:
+        logger.debug("Caught null value in new_status")
+        return
+
+    ts = datetime.now(timezone.utc)
+    try:
+        measurement = str(r.command).split(":")[1]
+        measurement = measurement.replace(" ", "-")
+    except IndexError:
+        logger.debug("Caught IndexError in new_status")
+        return
+
+    with pending_lock:
+        pending_points.append(
+            Point(f"{measurement}-MIL").field("value", int(r.value.MIL)).time(ts)
+        )
+        pending_points.append(
+            Point(f"{measurement}-DTC-Count").field("value", r.value.DTC_count).time(ts)
+        )
+
+    # Only the primary STATUS command drives the on-demand DTC lookup;
+    # STATUS_DRIVE_CYCLE just records its own MIL/count.
+    if r.command.name != "STATUS":
+        return
+
+    dtc_count = r.value.DTC_count
+    if dtc_count > _last_dtc_count:
+        if _fetch_and_store_dtcs():
+            _last_dtc_count = dtc_count
+    else:
+        _last_dtc_count = dtc_count
+
+
 def connect():
     """Open an OBD-II connection on the configured serial port.
 
@@ -106,6 +249,8 @@ def flush_points(write_api):
 
 def main():
     """Main loop of OBD-II scraping"""
+    global _connection
+
     with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
@@ -121,15 +266,13 @@ def main():
 
         logger.debug(connection.status())
 
+        _connection = connection
+        _query_fuel_type_once(connection)
+
         for command in connection.supported_commands:
-            if any(pattern in command.name for pattern in EXCLUDED_PATTERNS):
-                continue
-            if command.name == "STATUS":
-                continue
-            if "FUEL_STATUS" in command.name:
-                connection.watch(command, callback=new_fuel_status)
-            else:
-                connection.watch(command, callback=new_value)
+            callback = _route_command(command)
+            if callback is not None:
+                connection.watch(command, callback=callback)
 
         try:
             connection.watch(obd.commands.ELM_VOLTAGE, callback=new_value)
