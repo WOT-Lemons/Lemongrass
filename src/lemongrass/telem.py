@@ -42,13 +42,19 @@ _connection = None  # set by main(); lets new_status trigger on-demand DTC looku
 _last_dtc_count = 0  # only ever written from the Async callback thread; no lock needed
 
 
+def _measurement_name(r):
+    """Derive the InfluxDB measurement name from a response's command string."""
+    try:
+        return str(r.command).split(":")[1].replace(" ", "-")
+    except IndexError:
+        return None
+
+
 def new_value(r):
     """Queue new measurement for batch write to InfluxDB."""
     ts = datetime.now(timezone.utc)
-    try:
-        measurement = str(r.command).split(":")[1]
-        measurement = measurement.replace(" ", "-")
-    except IndexError:
+    measurement = _measurement_name(r)
+    if measurement is None:
         logger.debug("Caught IndexError in new_value")
         return
     try:
@@ -74,10 +80,8 @@ def new_fuel_status(r):
         return
 
     ts = datetime.now(timezone.utc)
-    try:
-        measurement = str(r.command).split(":")[1]
-        measurement = measurement.replace(" ", "-")
-    except IndexError:
+    measurement = _measurement_name(r)
+    if measurement is None:
         logger.debug("Caught IndexError in new_fuel_status")
         return
 
@@ -98,10 +102,8 @@ def new_air_status(r):
         return
 
     ts = datetime.now(timezone.utc)
-    try:
-        measurement = str(r.command).split(":")[1]
-        measurement = measurement.replace(" ", "-")
-    except IndexError:
+    measurement = _measurement_name(r)
+    if measurement is None:
         logger.debug("Caught IndexError in new_air_status")
         return
 
@@ -130,10 +132,8 @@ def _query_fuel_type_once(connection):
         return
 
     ts = datetime.now(timezone.utc)
-    try:
-        measurement = str(r.command).split(":")[1]
-        measurement = measurement.replace(" ", "-")
-    except IndexError:
+    measurement = _measurement_name(r)
+    if measurement is None:
         logger.debug("Caught IndexError in _query_fuel_type_once")
         return
 
@@ -163,8 +163,8 @@ def _fetch_and_store_dtcs():
     except Exception:
         logger.exception("GET_DTC query failed; skipping this fetch")
         return False
-    if r.value is None:
-        logger.debug("Caught null value in _fetch_and_store_dtcs")
+    if not r.value:
+        logger.debug("Caught falsy value in _fetch_and_store_dtcs")
         return False
 
     codes = ",".join(code for code, _ in r.value)
@@ -198,10 +198,8 @@ def new_status(r):
         return
 
     ts = datetime.now(timezone.utc)
-    try:
-        measurement = str(r.command).split(":")[1]
-        measurement = measurement.replace(" ", "-")
-    except IndexError:
+    measurement = _measurement_name(r)
+    if measurement is None:
         logger.debug("Caught IndexError in new_status")
         return
 

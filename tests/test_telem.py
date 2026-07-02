@@ -14,6 +14,8 @@ class _Cmd:
 
 def _reset():
     _mod.pending_points.clear()
+    _mod._last_dtc_count = 0
+    _mod._connection = None
 
 
 class TestConnect:
@@ -152,6 +154,7 @@ class TestNewAirStatus:
         r.value = "Some new status ELM327 hasn't seen"
         _mod.new_air_status(r)
         assert len(_mod.pending_points) == 1
+        assert _mod.pending_points[0]._fields == {"value": 255}
 
     def test_returns_early_on_malformed_command(self):
         r = MagicMock()
@@ -285,7 +288,6 @@ class TestNewStatus:
 class TestFetchAndStoreDtcs:
     def setup_method(self):
         _reset()
-        _mod._connection = None
 
     def test_no_connection_set_does_nothing(self):
         result = _mod._fetch_and_store_dtcs()
@@ -301,6 +303,15 @@ class TestFetchAndStoreDtcs:
         mock_query.assert_called_once_with(
             _mod._connection, _mod.obd.commands.GET_DTC, force=True
         )
+        assert result is False
+        assert len(_mod.pending_points) == 0
+
+    def test_empty_list_response_does_nothing(self):
+        _mod._connection = MagicMock()
+        r = MagicMock()
+        r.value = []
+        with patch.object(_mod.obd.OBD, "query", return_value=r):
+            result = _mod._fetch_and_store_dtcs()
         assert result is False
         assert len(_mod.pending_points) == 0
 
@@ -321,7 +332,6 @@ class TestFetchAndStoreDtcs:
 class TestNewStatusDtcTrigger:
     def setup_method(self):
         _reset()
-        _mod._last_dtc_count = 0
         _mod._connection = MagicMock()
 
     def test_triggers_fetch_on_status_dtc_count_increase(self):
