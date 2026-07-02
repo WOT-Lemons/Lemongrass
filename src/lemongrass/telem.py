@@ -16,7 +16,9 @@ from lemongrass import _influx
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
 
-EXCLUDED_PATTERNS = ["DTC", "MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
+EXCLUDED_PATTERNS = ["MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
+SKIP_NAMES = {"FREEZE_DTC", "GET_DTC", "CLEAR_DTC", "FUEL_TYPE"}
+STATUS_COMMANDS = {"STATUS", "STATUS_DRIVE_CYCLE"}
 
 FUEL_STATUS_MAP = {
     "Open loop due to insufficient engine temperature": 0,
@@ -157,6 +159,21 @@ def _fetch_and_store_dtcs():
     ts = datetime.now(timezone.utc)
     with pending_lock:
         pending_points.append(Point("-Get-DTCs").field("value", codes).time(ts))
+
+
+def _route_command(command):
+    """Return the callback to watch a supported command with, or None to skip it."""
+    if any(pattern in command.name for pattern in EXCLUDED_PATTERNS):
+        return None
+    if command.name in SKIP_NAMES:
+        return None
+    if command.name in STATUS_COMMANDS:
+        return new_status
+    if command.name == "AIR_STATUS":
+        return new_air_status
+    if "FUEL_STATUS" in command.name:
+        return new_fuel_status
+    return new_value
 
 
 def new_status(r):

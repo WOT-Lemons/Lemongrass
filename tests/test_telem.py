@@ -377,3 +377,37 @@ class TestFlushPoints:
         _mod.flush_points(write_api)
         write_api.write.assert_called_once()
         assert len(_mod.pending_points) == 0
+
+
+class TestRouteCommand:
+    def test_excludes_pattern_matches(self):
+        for name in [
+            "PIDS_A", "MIDS_A", "O2_SENSORS", "O2_SENSORS_ALT",
+            "ELM_VERSION", "OBD_COMPLIANCE",
+        ]:
+            assert _mod._route_command(_Cmd(name)) is None
+
+    def test_excludes_skip_names(self):
+        for name in ["FREEZE_DTC", "GET_DTC", "CLEAR_DTC", "FUEL_TYPE"]:
+            assert _mod._route_command(_Cmd(name)) is None
+
+    def test_no_longer_excludes_dtc_substring_numeric_pids(self):
+        for name in [
+            "WARMUPS_SINCE_DTC_CLEAR",
+            "DISTANCE_SINCE_DTC_CLEAR",
+            "TIME_SINCE_DTC_CLEARED",
+        ]:
+            assert _mod._route_command(_Cmd(name)) is _mod.new_value
+
+    def test_routes_status_commands(self):
+        assert _mod._route_command(_Cmd("STATUS")) is _mod.new_status
+        assert _mod._route_command(_Cmd("STATUS_DRIVE_CYCLE")) is _mod.new_status
+
+    def test_routes_air_status(self):
+        assert _mod._route_command(_Cmd("AIR_STATUS")) is _mod.new_air_status
+
+    def test_routes_fuel_status(self):
+        assert _mod._route_command(_Cmd("FUEL_STATUS")) is _mod.new_fuel_status
+
+    def test_routes_generic_numeric_to_new_value(self):
+        assert _mod._route_command(_Cmd("RPM")) is _mod.new_value
