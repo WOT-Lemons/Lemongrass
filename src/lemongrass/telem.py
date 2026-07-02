@@ -108,6 +108,32 @@ def new_air_status(r):
         )
 
 
+def _query_fuel_type_once(connection):
+    """Query FUEL_TYPE once and queue a single point (it never changes mid-session)."""
+    if not connection.supports(obd.commands.FUEL_TYPE):
+        return
+
+    # Async.query() only returns cached watched-command values; FUEL_TYPE is
+    # deliberately never watched, so the blocking OBD.query() is called directly.
+    r = obd.OBD.query(connection, obd.commands.FUEL_TYPE, force=True)
+    if not r.value:
+        logger.debug("Caught falsy value in _query_fuel_type_once")
+        return
+
+    ts = datetime.now(timezone.utc)
+    try:
+        measurement = str(r.command).split(":")[1]
+        measurement = measurement.replace(" ", "-")
+    except IndexError:
+        logger.debug("Caught IndexError in _query_fuel_type_once")
+        return
+
+    with pending_lock:
+        pending_points.append(
+            Point(measurement).field("value", r.value).time(ts)
+        )
+
+
 def connect():
     """Open an OBD-II connection on the configured serial port.
 

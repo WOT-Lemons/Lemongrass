@@ -174,6 +174,60 @@ class TestNewAirStatus:
         assert captured_name[0] == "-Secondary-Air-Status"
 
 
+class TestQueryFuelTypeOnce:
+    def setup_method(self):
+        _reset()
+
+    def test_skips_when_unsupported(self):
+        connection = MagicMock()
+        connection.supports.return_value = False
+        with patch.object(_mod.obd.OBD, "query") as mock_query:
+            _mod._query_fuel_type_once(connection)
+        mock_query.assert_not_called()
+        assert len(_mod.pending_points) == 0
+
+    def test_writes_point_when_supported(self):
+        connection = MagicMock()
+        connection.supports.return_value = True
+        r = MagicMock()
+        r.command = _Cmd("b'0151': Fuel Type")
+        r.value = "Gasoline"
+        with patch.object(_mod.obd.OBD, "query", return_value=r) as mock_query:
+            _mod._query_fuel_type_once(connection)
+        mock_query.assert_called_once_with(
+            connection, _mod.obd.commands.FUEL_TYPE, force=True
+        )
+        assert len(_mod.pending_points) == 1
+
+    def test_skips_on_falsy_value(self):
+        connection = MagicMock()
+        connection.supports.return_value = True
+        r = MagicMock()
+        r.command = _Cmd("b'0151': Fuel Type")
+        r.value = None
+        with patch.object(_mod.obd.OBD, "query", return_value=r):
+            _mod._query_fuel_type_once(connection)
+        assert len(_mod.pending_points) == 0
+
+    def test_measurement_name_uses_description(self):
+        connection = MagicMock()
+        connection.supports.return_value = True
+        r = MagicMock()
+        r.command = _Cmd("b'0151': Fuel Type")
+        r.value = "Gasoline"
+        captured_name = []
+        original_point = _mod.Point
+
+        def capture_point(name):
+            captured_name.append(name)
+            return original_point(name)
+
+        with patch.object(_mod.obd.OBD, "query", return_value=r), \
+                patch.object(_mod, "Point", side_effect=capture_point):
+            _mod._query_fuel_type_once(connection)
+        assert captured_name[0] == "-Fuel-Type"
+
+
 class TestFlushPoints:
     def setup_method(self):
         _reset()
