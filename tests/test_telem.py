@@ -126,6 +126,54 @@ class TestNewFuelStatus:
         assert captured_name[0] == "-Fuel-System-Status"
 
 
+class TestNewAirStatus:
+    def setup_method(self):
+        _reset()
+
+    def test_appends_known_status(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0112': Secondary Air Status")
+        r.value = "Upstream"
+        _mod.new_air_status(r)
+        assert len(_mod.pending_points) == 1
+
+    def test_skips_falsy_value(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0112': Secondary Air Status")
+        r.value = None
+        _mod.new_air_status(r)
+        assert len(_mod.pending_points) == 0
+
+    def test_appends_for_unknown_status(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0112': Secondary Air Status")
+        r.value = "Some new status ELM327 hasn't seen"
+        _mod.new_air_status(r)
+        assert len(_mod.pending_points) == 1
+
+    def test_returns_early_on_malformed_command(self):
+        r = MagicMock()
+        r.command = _Cmd("no colon here")
+        r.value = "Upstream"
+        _mod.new_air_status(r)
+        assert len(_mod.pending_points) == 0
+
+    def test_measurement_name_uses_description(self):
+        r = MagicMock()
+        r.command = _Cmd("b'0112': Secondary Air Status")
+        r.value = "Upstream"
+        captured_name = []
+        original_point = _mod.Point
+
+        def capture_point(name):
+            captured_name.append(name)
+            return original_point(name)
+
+        with patch.object(_mod, "Point", side_effect=capture_point):
+            _mod.new_air_status(r)
+        assert captured_name[0] == "-Secondary-Air-Status"
+
+
 class TestFlushPoints:
     def setup_method(self):
         _reset()

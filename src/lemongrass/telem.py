@@ -26,6 +26,13 @@ FUEL_STATUS_MAP = {
     "Closed loop, using at least one oxygen sensor but there is a fault in the feedback system": 4,
 }
 
+AIR_STATUS_MAP = {
+    "Upstream": 0,
+    "Downstream of catalytic converter": 1,
+    "From the outside atmosphere or off": 2,
+    "Pump commanded on for diagnostics": 3,
+}
+
 pending_points = []
 pending_lock = threading.Lock()
 
@@ -76,6 +83,28 @@ def new_fuel_status(r):
     with pending_lock:
         pending_points.append(
             Point(measurement).field("value", fuel_status).time(ts)
+        )
+
+
+def new_air_status(r):
+    """Queue new secondary air status for batch write to InfluxDB."""
+    if not r.value:
+        logger.debug("Caught falsy value in new_air_status")
+        return
+
+    ts = datetime.now(timezone.utc)
+    try:
+        measurement = str(r.command).split(":")[1]
+        measurement = measurement.replace(" ", "-")
+    except IndexError:
+        logger.debug("Caught IndexError in new_air_status")
+        return
+
+    air_status = AIR_STATUS_MAP.get(r.value, 255)
+
+    with pending_lock:
+        pending_points.append(
+            Point(measurement).field("value", air_status).time(ts)
         )
 
 
