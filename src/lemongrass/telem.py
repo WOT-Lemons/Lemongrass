@@ -238,6 +238,8 @@ def flush_points(write_api):
 
 def main():
     """Main loop of OBD-II scraping"""
+    global _connection
+
     with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
@@ -253,15 +255,13 @@ def main():
 
         logger.debug(connection.status())
 
+        _connection = connection
+        _query_fuel_type_once(connection)
+
         for command in connection.supported_commands:
-            if any(pattern in command.name for pattern in EXCLUDED_PATTERNS):
-                continue
-            if command.name == "STATUS":
-                continue
-            if "FUEL_STATUS" in command.name:
-                connection.watch(command, callback=new_fuel_status)
-            else:
-                connection.watch(command, callback=new_value)
+            callback = _route_command(command)
+            if callback is not None:
+                connection.watch(command, callback=callback)
 
         try:
             connection.watch(obd.commands.ELM_VOLTAGE, callback=new_value)
