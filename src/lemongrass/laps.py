@@ -363,11 +363,21 @@ def old_race(ctx, opts):
     logging.debug("Getting sessions for race for %s", ctx.race_id)
     race_details = ctx.client.results.sessions_for_race(ctx.race_id)
 
-    session_ids_for_race = [s['ID'] for s in race_details['Sessions']]
+    session_ids_for_race = [s['ID'] for s in race_details.get('Sessions', [])]
+
+    if not session_ids_for_race:
+        logging.warning(
+            "No sessions found for race %s — nothing to display or write", ctx.race_id)
+        return
 
     logging.debug(
         "Race %s has %s sessions, %s",
         ctx.race_id, len(session_ids_for_race), session_ids_for_race)
+
+    if not opts.network_mode:
+        # Display mode prints only the final session's rankings; fetching the
+        # earlier sessions would spend RaceMonitor rate limit on discarded data.
+        session_ids_for_race = session_ids_for_race[-1:]
 
     pending_writes = []
 

@@ -3283,3 +3283,58 @@ class TestLiveRaceNoData:
                           return_value=_mod.MonitorStatus.NO_LIVE_DATA):
             result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
         assert result == 1
+
+
+class TestOldRaceSessionFetching:
+    def _session_details(self, sid=1):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': sid, 'Name': f'S{sid}', 'SessionStartDateEpoc': 1000,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [{
+                    'Number': '42', 'Category': '1', 'FirstName': 'Jane',
+                    'LastName': 'Doe', 'Position': '1', 'Laps': '1',
+                    'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
+                    'AdditionalData': '',
+                    'LapTimes': [{'Lap': '1', 'LapTime': '0:01:30.000',
+                                  'Position': '1', 'FlagStatus': 0,
+                                  'TotalTime': '0:01:30.000'}],
+                }],
+            },
+        }
+
+    def test_zero_sessions_returns_cleanly(self, caplog):
+        """A race with no posted sessions must log and return, not UnboundLocalError."""
+        ctx = _mod.RaceContext('999', None, MagicMock(), None, 0)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': []}
+        opts = _mod.RaceOptions(network_mode=False)
+        with caplog.at_level(logging.WARNING):
+            _mod.old_race(ctx, opts)  # must not raise
+        assert any('999' in r.message for r in caplog.records)
+
+    def test_display_mode_fetches_only_final_session(self):
+        """Non-network mode prints one rankings table; fetching every session
+        burns the RaceMonitor rate limit for data that is discarded."""
+        ctx = _mod.RaceContext('999', None, MagicMock(), None, 0)
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}, {'ID': 3}]}
+        ctx.client.results.session_details.return_value = self._session_details(3)
+        opts = _mod.RaceOptions(network_mode=False)
+        with patch.object(_mod, 'print_rankings'):
+            _mod.old_race(ctx, opts)
+        ctx.client.results.session_details.assert_called_once_with(
+            3, include_lap_times=True)
+
+    def test_network_mode_still_fetches_all_sessions(self):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}]}
+        ctx.client.results.session_details.side_effect = [
+            self._session_details(1), self._session_details(2)]
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'print_rankings'):
+                _mod.old_race(ctx, opts)
+        assert ctx.client.results.session_details.call_count == 2
