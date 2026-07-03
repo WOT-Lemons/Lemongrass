@@ -608,6 +608,24 @@ class TestTimeToMs:
         assert result is None
         assert 'unparseable' in caplog.text
 
+    def test_empty_string_returns_none_without_warning(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            assert _mod._time_to_ms('') is None
+        assert caplog.text == ''
+
+    def test_none_returns_none_without_warning(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            assert _mod._time_to_ms(None) is None
+        assert caplog.text == ''
+
+    def test_short_fraction_is_padded_not_misread(self):
+        assert _mod._time_to_ms('1:23.4') == 1 * 60000 + 23 * 1000 + 400
+
+    def test_long_fraction_is_truncated_to_ms(self):
+        assert _mod._time_to_ms('23.4567') == 23 * 1000 + 456
+
 
 class TestPushInfluxClassInfo:
     def _laps(self):

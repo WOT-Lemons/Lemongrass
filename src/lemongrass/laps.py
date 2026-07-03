@@ -713,19 +713,24 @@ def _time_to_ms(value):
     """Parse a RaceMonitor time string to milliseconds.
 
     Accepts variable precision: 'H:MM:SS.mmm', 'MM:SS.mmm', or 'SS.mmm', with the
-    fractional '.mmm' part optional. RaceMonitor omits the hours component when a
-    value is under an hour, so we right-align the colon-separated parts.
+    fractional part optional and of any length (padded/truncated to milliseconds).
+    RaceMonitor omits the hours component when a value is under an hour, so we
+    right-align the colon-separated parts.
 
-    Returns None for unparseable values, which causes the field to be omitted
-    from the InfluxDB point. The API occasionally returns garbage for invalid
-    or pit laps.
+    Returns None for empty input (a competitor with no lap yet — common, so not
+    logged) and for unparseable values (logged; the API occasionally returns
+    garbage for invalid or pit laps), causing the field to be omitted from the
+    InfluxDB point.
     """
+    if not value:
+        return None
     try:
         parts = value.split(':')
         sec, _, ms = parts[-1].partition('.')
         hours = int(parts[-3]) if len(parts) >= 3 else 0
         minutes = int(parts[-2]) if len(parts) >= 2 else 0
-        return hours * 3600000 + minutes * 60000 + int(sec) * 1000 + int(ms or 0)
+        return (hours * 3600000 + minutes * 60000 + int(sec) * 1000
+                + int(ms.ljust(3, '0')[:3]))
     except (ValueError, AttributeError):
         logging.warning("%s; omitting field", _describe_bad_value(value, 'time'))
         return None
