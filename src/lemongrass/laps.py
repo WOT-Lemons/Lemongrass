@@ -401,6 +401,7 @@ def old_race(ctx, opts):
                 'start_epoc': start_epoc,
                 'competitors': [],
             }
+            class_index = _build_class_index(session_details)
             for competitor in sorted_competitors:
                 comp_laps = competitor.get('LapTimes', [])
                 if not comp_laps:
@@ -439,7 +440,7 @@ def old_race(ctx, opts):
                         'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus'])),
                     })
                 class_name, class_positions = _resolve_class_historical(
-                    comp_number, session_details)
+                    comp_number, session_details, class_index)
                 session_entry['competitors'].append({
                     'influx_laps': influx_laps,
                     'competitor_name': comp_name,
@@ -1052,25 +1053,48 @@ def existing_standings_counts_fieldwide(ctx):
     return total, current
 
 
-def _resolve_class_historical(car_number, session_details):
-    """Return (class_name, {lap_num: class_position}) for the given car_number."""
+def _build_class_index(session_details):
+    """Precompute per-session class-position data shared by every competitor.
+
+    Returns (categories, category_by_car, laps_by_car, positions_by_category):
+    laps_by_car maps car_number -> {lap_num: overall_position} and
+    positions_by_category maps category -> {lap_num: [overall_positions]} across
+    all cars in that category. Built once per session so resolving N competitors
+    is O(total laps), not O(N * total laps).
+    """
     session = session_details['Session']
-    competitors = session['SortedCompetitors']
     categories = session['Categories']
+    category_by_car = {}
+    laps_by_car = {}
+    positions_by_category = defaultdict(lambda: defaultdict(list))
+    for competitor in session['SortedCompetitors']:
+        number = competitor['Number']
+        category_by_car[number] = competitor['Category']
+        lap_positions = {}
+        for lap in competitor['LapTimes']:
+            try:
+                lap_positions[int(lap['Lap'])] = int(lap['Position'])
+            except (ValueError, TypeError):
+                logging.debug("%s in class resolution; skipping",
+                              _describe_bad_value(lap['Lap'], 'Lap'))
+        laps_by_car[number] = lap_positions
+        for lap_num, pos in lap_positions.items():
+            positions_by_category[competitor['Category']][lap_num].append(pos)
+    return categories, category_by_car, laps_by_car, positions_by_category
 
-    tracked_category = None
-    tracked_laps = {}
-    for competitor in competitors:
-        if competitor['Number'] == car_number:
-            tracked_category = competitor['Category']
-            for lap in competitor['LapTimes']:
-                try:
-                    tracked_laps[int(lap['Lap'])] = int(lap['Position'])
-                except (ValueError, TypeError):
-                    logging.debug("%s in class resolution; skipping",
-                                  _describe_bad_value(lap['Lap'], 'Lap'))
-            break
 
+def _resolve_class_historical(car_number, session_details, index=None):
+    """Return (class_name, {lap_num: class_position}) for the given car_number.
+
+    index is the result of _build_class_index for this session; callers resolving
+    many cars should build it once and pass it in. When omitted it is built on
+    the fly (single-car callers and tests).
+    """
+    if index is None:
+        index = _build_class_index(session_details)
+    categories, category_by_car, laps_by_car, positions_by_category = index
+
+    tracked_category = category_by_car.get(car_number)
     if tracked_category is None:
         return None, {}
 
@@ -1079,20 +1103,12 @@ def _resolve_class_historical(car_number, session_details):
         .get('Name', tracked_category)
     )
 
-    class_lap_positions = defaultdict(list)
-    for competitor in competitors:
-        if competitor['Number'] == car_number or competitor['Category'] != tracked_category:
-            continue
-        for lap in competitor['LapTimes']:
-            try:
-                class_lap_positions[int(lap['Lap'])].append(int(lap['Position']))
-            except (ValueError, TypeError):
-                logging.debug("%s in class position resolution; skipping",
-                              _describe_bad_value(lap['Lap'], 'Lap'))
-
+    # The tracked car's own position is never < itself, so including it in the
+    # per-category lists (unlike the old per-car rescan) does not change counts.
+    class_lap_positions = positions_by_category[tracked_category]
     class_positions = {
         lap_num: 1 + sum(1 for pos in class_lap_positions.get(lap_num, []) if pos < tracked_pos)
-        for lap_num, tracked_pos in tracked_laps.items()
+        for lap_num, tracked_pos in laps_by_car[car_number].items()
     }
 
     return class_name, class_positions

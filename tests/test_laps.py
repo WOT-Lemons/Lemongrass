@@ -1340,7 +1340,8 @@ class TestOldRaceClassWiring:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        mock_resolve.assert_any_call('42', self._session_details())
+        expected_index = _mod._build_class_index(self._session_details())
+        mock_resolve.assert_any_call('42', self._session_details(), expected_index)
 
     def test_passes_class_name_to_build_lap_points(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -3481,3 +3482,64 @@ class TestOldRaceExpectedCountFiltering:
                 _mod.old_race(ctx, opts)
         lap_write = ctx.write_api.write.call_args_list[0]
         assert len(lap_write.kwargs['record']) == 1
+
+
+class TestClassIndex:
+    def _session_details(self):
+        def comp(number, category, laps):
+            return {'Number': number, 'Category': category,
+                    'LapTimes': [{'Lap': str(ln), 'Position': str(p)}
+                                 for ln, p in laps]}
+        return {
+            'Session': {
+                'Categories': {'1': {'Name': 'A'}, '2': {'Name': 'B'}},
+                'SortedCompetitors': [
+                    comp('10', '1', [(1, 1), (2, 1)]),
+                    comp('11', '1', [(1, 3), (2, 2)]),
+                    comp('20', '2', [(1, 2), (2, 3)]),
+                ],
+            },
+        }
+
+    def test_index_matches_per_car_resolution(self):
+        details = self._session_details()
+        index = _mod._build_class_index(details)
+        for number in ('10', '11', '20'):
+            assert (_mod._resolve_class_historical(number, details)
+                    == _mod._resolve_class_historical(number, details, index))
+
+    def test_unknown_car_returns_none(self):
+        details = self._session_details()
+        index = _mod._build_class_index(details)
+        assert _mod._resolve_class_historical('99', details, index) == (None, {})
+
+    def test_old_race_builds_index_once_per_session(self):
+        session = {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'Name': 'S1', 'SessionStartDateEpoc': 1000,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [
+                    {'Number': str(n), 'Category': '1', 'FirstName': 'F',
+                     'LastName': f'L{n}', 'Position': str(n), 'Laps': '1',
+                     'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
+                     'AdditionalData': '',
+                     'LapTimes': [{'Lap': '1', 'LapTime': '0:01:30.000',
+                                   'Position': str(n), 'FlagStatus': 0,
+                                   'TotalTime': '0:01:30.000'}]}
+                    for n in (1, 2, 3)
+                ],
+            },
+        }
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.delete_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = session
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_build_class_index',
+                          wraps=_mod._build_class_index) as mock_index:
+            with patch.object(_mod, 'push_influx_race', return_value=True):
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        assert mock_index.call_count == 1  # once per session, not per competitor
