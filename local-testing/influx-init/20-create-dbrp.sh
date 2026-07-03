@@ -9,7 +9,7 @@ set -euo pipefail
 # not 8086 — 8086 only binds after init completes.
 HOST="http://localhost:${INFLUXD_INIT_PORT:-9999}"
 
-for db in laps races; do
+for db in laps races stats_252; do
   bucket_id=$(influx bucket list \
     --name "$db" \
     --org "$DOCKER_INFLUXDB_INIT_ORG" \
