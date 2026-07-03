@@ -31,10 +31,7 @@ from lemongrass._env import resolve_tokens
 
 EPOCH_START = '1970-01-01T00:00:00Z'
 
-# Lap timestamps are session-anchored and Flux `stop` is exclusive, so laps can
-# legitimately fall outside the nominal race bounds; pad the window instead of
-# trusting Start/EndDateEpoc exactly. The race_id tag filter stays the exact selector.
-WINDOW_PAD_S = 86400
+WINDOW_PAD_S = _influx.WINDOW_PAD_S
 
 
 def epoc_to_str(epoc):

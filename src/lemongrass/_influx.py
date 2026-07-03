@@ -51,6 +51,13 @@ def connect():
     )
 
 
+# Lap timestamps are session-anchored and Flux `stop` is exclusive, so laps can
+# legitimately fall outside the nominal race bounds; pad the window instead of
+# trusting Start/EndDateEpoc exactly. The race_id tag filter stays the exact selector.
+# Shared by race_backfill and race_diagnose so the two padding windows can't drift.
+WINDOW_PAD_S = 86400
+
+
 _FLUX_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
