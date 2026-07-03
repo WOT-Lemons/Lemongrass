@@ -161,6 +161,18 @@ def main():
     # Pandas default max rows truncating lap times. I don't expect a team to do more than 1024 laps.
     pandas.set_option("display.max_rows", 1024)
 
+    race_id = str(args.race_id[0])
+    car_number = str(args.car_number) if args.car_number is not None else None
+
+    # Validate user-supplied identifiers before touching RaceMonitor/Influx —
+    # race_id and car_number are interpolated into Flux delete predicates and
+    # queries below, so an unsafe value must not reach token resolution.
+    ids_to_check = [race_id] if car_number is None else [race_id, car_number]
+    bad_ids = _influx.invalid_flux_ids(ids_to_check)
+    if bad_ids:
+        logging.error("invalid identifier(s): %s", ", ".join(f'"{b}"' for b in bad_ids))
+        sys.exit(1)
+
     tokens = resolve_tokens()
     if not tokens:
         logging.error("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN environment variable not set")
@@ -172,9 +184,6 @@ def main():
             and not os.environ.get('INFLUX_TELEMETRY_TOKEN')):
         logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
         sys.exit(1)
-
-    race_id = str(args.race_id[0])
-    car_number = str(args.car_number) if args.car_number is not None else None
 
     opts = RaceOptions(
         network_mode=args.network_mode or args.dry_run,

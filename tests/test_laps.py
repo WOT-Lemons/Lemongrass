@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, call, mock_open, patch
 
@@ -3338,6 +3339,56 @@ class TestMainMissingToken:
         assert exc_info.value.code == 1
         assert any('RACEMONITOR_TOKENS' in r.message and 'RACEMONITOR_TOKEN' in r.message
                    for r in caplog.records)
+
+
+class TestMainFluxIdValidation:
+    """laps.main() interpolates race_id/car_number into Flux delete predicates and
+    queries, so it must reject unsafe identifiers before touching RaceMonitor/Influx,
+    same as race_diagnose.main() and race_backfill.main() already do."""
+
+    def _fake_args(self, race_id, car_number=None):
+        return SimpleNamespace(
+            race_id=[race_id], car_number=car_number, verbose=False,
+            network_mode=False, monitor_mode=False, save_file=False,
+            selected_class=None, interval=30, skip_if_complete=False, dry_run=False,
+        )
+
+    def test_race_id_with_quote_exits_1_before_racemonitor_client(self):
+        with patch.object(_mod, '_build_parser') as mock_parser_factory:
+            mock_parser_factory.return_value.parse_args.return_value = (
+                self._fake_args('x"y'))
+            with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN'}, clear=True):
+                with patch.object(_mod, 'RaceMonitorClient') as mock_client:
+                    mock_client.side_effect = AssertionError(
+                        'must not reach RaceMonitorClient with an invalid id')
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        mock_client.assert_not_called()
+
+    def test_car_number_with_quote_exits_1_before_racemonitor_client(self):
+        with patch.object(_mod, '_build_parser') as mock_parser_factory:
+            mock_parser_factory.return_value.parse_args.return_value = (
+                self._fake_args('12345', car_number='4"2'))
+            with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN'}, clear=True):
+                with patch.object(_mod, 'RaceMonitorClient') as mock_client:
+                    mock_client.side_effect = AssertionError(
+                        'must not reach RaceMonitorClient with an invalid id')
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        mock_client.assert_not_called()
+
+    def test_logs_invalid_identifier_error(self, caplog):
+        with patch.object(_mod, '_build_parser') as mock_parser_factory:
+            mock_parser_factory.return_value.parse_args.return_value = (
+                self._fake_args('x"y'))
+            with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN'}, clear=True):
+                with patch.object(_mod, 'RaceMonitorClient'):
+                    with caplog.at_level(logging.ERROR):
+                        with pytest.raises(SystemExit):
+                            _mod.main()
+        assert any('x"y' in r.message for r in caplog.records)
 
 
 class TestLiveRaceNoData:
