@@ -88,7 +88,7 @@ def new_fuel_status(r):
         logger.debug("Caught IndexError in new_fuel_status")
         return
 
-    fuel_status = next((v for k, v in FUEL_STATUS_MAP.items() if k in r.value), 255)
+    fuel_status = FUEL_STATUS_MAP.get(r.value[0], 255)
     if fuel_status == 3:
         logger.warning("Caught open loop due to system failure")
 
@@ -253,6 +253,16 @@ def connect():
     return obd.Async(portstr=os.environ.get('OBD_PORT', '/dev/obd'))
 
 
+def _configure_obd_logging():
+    """Enable python-obd DEBUG logging only when OBD_DEBUG is set.
+
+    DEBUG logs every serial send/receive; with dozens of watched PIDs cycling
+    continuously that is sustained journald I/O and SD-card wear on the Pi.
+    """
+    if os.environ.get('OBD_DEBUG'):
+        obd.logger.setLevel(obd.logging.DEBUG)
+
+
 def flush_points(write_api):
     """Write all pending points to InfluxDB in a single request."""
     with pending_lock:
@@ -276,7 +286,7 @@ def main():
     with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
-        obd.logger.setLevel(obd.logging.DEBUG)
+        _configure_obd_logging()
         connection = connect()
         status = connection.status()
         while "Car Connected" not in status:

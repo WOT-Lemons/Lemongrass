@@ -131,6 +131,32 @@ class TestNewFuelStatus:
             _mod.new_fuel_status(r)
         assert captured_name[0] == "-Fuel-System-Status"
 
+    def test_uses_system_1_status_when_systems_differ(self):
+        """Dual-bank ECU: system 1 in failure mode must not be masked by
+        system 2's closed-loop status (dict order used to decide the winner)."""
+        r = MagicMock()
+        r.command = _Cmd("b'0103': Fuel System Status")
+        r.value = [
+            "Open loop due to system failure",
+            "Closed loop, using oxygen sensor feedback to determine fuel mix",
+        ]
+        _mod.new_fuel_status(r)
+        assert _mod.pending_points[0]._fields == {"value": 3}
+
+
+class TestConfigureObdLogging:
+    def test_no_debug_by_default(self, monkeypatch):
+        monkeypatch.delenv("OBD_DEBUG", raising=False)
+        _mod.obd.logger.setLevel.reset_mock()
+        _mod._configure_obd_logging()
+        _mod.obd.logger.setLevel.assert_not_called()
+
+    def test_debug_enabled_via_env(self, monkeypatch):
+        monkeypatch.setenv("OBD_DEBUG", "1")
+        _mod.obd.logger.setLevel.reset_mock()
+        _mod._configure_obd_logging()
+        _mod.obd.logger.setLevel.assert_called_once_with(_mod.obd.logging.DEBUG)
+
 
 class TestNewAirStatus:
     def setup_method(self):
