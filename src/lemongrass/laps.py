@@ -254,7 +254,7 @@ def _run_race(ctx, opts, response):
             logging.info("Race %s is not live. Monitor mode disabled.", ctx.race_id)
             if opts.monitor_mode:
                 return 0
-            old_race(ctx, opts)
+            return old_race(ctx, opts) or 0
         else:
             logging.info("Race %s is currently live.", ctx.race_id)
             if opts.dry_run:
@@ -479,7 +479,11 @@ def old_race(ctx, opts):
                     race_ts_ms = (
                         ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                     )
-                    push_influx_race(ctx, race_ts_ms)
+                    if not push_influx_race(ctx, race_ts_ms):
+                        logging.error(
+                            "Race metadata write failed for race %s — failing the "
+                            "run so the next backfill retries", ctx.race_id)
+                        return 1
                     logging.info(
                         "SKIP: race %s already complete and current (%d laps, schema v%d)",
                         ctx.race_id, total, SCHEMA_VERSION)
@@ -505,11 +509,16 @@ def old_race(ctx, opts):
                         comp['car_number'], session['session_id']))
                 _write_points_chunked(ctx.write_api, session_points)
             logging.info("All lap data written successfully")
-            push_influx_race(ctx, race_ts_ms)
         except Exception as e:
             logging.error("Writing laps failed for race %s: %s", ctx.race_id, e)
             logging.warning("Skipping race stamp so next run will re-backfill")
-            return
+            return 1
+
+        if not push_influx_race(ctx, race_ts_ms):
+            logging.error(
+                "Race metadata write failed for race %s — failing the run so the "
+                "next backfill retries", ctx.race_id)
+            return 1
 
         for session in pending_writes:
             push_influx_session(
@@ -859,10 +868,16 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
 
 
 def push_influx_race(ctx, timestamp_ms):
-    """Write one race metadata point to the races bucket, replacing any prior point."""
+    """Write one race metadata point to the races bucket, replacing any prior point.
+
+    Returns True on success. Returns False when metadata is missing or the
+    delete/write fails — the delete may have already removed the old point, so
+    a False return means the race may now be absent from the races bucket and
+    the caller must treat the run as failed so a retry restores it.
+    """
     if ctx.metadata is None:
         logging.warning("push_influx_race called with no metadata for race %s", ctx.race_id)
-        return
+        return False
     try:
         ctx.delete_api.delete(
             start='1970-01-01T00:00:00Z',
@@ -881,8 +896,10 @@ def push_influx_race(ctx, timestamp_ms):
             .time(timestamp_ms, WritePrecision.MS)
         )
         ctx.write_api.write(bucket=_influx.BUCKET_RACES, record=point)
+        return True
     except Exception as e:
         logging.error("Writing race failed: %s", e)
+        return False
 
 
 def push_influx_session(ctx, session_id, session_name, start_epoc):

@@ -2216,6 +2216,90 @@ class TestPushInfluxRace:
         delete_api.delete.assert_not_called()
         write_api.write.assert_not_called()
 
+    def test_returns_true_on_success(self):
+        ctx, _write_api, _delete_api = self._ctx()
+        assert _mod.push_influx_race(ctx, 5000000) is True
+
+    def test_returns_false_when_delete_fails(self):
+        ctx, _write_api, delete_api = self._ctx()
+        delete_api.delete.side_effect = Exception("network error")
+        assert _mod.push_influx_race(ctx, 5000000) is False
+
+    def test_returns_false_when_write_fails(self):
+        """Delete succeeded, write failed: the metadata point is now gone from
+        Influx — the caller must know so it can fail the run and retry."""
+        ctx, write_api, _delete_api = self._ctx()
+        write_api.write.side_effect = Exception("network error")
+        assert _mod.push_influx_race(ctx, 5000000) is False
+
+    def test_returns_false_when_metadata_none(self):
+        ctx, _write_api, _delete_api = self._ctx()
+        ctx.metadata = None
+        assert _mod.push_influx_race(ctx, 1000) is False
+
+
+class TestOldRaceMetadataFailure:
+    def _session_details(self):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'Name': 'S1', 'SessionStartDateEpoc': 1000,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [{
+                    'Number': '42', 'Category': '1', 'FirstName': 'Jane',
+                    'LastName': 'Doe', 'Position': '1', 'Laps': '1',
+                    'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
+                    'AdditionalData': '',
+                    'LapTimes': [{'Lap': '1', 'LapTime': '0:01:30.000',
+                                  'Position': '1', 'FlagStatus': 0,
+                                  'TotalTime': '0:01:30.000'}],
+                }],
+            },
+        }
+
+    def _ctx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.delete_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        return ctx
+
+    def test_skip_path_fails_run_when_metadata_write_fails(self):
+        """The skip path deletes-then-rewrites metadata too; a silent failure
+        there erases the race from the races bucket while reporting success."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide',
+                              return_value=(1, 1)):
+                with patch.object(_mod, 'push_influx_race', return_value=False):
+                    result = _mod.old_race(ctx, opts)
+        assert result == 1
+
+    def test_write_path_fails_run_when_metadata_write_fails(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=False):
+            with patch.object(_mod, 'print_rankings'):
+                result = _mod.old_race(ctx, opts)
+        assert result == 1
+
+    def test_lap_write_failure_fails_run(self):
+        ctx = self._ctx()
+        ctx.write_api.write.side_effect = Exception("boom")
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            result = _mod.old_race(ctx, opts)
+        assert result == 1
+
+    def test_run_race_propagates_old_race_failure(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'old_race', return_value=1):
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': False})
+        assert result == 1
+
 
 class TestPushInfluxSession:
     def _ctx(self):
