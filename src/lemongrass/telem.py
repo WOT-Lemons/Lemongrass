@@ -60,6 +60,11 @@ def _queue_point(point):
     global _last_append_monotonic
     with pending_lock:
         pending_points.append(point)
+        overflow = len(pending_points) - MAX_PENDING_POINTS
+        if overflow > 0:
+            # Producers can outpace a hung or delayed flush; cap here too so
+            # callbacks can't grow memory unbounded before flush_points requeues.
+            del pending_points[:overflow]
         _last_append_monotonic = monotonic()
 
 
