@@ -1374,6 +1374,31 @@ class TestLiveRaceMetadataFailure:
 
         assert mock_race.call_count == 2
 
+    def test_monitor_retries_metadata_write_with_wallclock_when_epoch_unknown(self):
+        """A failed initial write must still be retried when RaceMonitor never
+        posts a start epoch; otherwise the metadata point stays missing while
+        the monitor ends RACE_ENDED and the run exits 0."""
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
+        ctx.client.race.details.return_value = {'Successful': False}
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        def fake_get_session(race_id):
+            stop.set()
+            return {'Successful': False}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'push_influx_race', return_value=True) as mock_race:
+            with patch.object(_mod, 'refresh_competitor', return_value=[]):
+                with patch.object(_mod, 'push_influx_standings_live', return_value={}):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop,
+                                         race_meta_written=False)
+
+        assert mock_race.call_count == 1
+        assert mock_race.call_args[0][1] > 1_000_000_000_000  # wall-clock ms, not 0
+
 
 class TestOldRaceClassWiring:
     def _session_details(self, car_number='42', cat_id='1', cat_name='A'):

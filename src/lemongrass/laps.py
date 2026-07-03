@@ -582,7 +582,7 @@ def old_race(ctx, opts):
             if delete_existing_standings(ctx):
                 logging.error(
                     "Standings incomplete for race %s — cleared partial standings; "
-                    "the next backfill will rewrite them", ctx.race_id)
+                    "failing the run so the next backfill rewrites them", ctx.race_id)
             else:
                 logging.error(
                     "Standings incomplete for race %s and the cleanup delete failed; "
@@ -713,8 +713,15 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                         # block below performs it and re-attempts on failure.
                         race_meta_written = False
 
-            if opts.network_mode and ctx.start_epoc != 0 and not race_meta_written:
-                race_meta_written = push_influx_race(ctx, ctx.start_epoc * 1000)
+            if opts.network_mode and not race_meta_written:
+                # Fall back to wall-clock (like live_race's initial write) when
+                # RaceMonitor still hasn't posted a start epoch — the point must
+                # not stay missing just because the epoch never arrives; the
+                # epoch recheck above forces a rewrite if it shows up later.
+                race_ts_ms = (
+                    ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+                )
+                race_meta_written = push_influx_race(ctx, race_ts_ms)
 
             try:
                 session_response = ctx.client.live.get_session(ctx.race_id)
