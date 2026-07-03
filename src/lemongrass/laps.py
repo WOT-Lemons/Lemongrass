@@ -625,7 +625,11 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             poll_count += 1
 
             if opts.network_mode and ctx.start_epoc == 0:
-                race_details = ctx.client.race.details(ctx.race_id)
+                try:
+                    race_details = ctx.client.race.details(ctx.race_id)
+                except Exception:
+                    logging.debug("race details refresh failed; skipping epoch recheck")
+                    race_details = {'Successful': False}
                 if race_details.get('Successful'):
                     new_epoc = race_details['Race'].get('StartDateEpoc', 0)
                     if new_epoc != 0:
@@ -665,7 +669,11 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 except Exception:
                     logging.debug("is_live check failed; skipping")
 
-            current_competitor_lap_times = refresh_competitor(ctx)
+            try:
+                current_competitor_lap_times = refresh_competitor(ctx)
+            except Exception:
+                logging.debug("refresh_competitor failed; skipping this poll")
+                continue
             if not current_competitor_lap_times:
                 continue
 

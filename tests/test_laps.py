@@ -374,6 +374,46 @@ class TestMonitorRoutine:
 
         assert 'Passing Information' in caplog.text
 
+    def test_refresh_competitor_exception_does_not_kill_monitor(self):
+        """A transient network error mid-poll must cost one poll, not the race."""
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+
+        calls = 0
+
+        def flaky_refresh(c):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ConnectionError("wifi blip")
+            stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=flaky_refresh):
+            with patch.object(ctx.client.live, 'get_session',
+                              return_value={'Successful': False}):
+                result = _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        assert calls == 2  # survived the first failure and polled again
+        assert result is None
+
+    def test_race_details_exception_does_not_kill_monitor(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+        ctx.client.race.details.side_effect = ConnectionError("wifi blip")
+
+        def fake_refresh(c):
+            stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(ctx.client.live, 'get_session',
+                              return_value={'Successful': False}):
+                with patch.object(_mod, 'push_influx_standings_live', return_value={}):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        # no exception raised is the assertion
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
