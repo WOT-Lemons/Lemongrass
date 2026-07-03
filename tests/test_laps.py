@@ -2721,6 +2721,18 @@ class TestDryRun:
         assert 'car 42' in out
         assert '2 laps' in out
 
+    def test_dry_run_refuses_live_race(self, caplog):
+        """--dry-run is historical-only; entering the live path with write_api=None
+        produces swallowed AttributeErrors instead of writes."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, dry_run=True)
+        with patch.object(_mod, 'live_race') as mock_live:
+            with caplog.at_level(logging.ERROR):
+                result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 1
+        mock_live.assert_not_called()
+        assert any('dry-run' in r.message.lower() for r in caplog.records)
+
 
 class TestComputeClassPositionsLive:
     def _resp(self, competitors, classes=None):

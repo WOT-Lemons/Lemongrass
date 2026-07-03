@@ -257,6 +257,10 @@ def _run_race(ctx, opts, response):
             old_race(ctx, opts)
         else:
             logging.info("Race %s is currently live.", ctx.race_id)
+            if opts.dry_run:
+                logging.error(
+                    "--dry-run is historical-only; race %s is live", ctx.race_id)
+                return 1
             result = live_race(ctx, opts)
             if result is MonitorStatus.INTERRUPTED:
                 sys.exit(130)
