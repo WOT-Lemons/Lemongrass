@@ -3,9 +3,10 @@
 
 import logging
 import os
+import sys
 import threading
 from datetime import datetime, timezone
-from time import sleep
+from time import monotonic, sleep
 
 import obd
 from influxdb_client import Point
@@ -19,6 +20,11 @@ logger = logging.getLogger('telem')
 EXCLUDED_PATTERNS = ["MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
 SKIP_NAMES = {"FREEZE_DTC", "GET_DTC", "GET_CURRENT_DTC", "CLEAR_DTC", "FUEL_TYPE"}
 MAX_DTC_FETCH_FAILURES = 3
+
+# Backlog bound for InfluxDB outages: callbacks keep queueing while writes fail;
+# beyond this many points the oldest are dropped rather than OOM-ing the Pi.
+MAX_PENDING_POINTS = 50_000
+FLUSH_BATCH_SIZE = 5_000
 STATUS_COMMANDS = {"STATUS", "STATUS_DRIVE_CYCLE"}
 
 FUEL_STATUS_MAP = {
@@ -44,6 +50,37 @@ _connection = None  # set by main(); lets new_status trigger on-demand DTC looku
 _last_dtc_count = 0
 _dtc_fetch_failures = 0
 
+# Watchdog: exit (for a supervisor restart) when no data has arrived this long.
+STALE_DATA_TIMEOUT_S = 60
+_last_append_monotonic = 0.0
+
+# Enqueue-side drops happen once per callback while saturated; warn at most
+# this often (with a cumulative count) instead of once per dropped point.
+_DROP_WARN_INTERVAL_S = 60
+_dropped_since_warn = 0
+_last_drop_warn_monotonic = float('-inf')
+
+
+def _queue_point(point):
+    """Append a point to the pending batch and mark data as flowing."""
+    global _last_append_monotonic, _dropped_since_warn, _last_drop_warn_monotonic
+    with pending_lock:
+        pending_points.append(point)
+        overflow = len(pending_points) - MAX_PENDING_POINTS
+        if overflow > 0:
+            # Producers can outpace a hung or delayed flush; cap here too so
+            # callbacks can't grow memory unbounded before flush_points requeues.
+            del pending_points[:overflow]
+            _dropped_since_warn += overflow
+            now = monotonic()
+            if now - _last_drop_warn_monotonic >= _DROP_WARN_INTERVAL_S:
+                logger.warning(
+                    "Backlog exceeded %d points; dropped %d oldest on enqueue",
+                    MAX_PENDING_POINTS, _dropped_since_warn)
+                _dropped_since_warn = 0
+                _last_drop_warn_monotonic = now
+        _last_append_monotonic = monotonic()
+
 
 def _measurement_name(r):
     """Derive the InfluxDB measurement name from a response's command string."""
@@ -68,8 +105,7 @@ def new_value(r):
     except AttributeError:
         logger.debug("Caught AttributeError in new_value")
         return
-    with pending_lock:
-        pending_points.append(point)
+    _queue_point(point)
 
 
 def new_fuel_status(r):
@@ -88,14 +124,11 @@ def new_fuel_status(r):
         logger.debug("Caught IndexError in new_fuel_status")
         return
 
-    fuel_status = next((v for k, v in FUEL_STATUS_MAP.items() if k in r.value), 255)
+    fuel_status = FUEL_STATUS_MAP.get(r.value[0], 255)
     if fuel_status == 3:
         logger.warning("Caught open loop due to system failure")
 
-    with pending_lock:
-        pending_points.append(
-            Point(measurement).field("value", fuel_status).time(ts)
-        )
+    _queue_point(Point(measurement).field("value", fuel_status).time(ts))
 
 
 def new_air_status(r):
@@ -112,10 +145,7 @@ def new_air_status(r):
 
     air_status = AIR_STATUS_MAP.get(r.value, 255)
 
-    with pending_lock:
-        pending_points.append(
-            Point(measurement).field("value", air_status).time(ts)
-        )
+    _queue_point(Point(measurement).field("value", air_status).time(ts))
 
 
 def _query_fuel_type_once(connection):
@@ -140,10 +170,7 @@ def _query_fuel_type_once(connection):
         logger.debug("Caught IndexError in _query_fuel_type_once")
         return
 
-    with pending_lock:
-        pending_points.append(
-            Point(measurement).field("value", r.value).time(ts)
-        )
+    _queue_point(Point(measurement).field("value", r.value).time(ts))
 
 
 def _fetch_and_store_dtcs():
@@ -174,8 +201,7 @@ def _fetch_and_store_dtcs():
     # failure -- store it so a STATUS/GET_DTC disagreement doesn't retry forever.
     codes = ",".join(code for code, _ in r.value)
     ts = datetime.now(timezone.utc)
-    with pending_lock:
-        pending_points.append(Point("-Get-DTCs").field("value", codes).time(ts))
+    _queue_point(Point("-Get-DTCs").field("value", codes).time(ts))
     return True
 
 
@@ -212,13 +238,10 @@ def new_status(r):
         logger.debug("Caught IndexError in new_status")
         return
 
-    with pending_lock:
-        pending_points.append(
-            Point(f"{measurement}-MIL").field("value", int(r.value.MIL)).time(ts)
-        )
-        pending_points.append(
-            Point(f"{measurement}-DTC-Count").field("value", r.value.DTC_count).time(ts)
-        )
+    _queue_point(Point(f"{measurement}-MIL").field("value", int(r.value.MIL)).time(ts))
+    _queue_point(
+        Point(f"{measurement}-DTC-Count").field("value", r.value.DTC_count).time(ts)
+    )
 
     # Only the primary STATUS command drives the on-demand DTC lookup;
     # STATUS_DRIVE_CYCLE just records its own MIL/count.
@@ -253,30 +276,73 @@ def connect():
     return obd.Async(portstr=os.environ.get('OBD_PORT', '/dev/obd'))
 
 
-def flush_points(write_api):
-    """Write all pending points to InfluxDB in a single request."""
+def _configure_obd_logging():
+    """Enable python-obd DEBUG logging only when OBD_DEBUG is set.
+
+    DEBUG logs every serial send/receive; with dozens of watched PIDs cycling
+    continuously that is sustained journald I/O and SD-card wear on the Pi.
+    """
+    if os.environ.get('OBD_DEBUG'):
+        obd.logger.setLevel(obd.logging.DEBUG)
+
+
+def _connection_healthy(connection):
+    """False when the OBD link is gone or no data has arrived recently.
+
+    python-obd's Async loop keeps running after the adapter browns out or the
+    ignition cycles, delivering only null responses — every callback then
+    early-returns and telemetry silently stops. Both signals are checked: the
+    reported connection status, and time since a callback last queued a point.
+    """
+    if not connection.is_connected():
+        logger.error("OBD connection lost")
+        return False
+    if monotonic() - _last_append_monotonic > STALE_DATA_TIMEOUT_S:
+        logger.error("No OBD data received for %ds", STALE_DATA_TIMEOUT_S)
+        return False
+    return True
+
+
+def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
+    """Write all pending points to InfluxDB in batches of batch_size.
+
+    On a failed write the unwritten remainder is re-queued, capped at
+    MAX_PENDING_POINTS with the oldest dropped, so an extended outage cannot
+    grow the backlog without bound — and recovery after the outage goes out in
+    bounded requests instead of one giant write.
+    """
     with pending_lock:
         if not pending_points:
             return
         batch = pending_points.copy()
         pending_points.clear()
+    written = 0
     try:
-        write_api.write(bucket='stats_252/autogen', record=batch)
-        logger.info("Flushed %d points to InfluxDB", len(batch))
+        for i in range(0, len(batch), batch_size):
+            write_api.write(bucket='stats_252/autogen', record=batch[i:i + batch_size])
+            written += len(batch[i:i + batch_size])
+        logger.info("Flushed %d points to InfluxDB", written)
     except Exception as e:
-        logger.error('Failed to write %d points to InfluxDB: %s', len(batch), e)
+        unwritten = batch[written:]
+        logger.error('Failed to write %d points to InfluxDB: %s', len(unwritten), e)
         with pending_lock:
-            pending_points[:0] = batch
+            pending_points[:0] = unwritten
+            overflow = len(pending_points) - MAX_PENDING_POINTS
+            if overflow > 0:
+                del pending_points[:overflow]
+                logger.warning(
+                    "Backlog exceeded %d points; dropped %d oldest",
+                    MAX_PENDING_POINTS, overflow)
 
 
 def main():
     """Main loop of OBD-II scraping"""
-    global _connection
+    global _connection, _last_append_monotonic
 
     with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
-        obd.logger.setLevel(obd.logging.DEBUG)
+        _configure_obd_logging()
         connection = connect()
         status = connection.status()
         while "Car Connected" not in status:
@@ -302,10 +368,17 @@ def main():
             logger.warning("Could not find voltage monitoring command - skipping")
 
         connection.start()
+        _last_append_monotonic = monotonic()
 
         while True:
             sleep(0.5)
             flush_points(write_api)
+            if not _connection_healthy(connection):
+                # Exit nonzero so the container/systemd restart policy re-runs
+                # the well-tested startup connect sequence; the flush at the top
+                # of this iteration already covers pending points.
+                logger.error("Exiting for supervisor restart")
+                sys.exit(1)
 
 
 if __name__ == "__main__":

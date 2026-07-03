@@ -60,3 +60,17 @@ def test_connect_builds_client_with_shared_settings(monkeypatch):
         org=influx_mod.INFLUX_ORG,
         retries=influx_mod.INFLUX_RETRIES,
     )
+
+
+class TestInvalidFluxIds:
+    def test_clean_ids_pass(self):
+        from lemongrass import _influx
+        assert _influx.invalid_flux_ids(['144185', 'car_25-2']) == []
+
+    def test_metacharacters_rejected(self):
+        from lemongrass import _influx
+        assert _influx.invalid_flux_ids(['ok', 'bad"id', 'a b']) == ['bad"id', 'a b']
+
+    def test_non_strings_coerced(self):
+        from lemongrass import _influx
+        assert _influx.invalid_flux_ids([144185]) == []

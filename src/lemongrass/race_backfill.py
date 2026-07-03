@@ -44,7 +44,7 @@ import argparse
 import logging
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from race_monitor import RaceMonitorClient
 
@@ -55,6 +55,8 @@ LEMONS_SEARCH_TERMS = ['Real Hoopties', 'GP du Lac', 'Halloween Hoop']
 DEFAULT_CAR_NUMBER = '252'
 DEFAULT_START_YEAR = 2017
 EPOCH_START = '1970-01-01T00:00:00Z'
+
+WINDOW_PAD_S = _influx.WINDOW_PAD_S
 
 
 class _OverrideAction(argparse.Action):
@@ -144,13 +146,16 @@ def validate_backfill(pairs, query_api):
             continue
 
         race_name = race_records[0].values.get('race_name', 'unknown')
-        range_start = race_records[0].get_time().strftime('%Y-%m-%dT%H:%M:%SZ')
+        range_start = (
+            race_records[0].get_time() - timedelta(seconds=WINDOW_PAD_S)
+        ).strftime('%Y-%m-%dT%H:%M:%SZ')
         end_epoc = race_records[0].get_value()
         if not end_epoc:
             logging.warning("race %s: end_time_epoc=0 in races bucket, using now() as range stop",
                             race_id)
         range_stop = (
-            datetime.fromtimestamp(end_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            datetime.fromtimestamp(end_epoc + WINDOW_PAD_S, tz=timezone.utc)
+            .strftime('%Y-%m-%dT%H:%M:%SZ')
             if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         )
 
@@ -319,6 +324,12 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
 def main():
     """Entry point: parse args, discover races, then backfill or validate."""
     args = _build_parser().parse_args()
+
+    bad = _influx.invalid_flux_ids(
+        [args.car_number, *args.overrides.keys(), *args.overrides.values()])
+    if bad:
+        logging.error("invalid identifier(s): %s", ", ".join(repr(b) for b in bad))
+        sys.exit(1)
 
     if args.upgrade_stored:
         exclusive = [

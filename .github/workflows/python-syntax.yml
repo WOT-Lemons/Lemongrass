@@ -18,4 +18,4 @@ jobs:
           version: "0.11.24"
 
       - name: Check syntax and style
-        run: uv run --with ruff ruff check .
+        run: uv run ruff check .

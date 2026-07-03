@@ -1,6 +1,7 @@
 import base64
 import json
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
+from urllib.error import URLError
 
 import pytest
 
@@ -34,6 +35,14 @@ class TestTokenExpiry:
             payload = {"exp": 9999, "pad": extra}
             assert token_expiry(_make_jwt(payload)) == 9999
 
+    def test_base64url_payload_decoded(self):
+        """JWT payloads are base64url; b64decode silently drops '-'/'_' and
+        corrupts the payload, permanently disabling proactive refresh."""
+        payload = {"exp": 4102444800, "k": ">>>"}
+        body = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+        assert "-" in body or "_" in body  # guard: must exercise base64url chars
+        assert token_expiry(f"header.{body}.sig") == 4102444800
+
 
 class TestReadCredentials:
     def test_returns_credentials_from_config(self):
@@ -55,6 +64,20 @@ class TestReadCredentials:
             assert read_credentials() == (None, None)
 
 
+class TestHttpTimeouts:
+    def test_login_passes_timeout(self):
+        with patch.object(_mod.urllib.request, "urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.read.return_value = b"tok"
+            _mod.login("u", "p")
+        assert mock_open.call_args.kwargs["timeout"] == _mod.HTTP_TIMEOUT_S
+
+    def test_exec_command_passes_timeout(self):
+        with patch.object(_mod.urllib.request, "urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.read.return_value = b"battery: 84.5"
+            _mod.exec_command("get battery")
+        assert mock_open.call_args.kwargs["timeout"] == _mod.HTTP_TIMEOUT_S
+
+
 class TestMain:
     def test_missing_influx_token_exits_before_pisugar_login(self):
         """A missing INFLUX_TELEMETRY_TOKEN must fail fast: exit before attempting
@@ -68,3 +91,47 @@ class TestMain:
                         _mod.main()
         assert exc.value.code == 1
         login.assert_not_called()
+
+
+class TestExecCommandCoercion:
+    def test_raw_mode_preserves_version_strings(self):
+        """Firmware '1.10' must not become the float 1.1 in device tags."""
+        with patch.object(_mod.urllib.request, "urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.read.return_value = \
+                b"firmware_version: 1.10"
+            assert _mod.exec_command("get firmware_version", coerce=False) == "1.10"
+
+    def test_default_mode_still_coerces_floats(self):
+        with patch.object(_mod.urllib.request, "urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.read.return_value = \
+                b"battery: 84.5"
+            assert _mod.exec_command("get battery") == 84.5
+
+
+class TestStartupConnect:
+    def test_retries_until_server_reachable(self):
+        """The monitor often boots before pisugar-server binds :8421; it must
+        retry instead of dying with a traceback."""
+        with patch.object(_mod, "login", side_effect=[URLError("refused"), "tok"]) as mock_login:
+            with patch.object(_mod, "exec_command", return_value="PiSugar 3") as mock_exec:
+                with patch.object(_mod, "sleep") as mock_sleep:
+                    token, tags = _mod._startup_connect("u", "p")
+        assert token == "tok"
+        assert mock_login.call_count == 2
+        mock_sleep.assert_called_once_with(_mod.STARTUP_RETRY_DELAY_S)
+        assert tags == {"server_version": "PiSugar 3", "model": "PiSugar 3",
+                        "firmware_version": "PiSugar 3"}
+        # Device tags must be read raw; coerce=False keeps "PiSugar 3" from being
+        # numerically mangled.
+        assert mock_exec.call_args_list == [
+            call("get version", "tok", coerce=False),
+            call("get model", "tok", coerce=False),
+            call("get firmware_version", "tok", coerce=False),
+        ]
+
+    def test_no_credentials_skips_login(self):
+        with patch.object(_mod, "login") as mock_login:
+            with patch.object(_mod, "exec_command", return_value="PiSugar 3"):
+                token, _tags = _mod._startup_connect(None, None)
+        assert token is None
+        mock_login.assert_not_called()

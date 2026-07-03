@@ -4,6 +4,7 @@ import json
 import sys
 
 from influxdb_client.rest import ApiException
+from race_monitor import RaceMonitorError, RaceMonitorHTTPError
 from urllib3.exceptions import HTTPError
 
 from lemongrass import _influx
@@ -54,6 +55,24 @@ def _format_influx_error(exc):
     return str(exc) or exc.__class__.__name__
 
 
+def _report_race_monitor_error(exc):
+    """Print a one-line reason for a RaceMonitor API failure (no traceback).
+
+    race-monitor 0.7.0 bounds 429 retries by max_retries and raises
+    RaceMonitorHTTPError once they're exhausted instead of retrying forever, so
+    the CLI must surface rate-limit exhaustion cleanly rather than crashing."""
+    if isinstance(exc, RaceMonitorHTTPError) and exc.status_code == 429:
+        print("Error: RaceMonitor rate limit exceeded (HTTP 429) — retries "
+              "exhausted. Try again in a minute.", file=sys.stderr)
+    elif isinstance(exc, RaceMonitorHTTPError):
+        print(f"Error: RaceMonitor request failed (HTTP {exc.status_code})",
+              file=sys.stderr)
+        if exc.body:
+            print(f"  {' '.join(str(exc.body).split())}", file=sys.stderr)
+    else:
+        print(f"Error: RaceMonitor client error: {exc}", file=sys.stderr)
+
+
 def main():
     """Dispatch to the subcommand named by the first CLI argument."""
     if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help"):
@@ -68,11 +87,12 @@ def main():
 
     cmd = sys.argv.pop(1)
     sys.argv[0] = f"lemongrass-{cmd}"
-    # The only urllib3/HTTP traffic in these commands is the InfluxDB client, so
-    # any ApiException/HTTPError is an InfluxDB failure. Report it cleanly (no
-    # traceback), distinguishing "unreachable" from a reached-but-rejected request.
+    # Two HTTP clients can fail here: the InfluxDB client (ApiException/HTTPError)
+    # and the RaceMonitor client (RaceMonitorError). Report either cleanly (no
+    # traceback); for Influx, distinguish "unreachable" from a reached-but-rejected
+    # request.
     try:
-        importlib.import_module(_COMMANDS[cmd]).main()
+        result = importlib.import_module(_COMMANDS[cmd]).main()
     except (ApiException, HTTPError) as exc:
         if _influx_unreachable(exc):
             print(f"Error: cannot reach InfluxDB at {_influx.INFLUX_URL}", file=sys.stderr)
@@ -80,3 +100,7 @@ def main():
             print(f"Error: InfluxDB request failed at {_influx.INFLUX_URL}", file=sys.stderr)
         print(f"  {_format_influx_error(exc)}", file=sys.stderr)
         sys.exit(1)
+    except RaceMonitorError as exc:
+        _report_race_monitor_error(exc)
+        sys.exit(1)
+    sys.exit(result)

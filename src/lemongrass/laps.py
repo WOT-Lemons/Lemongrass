@@ -71,6 +71,8 @@ class MonitorStatus(enum.Enum):
 
     RACE_ENDED = "race_ended"
     INTERRUPTED = "interrupted"
+    NO_LIVE_DATA = "no_live_data"
+    WRITE_FAILED = "write_failed"
 
 
 @dataclass
@@ -160,6 +162,18 @@ def main():
     # Pandas default max rows truncating lap times. I don't expect a team to do more than 1024 laps.
     pandas.set_option("display.max_rows", 1024)
 
+    race_id = str(args.race_id[0])
+    car_number = str(args.car_number) if args.car_number is not None else None
+
+    # Validate user-supplied identifiers before touching RaceMonitor/Influx —
+    # race_id and car_number are interpolated into Flux delete predicates and
+    # queries below, so an unsafe value must not reach token resolution.
+    ids_to_check = [race_id] if car_number is None else [race_id, car_number]
+    bad_ids = _influx.invalid_flux_ids(ids_to_check)
+    if bad_ids:
+        logging.error("invalid identifier(s): %s", ", ".join(f'"{b}"' for b in bad_ids))
+        sys.exit(1)
+
     tokens = resolve_tokens()
     if not tokens:
         logging.error("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN environment variable not set")
@@ -171,9 +185,6 @@ def main():
             and not os.environ.get('INFLUX_TELEMETRY_TOKEN')):
         logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
         sys.exit(1)
-
-    race_id = str(args.race_id[0])
-    car_number = str(args.car_number) if args.car_number is not None else None
 
     opts = RaceOptions(
         network_mode=args.network_mode or args.dry_run,
@@ -253,11 +264,20 @@ def _run_race(ctx, opts, response):
             logging.info("Race %s is not live. Monitor mode disabled.", ctx.race_id)
             if opts.monitor_mode:
                 return 0
-            old_race(ctx, opts)
+            return old_race(ctx, opts) or 0
         else:
             logging.info("Race %s is currently live.", ctx.race_id)
-            if live_race(ctx, opts) is MonitorStatus.INTERRUPTED:
+            if opts.dry_run:
+                logging.error(
+                    "--dry-run is historical-only; race %s is live", ctx.race_id)
+                return 1
+            result = live_race(ctx, opts)
+            if result is MonitorStatus.INTERRUPTED:
                 sys.exit(130)
+            if result is MonitorStatus.NO_LIVE_DATA:
+                return 1
+            if result is MonitorStatus.WRITE_FAILED:
+                return 1
         return 0
     except KeyboardInterrupt:
         logging.info("Interrupted, exiting.")
@@ -278,24 +298,23 @@ def live_race(ctx, opts):
 
     print_rankings([], True, opts.selected_class, {})
 
-    competitor_details = {}
-    laps = []
-
     # Get lap times from live racer
     logging.debug("Getting lap times for %s from race %s.", ctx.car_number, ctx.race_id)
     response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
 
-    if response['Successful']:
-        laps = response['Details']['Laps']
-        competitor_details = response['Details']['Competitor']
+    if not response['Successful']:
+        logging.error(
+            "No live data for car %s in race %s — check that the car number is "
+            "registered in the live feed", ctx.car_number, ctx.race_id)
+        return MonitorStatus.NO_LIVE_DATA
 
-    # Make name
-    competitor_details['Name'] = (
-        competitor_details['FirstName'] + ' ' + competitor_details['LastName'])
+    laps = response['Details']['Laps']
+    competitor_details = response['Details']['Competitor']
 
     first = competitor_details.get('FirstName', '')
     last = competitor_details.get('LastName', '')
-    competitor_name = f"{first} {last}".strip() or None
+    competitor_details['Name'] = f"{first} {last}".strip()
+    competitor_name = competitor_details['Name'] or None
     car_info = competitor_details.get('AdditionalData') or None
     class_name, class_position = _resolve_class_live(session_response, ctx.car_number)
 
@@ -323,9 +342,10 @@ def live_race(ctx, opts):
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
+    race_meta_written = True
     if opts.network_mode:
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-        push_influx_race(ctx, race_ts_ms)
+        race_meta_written = push_influx_race(ctx, race_ts_ms)
         if live_session_id is not None:
             push_influx_session(ctx, live_session_id, live_session_name, None)
         if laps:
@@ -344,7 +364,12 @@ def live_race(ctx, opts):
 
     if opts.monitor_mode:
         return monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
-                               session_id=live_session_id)
+                               session_id=live_session_id, race_meta_written=race_meta_written)
+
+    if opts.network_mode and not race_meta_written:
+        # No monitor loop to retry in; signal a failed run so a rerun restores
+        # the (possibly deleted) race metadata point.
+        return MonitorStatus.WRITE_FAILED
 
 
 def old_race(ctx, opts):
@@ -356,11 +381,21 @@ def old_race(ctx, opts):
     logging.debug("Getting sessions for race for %s", ctx.race_id)
     race_details = ctx.client.results.sessions_for_race(ctx.race_id)
 
-    session_ids_for_race = [s['ID'] for s in race_details['Sessions']]
+    session_ids_for_race = [s['ID'] for s in race_details.get('Sessions', [])]
+
+    if not session_ids_for_race:
+        logging.warning(
+            "No sessions found for race %s — nothing to display or write", ctx.race_id)
+        return
 
     logging.debug(
         "Race %s has %s sessions, %s",
         ctx.race_id, len(session_ids_for_race), session_ids_for_race)
+
+    if not opts.network_mode:
+        # Display mode prints only the final session's rankings; fetching the
+        # earlier sessions would spend RaceMonitor rate limit on discarded data.
+        session_ids_for_race = session_ids_for_race[-1:]
 
     pending_writes = []
 
@@ -384,6 +419,7 @@ def old_race(ctx, opts):
                 'start_epoc': start_epoc,
                 'competitors': [],
             }
+            class_index = _build_class_index(session_details)
             for competitor in sorted_competitors:
                 comp_laps = competitor.get('LapTimes', [])
                 if not comp_laps:
@@ -399,12 +435,38 @@ def old_race(ctx, opts):
                     or None
                 )
                 comp_car_info = competitor.get('AdditionalData') or None
-                influx_laps = [
-                    {**lap, 'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus']))}
-                    for lap in comp_laps
-                ]
+                influx_laps = []
+                for lap in comp_laps:
+                    # Filter here — not only in _build_lap_points — so the expected
+                    # count used by --skip-if-complete matches what actually gets
+                    # written; otherwise one garbage lap re-triggers the delete+
+                    # rewrite on every backfill run.
+                    try:
+                        int(lap['Lap'])
+                    except (ValueError, TypeError):
+                        logging.warning(
+                            "%s for car %s; excluding lap from backfill",
+                            _describe_bad_value(lap['Lap'], 'Lap'), comp_number)
+                        continue
+                    if _time_to_ms(lap['TotalTime']) is None:
+                        logging.warning(
+                            "%s for car %s; excluding lap from backfill",
+                            _describe_bad_value(lap['TotalTime'], 'TotalTime'), comp_number)
+                        continue
+                    influx_laps.append({
+                        **lap,
+                        'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus'])),
+                    })
+                if not influx_laps:
+                    # Every lap was filtered out; appending an empty competitor would
+                    # leave expected==0 and let the write path delete existing laps
+                    # without writing replacements.
+                    logging.warning(
+                        "No parseable laps for car %s; excluding competitor from backfill",
+                        comp_number)
+                    continue
                 class_name, class_positions = _resolve_class_historical(
-                    comp_number, session_details)
+                    comp_number, session_details, class_index)
                 session_entry['competitors'].append({
                     'influx_laps': influx_laps,
                     'competitor_name': comp_name,
@@ -462,7 +524,11 @@ def old_race(ctx, opts):
                     race_ts_ms = (
                         ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                     )
-                    push_influx_race(ctx, race_ts_ms)
+                    if not push_influx_race(ctx, race_ts_ms):
+                        logging.error(
+                            "Race metadata write failed for race %s — failing the "
+                            "run so the next backfill retries", ctx.race_id)
+                        return 1
                     logging.info(
                         "SKIP: race %s already complete and current (%d laps, schema v%d)",
                         ctx.race_id, total, SCHEMA_VERSION)
@@ -488,11 +554,16 @@ def old_race(ctx, opts):
                         comp['car_number'], session['session_id']))
                 _write_points_chunked(ctx.write_api, session_points)
             logging.info("All lap data written successfully")
-            push_influx_race(ctx, race_ts_ms)
         except Exception as e:
             logging.error("Writing laps failed for race %s: %s", ctx.race_id, e)
             logging.warning("Skipping race stamp so next run will re-backfill")
-            return
+            return 1
+
+        if not push_influx_race(ctx, race_ts_ms):
+            logging.error(
+                "Race metadata write failed for race %s — failing the run so the "
+                "next backfill retries", ctx.race_id)
+            return 1
 
         for session in pending_writes:
             push_influx_session(
@@ -511,11 +582,12 @@ def old_race(ctx, opts):
             if delete_existing_standings(ctx):
                 logging.error(
                     "Standings incomplete for race %s — cleared partial standings; "
-                    "the next backfill will rewrite them", ctx.race_id)
+                    "failing the run so the next backfill rewrites them", ctx.race_id)
             else:
                 logging.error(
                     "Standings incomplete for race %s and the cleanup delete failed; "
                     "rerun with --force to rewrite standings", ctx.race_id)
+            return 1
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])
@@ -598,7 +670,7 @@ def write_csv(filename, competitor_lap_times):
 
 
 def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
-                    session_id=None) -> MonitorStatus | None:
+                    session_id=None, race_meta_written=True) -> MonitorStatus | None:
     """Poll for new laps during a live race, printing and optionally pushing each to InfluxDB.
 
     Returns MonitorStatus.RACE_ENDED when the race ends naturally, or
@@ -606,6 +678,10 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     _stop_event may be injected for testing; defaults to a new threading.Event.
     session_id is tracked across polls and tags each written lap point; a new
     session push fires whenever the live session ID changes.
+    race_meta_written reflects whether the caller's initial push_influx_race
+    succeeded; when False (or after the epoch is corrected below) the metadata
+    write is retried each poll until it lands, so a transient delete/write
+    failure self-heals without aborting lap capture.
     """
     logging.info("Monitoring car %s...", ctx.car_number)
     print(UNDERLINE)
@@ -622,7 +698,11 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             poll_count += 1
 
             if opts.network_mode and ctx.start_epoc == 0:
-                race_details = ctx.client.race.details(ctx.race_id)
+                try:
+                    race_details = ctx.client.race.details(ctx.race_id)
+                except Exception:
+                    logging.debug("race details refresh failed; skipping epoch recheck")
+                    race_details = {'Successful': False}
                 if race_details.get('Successful'):
                     new_epoc = race_details['Race'].get('StartDateEpoc', 0)
                     if new_epoc != 0:
@@ -630,7 +710,19 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                         if ctx.metadata is not None:
                             ctx.metadata.end_time_epoc = race_details['Race'].get(
                                 'EndDateEpoc', ctx.metadata.end_time_epoc)
-                        push_influx_race(ctx, ctx.start_epoc * 1000)
+                        # Force a rewrite with the corrected timestamp; the retry
+                        # block below performs it and re-attempts on failure.
+                        race_meta_written = False
+
+            if opts.network_mode and not race_meta_written:
+                # Fall back to wall-clock (like live_race's initial write) when
+                # RaceMonitor still hasn't posted a start epoch — the point must
+                # not stay missing just because the epoch never arrives; the
+                # epoch recheck above forces a rewrite if it shows up later.
+                race_ts_ms = (
+                    ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+                )
+                race_meta_written = push_influx_race(ctx, race_ts_ms)
 
             try:
                 session_response = ctx.client.live.get_session(ctx.race_id)
@@ -662,7 +754,11 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 except Exception:
                     logging.debug("is_live check failed; skipping")
 
-            current_competitor_lap_times = refresh_competitor(ctx)
+            try:
+                current_competitor_lap_times = refresh_competitor(ctx)
+            except Exception:
+                logging.debug("refresh_competitor failed; skipping this poll")
+                continue
             if not current_competitor_lap_times:
                 continue
 
@@ -713,19 +809,24 @@ def _time_to_ms(value):
     """Parse a RaceMonitor time string to milliseconds.
 
     Accepts variable precision: 'H:MM:SS.mmm', 'MM:SS.mmm', or 'SS.mmm', with the
-    fractional '.mmm' part optional. RaceMonitor omits the hours component when a
-    value is under an hour, so we right-align the colon-separated parts.
+    fractional part optional and of any length (padded/truncated to milliseconds).
+    RaceMonitor omits the hours component when a value is under an hour, so we
+    right-align the colon-separated parts.
 
-    Returns None for unparseable values, which causes the field to be omitted
-    from the InfluxDB point. The API occasionally returns garbage for invalid
-    or pit laps.
+    Returns None for empty input (a competitor with no lap yet — common, so not
+    logged) and for unparseable values (logged; the API occasionally returns
+    garbage for invalid or pit laps), causing the field to be omitted from the
+    InfluxDB point.
     """
+    if not value:
+        return None
     try:
         parts = value.split(':')
         sec, _, ms = parts[-1].partition('.')
         hours = int(parts[-3]) if len(parts) >= 3 else 0
         minutes = int(parts[-2]) if len(parts) >= 2 else 0
-        return hours * 3600000 + minutes * 60000 + int(sec) * 1000 + int(ms or 0)
+        return (hours * 3600000 + minutes * 60000 + int(sec) * 1000
+                + int(ms.ljust(3, '0')[:3]))
     except (ValueError, AttributeError):
         logging.warning("%s; omitting field", _describe_bad_value(value, 'time'))
         return None
@@ -751,7 +852,12 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
     start_epoc_ms = effective_epoc * 1000
     points = []
     for lap in laps:
-        time_lap_completed_ms = start_epoc_ms + (_time_to_ms(lap['TotalTime']) or 0)
+        total_time_ms = _time_to_ms(lap['TotalTime'])
+        if total_time_ms is None:
+            logging.warning("%s for %s; skipping lap",
+                            _describe_bad_value(lap['TotalTime'], 'TotalTime'), competitor_name)
+            continue
+        time_lap_completed_ms = start_epoc_ms + total_time_ms
         lap_time_ms = _time_to_ms(lap['LapTime'])
         try:
             lap_num = int(lap['Lap'])
@@ -829,10 +935,16 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
 
 
 def push_influx_race(ctx, timestamp_ms):
-    """Write one race metadata point to the races bucket, replacing any prior point."""
+    """Write one race metadata point to the races bucket, replacing any prior point.
+
+    Returns True on success. Returns False when metadata is missing or the
+    delete/write fails — the delete may have already removed the old point, so
+    a False return means the race may now be absent from the races bucket and
+    the caller must treat the run as failed so a retry restores it.
+    """
     if ctx.metadata is None:
         logging.warning("push_influx_race called with no metadata for race %s", ctx.race_id)
-        return
+        return False
     try:
         ctx.delete_api.delete(
             start='1970-01-01T00:00:00Z',
@@ -851,8 +963,10 @@ def push_influx_race(ctx, timestamp_ms):
             .time(timestamp_ms, WritePrecision.MS)
         )
         ctx.write_api.write(bucket=_influx.BUCKET_RACES, record=point)
+        return True
     except Exception as e:
         logging.error("Writing race failed: %s", e)
+        return False
 
 
 def push_influx_session(ctx, session_id, session_name, start_epoc):
@@ -987,25 +1101,48 @@ def existing_standings_counts_fieldwide(ctx):
     return total, current
 
 
-def _resolve_class_historical(car_number, session_details):
-    """Return (class_name, {lap_num: class_position}) for the given car_number."""
+def _build_class_index(session_details):
+    """Precompute per-session class-position data shared by every competitor.
+
+    Returns (categories, category_by_car, laps_by_car, positions_by_category):
+    laps_by_car maps car_number -> {lap_num: overall_position} and
+    positions_by_category maps category -> {lap_num: [overall_positions]} across
+    all cars in that category. Built once per session so resolving N competitors
+    is O(total laps), not O(N * total laps).
+    """
     session = session_details['Session']
-    competitors = session['SortedCompetitors']
     categories = session['Categories']
+    category_by_car = {}
+    laps_by_car = {}
+    positions_by_category = defaultdict(lambda: defaultdict(list))
+    for competitor in session['SortedCompetitors']:
+        number = competitor['Number']
+        category_by_car[number] = competitor['Category']
+        lap_positions = {}
+        for lap in competitor.get('LapTimes', []):
+            try:
+                lap_positions[int(lap['Lap'])] = int(lap['Position'])
+            except (KeyError, ValueError, TypeError):
+                logging.debug("%s in class resolution; skipping",
+                              _describe_bad_value(lap.get('Lap'), 'Lap'))
+        laps_by_car[number] = lap_positions
+        for lap_num, pos in lap_positions.items():
+            positions_by_category[competitor['Category']][lap_num].append(pos)
+    return categories, category_by_car, laps_by_car, positions_by_category
 
-    tracked_category = None
-    tracked_laps = {}
-    for competitor in competitors:
-        if competitor['Number'] == car_number:
-            tracked_category = competitor['Category']
-            for lap in competitor['LapTimes']:
-                try:
-                    tracked_laps[int(lap['Lap'])] = int(lap['Position'])
-                except (ValueError, TypeError):
-                    logging.debug("%s in class resolution; skipping",
-                                  _describe_bad_value(lap['Lap'], 'Lap'))
-            break
 
+def _resolve_class_historical(car_number, session_details, index=None):
+    """Return (class_name, {lap_num: class_position}) for the given car_number.
+
+    index is the result of _build_class_index for this session; callers resolving
+    many cars should build it once and pass it in. When omitted it is built on
+    the fly (single-car callers and tests).
+    """
+    if index is None:
+        index = _build_class_index(session_details)
+    categories, category_by_car, laps_by_car, positions_by_category = index
+
+    tracked_category = category_by_car.get(car_number)
     if tracked_category is None:
         return None, {}
 
@@ -1014,20 +1151,12 @@ def _resolve_class_historical(car_number, session_details):
         .get('Name', tracked_category)
     )
 
-    class_lap_positions = defaultdict(list)
-    for competitor in competitors:
-        if competitor['Number'] == car_number or competitor['Category'] != tracked_category:
-            continue
-        for lap in competitor['LapTimes']:
-            try:
-                class_lap_positions[int(lap['Lap'])].append(int(lap['Position']))
-            except (ValueError, TypeError):
-                logging.debug("%s in class position resolution; skipping",
-                              _describe_bad_value(lap['Lap'], 'Lap'))
-
+    # The tracked car's own position is never < itself, so including it in the
+    # per-category lists (unlike the old per-car rescan) does not change counts.
+    class_lap_positions = positions_by_category[tracked_category]
     class_positions = {
         lap_num: 1 + sum(1 for pos in class_lap_positions.get(lap_num, []) if pos < tracked_pos)
-        for lap_num, tracked_pos in tracked_laps.items()
+        for lap_num, tracked_pos in laps_by_car[car_number].items()
     }
 
     return class_name, class_positions

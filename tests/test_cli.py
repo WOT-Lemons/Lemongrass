@@ -20,17 +20,20 @@ class TestDispatcher:
         assert exc.value.code != 0
 
     def test_routes_to_laps(self):
-        mock_main = MagicMock()
+        mock_main = MagicMock(return_value=None)
         with patch.object(sys, 'argv', ['lemongrass', 'laps', '--help']):
             with patch('lemongrass.laps.main', mock_main):
-                cli.main()
+                with pytest.raises(SystemExit) as exc:
+                    cli.main()
+        assert exc.value.code is None
         mock_main.assert_called_once()
 
     def test_routes_to_telem(self):
-        mock_main = MagicMock()
+        mock_main = MagicMock(return_value=None)
         with patch.object(sys, 'argv', ['lemongrass', 'telem']):
             with patch('lemongrass.telem.main', mock_main):
-                cli.main()
+                with pytest.raises(SystemExit):
+                    cli.main()
         mock_main.assert_called_once()
 
     def test_shifts_argv_for_subcommand(self):
@@ -42,7 +45,8 @@ class TestDispatcher:
 
         with patch.object(sys, 'argv', ['lemongrass', 'race-diagnose', 'R001', '42']):
             with patch('lemongrass.race_diagnose.main', capture_main):
-                cli.main()
+                with pytest.raises(SystemExit):
+                    cli.main()
 
         assert captured['argv'][1] == 'R001'
         assert captured['argv'][2] == '42'
@@ -155,3 +159,67 @@ class TestInfluxErrorHandling:
                     cli.main()
         err = capsys.readouterr().err
         assert 'bucket "laps" not found' in err
+
+
+class TestRaceMonitorErrors:
+    def test_429_exhaustion_exits_1_with_rate_limit_message(self, capsys):
+        """race-monitor 0.7.0 raises RaceMonitorHTTPError(429) once retries are
+        exhausted; the CLI must report it cleanly, not crash with a traceback."""
+        from race_monitor import RaceMonitorHTTPError
+
+        def raise_429():
+            raise RaceMonitorHTTPError(429, "Too Many Requests")
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_429):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        err = capsys.readouterr().err
+        assert 'rate limit' in err.lower()
+        assert '429' in err
+
+    def test_other_http_error_exits_1_with_status(self, capsys):
+        from race_monitor import RaceMonitorHTTPError
+
+        def raise_500():
+            raise RaceMonitorHTTPError(500, "boom")
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_500):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        err = capsys.readouterr().err
+        assert '500' in err
+        assert 'rate limit' not in err.lower()
+
+    def test_base_error_exits_1_without_traceback(self, capsys):
+        from race_monitor import RaceMonitorError
+
+        def raise_base():
+            raise RaceMonitorError("no tokens configured")
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_base):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        assert 'no tokens configured' in capsys.readouterr().err
+
+
+class TestExitCodePropagation:
+    def test_subcommand_return_value_becomes_exit_code(self):
+        """laps.main() returns 1 on failure; the dispatcher must not swallow it."""
+        with patch.object(sys, 'argv', ['lemongrass', 'laps', '123']):
+            with patch('lemongrass.laps.main', return_value=1):
+                with pytest.raises(SystemExit) as exc:
+                    cli.main()
+        assert exc.value.code == 1
+
+    def test_none_return_exits_zero(self):
+        with patch.object(sys, 'argv', ['lemongrass', 'laps', '123']):
+            with patch('lemongrass.laps.main', return_value=None):
+                with pytest.raises(SystemExit) as exc:
+                    cli.main()
+        assert exc.value.code is None  # sys.exit(None) == process exit status 0

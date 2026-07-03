@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, call, mock_open, patch
 
@@ -374,6 +375,46 @@ class TestMonitorRoutine:
 
         assert 'Passing Information' in caplog.text
 
+    def test_refresh_competitor_exception_does_not_kill_monitor(self):
+        """A transient network error mid-poll must cost one poll, not the race."""
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+
+        calls = 0
+
+        def flaky_refresh(c):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ConnectionError("wifi blip")
+            stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=flaky_refresh):
+            with patch.object(ctx.client.live, 'get_session',
+                              return_value={'Successful': False}):
+                result = _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        assert calls == 2  # survived the first failure and polled again
+        assert result is None
+
+    def test_race_details_exception_does_not_kill_monitor(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+        ctx.client.race.details.side_effect = ConnectionError("wifi blip")
+
+        def fake_refresh(c):
+            stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(ctx.client.live, 'get_session',
+                              return_value={'Successful': False}):
+                with patch.object(_mod, 'push_influx_standings_live', return_value={}):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        # no exception raised is the assertion
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
@@ -608,6 +649,24 @@ class TestTimeToMs:
         assert result is None
         assert 'unparseable' in caplog.text
 
+    def test_empty_string_returns_none_without_warning(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            assert _mod._time_to_ms('') is None
+        assert caplog.text == ''
+
+    def test_none_returns_none_without_warning(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            assert _mod._time_to_ms(None) is None
+        assert caplog.text == ''
+
+    def test_short_fraction_is_padded_not_misread(self):
+        assert _mod._time_to_ms('1:23.4') == 1 * 60000 + 23 * 1000 + 400
+
+    def test_long_fraction_is_truncated_to_ms(self):
+        assert _mod._time_to_ms('23.4567') == 23 * 1000 + 456
+
 
 class TestPushInfluxClassInfo:
     def _laps(self):
@@ -761,13 +820,15 @@ class TestPushInfluxClassInfo:
         _mod.push_influx(ctx, laps, False)
         assert 'lap_time' not in self._record(write_api)
 
-    def test_unparseable_total_time_anchors_to_start_epoc(self):
+    def test_unparseable_total_time_skips_lap_entirely(self):
+        """A lap with unparseable TotalTime must not be written at all — anchoring
+        it at start_epoc_ms + 0 would silently collide/dedupe with any other lap
+        legitimately timestamped at session start."""
         ctx, write_api = self._ctx()  # start_epoc=0
         laps = [{'Lap': '1', 'LapTime': '1:30.000', 'Position': '1',
                  'FlagStatus': 'Green', 'TotalTime': '3$H'}]
         _mod.push_influx(ctx, laps, False)
-        # TotalTime unparseable → falls back to 0; timestamp = start_epoc_ms + 0 = 0
-        assert self._record(write_api).endswith(' 0')
+        write_api.write.assert_not_called()
 
     def test_explicit_car_number_overrides_ctx(self):
         ctx, write_api = self._ctx()  # ctx.car_number = '42'
@@ -1245,6 +1306,100 @@ class TestLiveRaceStandingsWrite:
         mock_standings.assert_not_called()
 
 
+class TestLiveRaceMetadataFailure:
+    def _ctx(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000)
+        ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': {
+            'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+        ctx.client.live.get_racer.return_value = {
+            'Successful': True,
+            'Details': {
+                'Competitor': {
+                    'FirstName': 'Ben', 'LastName': 'K', 'Number': '42',
+                    'Transponder': 'T', 'BestPosition': '1', 'Position': '1',
+                    'Laps': '5', 'BestLap': '3', 'BestLapTime': '1:30.000',
+                    'TotalTime': '10:00.000', 'AdditionalData': None,
+                },
+                'Laps': [],
+            },
+        }
+        return ctx
+
+    def test_non_monitor_returns_write_failed_when_metadata_write_fails(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=False, interval=30)
+        with patch.object(_mod, 'push_influx_race', return_value=False):
+            with patch.object(_mod, 'push_influx_session'):
+                with patch.object(_mod, 'push_influx'):
+                    with patch.object(_mod, 'push_influx_standings_live'):
+                        result = _mod.live_race(ctx, opts)
+        assert result is _mod.MonitorStatus.WRITE_FAILED
+
+    def test_non_monitor_returns_none_when_metadata_write_succeeds(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=False, interval=30)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'push_influx_session'):
+                with patch.object(_mod, 'push_influx'):
+                    with patch.object(_mod, 'push_influx_standings_live'):
+                        result = _mod.live_race(ctx, opts)
+        assert result is None
+
+    def test_monitor_retries_metadata_write_until_success(self):
+        """A failed metadata write must be retried on later polls, not abort
+        the loop or be dropped after one attempt."""
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000)
+        ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        call_count = 0
+        def fake_get_session(race_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 3:
+                stop.set()
+            return {'Successful': True, 'Session': {
+                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        # First write fails, second succeeds; a third poll must not push again.
+        with patch.object(_mod, 'push_influx_race', side_effect=[False, True]) as mock_race:
+            with patch.object(_mod, 'refresh_competitor', return_value=[]):
+                with patch.object(_mod, 'push_influx_standings_live', return_value={}):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop,
+                                         race_meta_written=False)
+
+        assert mock_race.call_count == 2
+
+    def test_monitor_retries_metadata_write_with_wallclock_when_epoch_unknown(self):
+        """A failed initial write must still be retried when RaceMonitor never
+        posts a start epoch; otherwise the metadata point stays missing while
+        the monitor ends RACE_ENDED and the run exits 0."""
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
+        ctx.client.race.details.return_value = {'Successful': False}
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        def fake_get_session(race_id):
+            stop.set()
+            return {'Successful': False}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        with patch.object(_mod, 'push_influx_race', return_value=True) as mock_race:
+            with patch.object(_mod, 'refresh_competitor', return_value=[]):
+                with patch.object(_mod, 'push_influx_standings_live', return_value={}):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop,
+                                         race_meta_written=False)
+
+        assert mock_race.call_count == 1
+        assert mock_race.call_args[0][1] > 1_000_000_000_000  # wall-clock ms, not 0
+
+
 class TestOldRaceClassWiring:
     def _session_details(self, car_number='42', cat_id='1', cat_name='A'):
         return {
@@ -1282,7 +1437,8 @@ class TestOldRaceClassWiring:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        mock_resolve.assert_any_call('42', self._session_details())
+        expected_index = _mod._build_class_index(self._session_details())
+        mock_resolve.assert_any_call('42', self._session_details(), expected_index)
 
     def test_passes_class_name_to_build_lap_points(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -2158,6 +2314,115 @@ class TestPushInfluxRace:
         delete_api.delete.assert_not_called()
         write_api.write.assert_not_called()
 
+    def test_returns_true_on_success(self):
+        ctx, _write_api, _delete_api = self._ctx()
+        assert _mod.push_influx_race(ctx, 5000000) is True
+
+    def test_returns_false_when_delete_fails(self):
+        ctx, _write_api, delete_api = self._ctx()
+        delete_api.delete.side_effect = Exception("network error")
+        assert _mod.push_influx_race(ctx, 5000000) is False
+
+    def test_returns_false_when_write_fails(self):
+        """Delete succeeded, write failed: the metadata point is now gone from
+        Influx — the caller must know so it can fail the run and retry."""
+        ctx, write_api, _delete_api = self._ctx()
+        write_api.write.side_effect = Exception("network error")
+        assert _mod.push_influx_race(ctx, 5000000) is False
+
+    def test_returns_false_when_metadata_none(self):
+        ctx, _write_api, _delete_api = self._ctx()
+        ctx.metadata = None
+        assert _mod.push_influx_race(ctx, 1000) is False
+
+
+class TestOldRaceMetadataFailure:
+    def _session_details(self):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'Name': 'S1', 'SessionStartDateEpoc': 1000,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [{
+                    'Number': '42', 'Category': '1', 'FirstName': 'Jane',
+                    'LastName': 'Doe', 'Position': '1', 'Laps': '1',
+                    'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
+                    'AdditionalData': '',
+                    'LapTimes': [{'Lap': '1', 'LapTime': '0:01:30.000',
+                                  'Position': '1', 'FlagStatus': 0,
+                                  'TotalTime': '0:01:30.000'}],
+                }],
+            },
+        }
+
+    def _ctx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.delete_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details()
+        return ctx
+
+    def test_skip_path_fails_run_when_metadata_write_fails(self):
+        """The skip path deletes-then-rewrites metadata too; a silent failure
+        there erases the race from the races bucket while reporting success."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide',
+                              return_value=(1, 1)):
+                with patch.object(_mod, 'push_influx_race', return_value=False):
+                    result = _mod.old_race(ctx, opts)
+        assert result == 1
+
+    def test_write_path_fails_run_when_metadata_write_fails(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=False):
+            with patch.object(_mod, 'print_rankings'):
+                result = _mod.old_race(ctx, opts)
+        assert result == 1
+
+    def test_lap_write_failure_fails_run(self):
+        ctx = self._ctx()
+        ctx.write_api.write.side_effect = Exception("boom")
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            result = _mod.old_race(ctx, opts)
+        assert result == 1
+
+    def test_run_race_propagates_old_race_failure(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'old_race', return_value=1):
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': False})
+        assert result == 1
+
+    def test_standings_write_failure_fails_run(self):
+        """Standings were wiped after a partial write and need a rewrite — the
+        run must report failure so race-backfill retries, matching the
+        metadata-write path above."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'push_influx_standings_historical',
+                              return_value=False):
+                with patch.object(_mod, 'delete_existing_standings', return_value=True):
+                    with patch.object(_mod, 'print_rankings'):
+                        result = _mod.old_race(ctx, opts)
+        assert result == 1
+
+    def test_standings_cleanup_delete_failure_also_fails_run(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'push_influx_standings_historical',
+                              return_value=False):
+                with patch.object(_mod, 'delete_existing_standings', return_value=False):
+                    with patch.object(_mod, 'print_rankings'):
+                        result = _mod.old_race(ctx, opts)
+        assert result == 1
+
 
 class TestPushInfluxSession:
     def _ctx(self):
@@ -2662,6 +2927,18 @@ class TestDryRun:
         out = capsys.readouterr().out
         assert 'car 42' in out
         assert '2 laps' in out
+
+    def test_dry_run_refuses_live_race(self, caplog):
+        """--dry-run is historical-only; entering the live path with write_api=None
+        produces swallowed AttributeErrors instead of writes."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, dry_run=True)
+        with patch.object(_mod, 'live_race') as mock_live:
+            with caplog.at_level(logging.ERROR):
+                result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 1
+        mock_live.assert_not_called()
+        assert any('dry-run' in r.message.lower() for r in caplog.records)
 
 
 class TestComputeClassPositionsLive:
@@ -3173,6 +3450,38 @@ class TestBuildLapPointsStreamingToken:
         assert 'Race Information' in caplog.text
 
 
+class TestBuildLapPointsBadTotalTime:
+    """A lap whose TotalTime can't be parsed would otherwise be silently anchored
+    at session start (start_epoc_ms + 0); the live/monitor path must skip it like
+    the historical backfill path already does (old_race pre-filters there)."""
+
+    def test_lap_with_garbage_total_time_excluded_from_points(self):
+        laps = [{'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '$F'}]
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000000)
+        points = _mod._build_lap_points(ctx, laps, 'Driver', None, None, None, 1000000, '42')
+        assert points == []
+
+    def test_logs_warning_for_garbage_total_time(self, caplog):
+        laps = [{'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '$F'}]
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000000)
+        with caplog.at_level(logging.WARNING):
+            _mod._build_lap_points(ctx, laps, 'Driver', None, None, None, 1000000, '42')
+        assert any('$F' in r.message for r in caplog.records)
+
+    def test_other_laps_still_written_when_one_has_bad_total_time(self):
+        good = {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'}
+        bad = {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '1',
+               'FlagStatus': 'Green', 'TotalTime': '$F'}
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000000)
+        points = _mod._build_lap_points(ctx, [good, bad], 'Driver', None, None, None,
+                                         1000000, '42')
+        assert len(points) == 1
+        assert 'lap_no=1i' in points[0].to_line_protocol()
+
+
 class TestMainMissingToken:
     def test_logs_error_and_exits_when_no_token_set(self, caplog):
         with patch.dict(os.environ, {}, clear=True):
@@ -3183,3 +3492,263 @@ class TestMainMissingToken:
         assert exc_info.value.code == 1
         assert any('RACEMONITOR_TOKENS' in r.message and 'RACEMONITOR_TOKEN' in r.message
                    for r in caplog.records)
+
+
+class TestMainFluxIdValidation:
+    """laps.main() interpolates race_id/car_number into Flux delete predicates and
+    queries, so it must reject unsafe identifiers before touching RaceMonitor/Influx,
+    same as race_diagnose.main() and race_backfill.main() already do."""
+
+    def _fake_args(self, race_id, car_number=None):
+        return SimpleNamespace(
+            race_id=[race_id], car_number=car_number, verbose=False,
+            network_mode=False, monitor_mode=False, save_file=False,
+            selected_class=None, interval=30, skip_if_complete=False, dry_run=False,
+        )
+
+    def test_race_id_with_quote_exits_1_before_racemonitor_client(self):
+        with patch.object(_mod, '_build_parser') as mock_parser_factory:
+            mock_parser_factory.return_value.parse_args.return_value = (
+                self._fake_args('x"y'))
+            with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN'}, clear=True):
+                with patch.object(_mod, 'RaceMonitorClient') as mock_client:
+                    mock_client.side_effect = AssertionError(
+                        'must not reach RaceMonitorClient with an invalid id')
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        mock_client.assert_not_called()
+
+    def test_car_number_with_quote_exits_1_before_racemonitor_client(self):
+        with patch.object(_mod, '_build_parser') as mock_parser_factory:
+            mock_parser_factory.return_value.parse_args.return_value = (
+                self._fake_args('12345', car_number='4"2'))
+            with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN'}, clear=True):
+                with patch.object(_mod, 'RaceMonitorClient') as mock_client:
+                    mock_client.side_effect = AssertionError(
+                        'must not reach RaceMonitorClient with an invalid id')
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        mock_client.assert_not_called()
+
+    def test_logs_invalid_identifier_error(self, caplog):
+        with patch.object(_mod, '_build_parser') as mock_parser_factory:
+            mock_parser_factory.return_value.parse_args.return_value = (
+                self._fake_args('x"y'))
+            with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN'}, clear=True):
+                with patch.object(_mod, 'RaceMonitorClient'):
+                    with caplog.at_level(logging.ERROR):
+                        with pytest.raises(SystemExit):
+                            _mod.main()
+        assert any('x"y' in r.message for r in caplog.records)
+
+
+class TestLiveRaceNoData:
+    def _ctx(self):
+        ctx = _mod.RaceContext('123', '99', MagicMock(), None, 0)
+        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.live.get_racer.return_value = {'Successful': False}
+        return ctx
+
+    def test_unsuccessful_get_racer_returns_no_live_data(self):
+        """A car number missing from the live feed must fail cleanly, not KeyError."""
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'print_rankings'):
+            result = _mod.live_race(self._ctx(), opts)
+        assert result is _mod.MonitorStatus.NO_LIVE_DATA
+
+    def test_unsuccessful_get_racer_logs_error(self, caplog):
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'print_rankings'):
+            with caplog.at_level(logging.ERROR):
+                _mod.live_race(self._ctx(), opts)
+        assert any('99' in r.message for r in caplog.records)
+
+    def test_run_race_returns_1_on_no_live_data(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'live_race',
+                          return_value=_mod.MonitorStatus.NO_LIVE_DATA):
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 1
+
+
+class TestOldRaceSessionFetching:
+    def _session_details(self, sid=1):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': sid, 'Name': f'S{sid}', 'SessionStartDateEpoc': 1000,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [{
+                    'Number': '42', 'Category': '1', 'FirstName': 'Jane',
+                    'LastName': 'Doe', 'Position': '1', 'Laps': '1',
+                    'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
+                    'AdditionalData': '',
+                    'LapTimes': [{'Lap': '1', 'LapTime': '0:01:30.000',
+                                  'Position': '1', 'FlagStatus': 0,
+                                  'TotalTime': '0:01:30.000'}],
+                }],
+            },
+        }
+
+    def test_zero_sessions_returns_cleanly(self, caplog):
+        """A race with no posted sessions must log and return, not UnboundLocalError."""
+        ctx = _mod.RaceContext('999', None, MagicMock(), None, 0)
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': []}
+        opts = _mod.RaceOptions(network_mode=False)
+        with caplog.at_level(logging.WARNING):
+            _mod.old_race(ctx, opts)  # must not raise
+        assert any('999' in r.message for r in caplog.records)
+
+    def test_display_mode_fetches_only_final_session(self):
+        """Non-network mode prints one rankings table; fetching every session
+        burns the RaceMonitor rate limit for data that is discarded."""
+        ctx = _mod.RaceContext('999', None, MagicMock(), None, 0)
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}, {'ID': 3}]}
+        ctx.client.results.session_details.return_value = self._session_details(3)
+        opts = _mod.RaceOptions(network_mode=False)
+        with patch.object(_mod, 'print_rankings'):
+            _mod.old_race(ctx, opts)
+        ctx.client.results.session_details.assert_called_once_with(
+            3, include_lap_times=True)
+
+    def test_network_mode_still_fetches_all_sessions(self):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}]}
+        ctx.client.results.session_details.side_effect = [
+            self._session_details(1), self._session_details(2)]
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'print_rankings'):
+                _mod.old_race(ctx, opts)
+        assert ctx.client.results.session_details.call_count == 2
+
+
+class TestOldRaceExpectedCountFiltering:
+    """One garbage lap must not make expected != written forever, which defeats
+    --skip-if-complete and re-deletes/rewrites the race on every backfill run."""
+
+    def _session_details(self, lap_times):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'Name': 'S1', 'SessionStartDateEpoc': 1000,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [{
+                    'Number': '42', 'Category': '1', 'FirstName': 'Jane',
+                    'LastName': 'Doe', 'Position': '1', 'Laps': '2',
+                    'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
+                    'AdditionalData': '', 'LapTimes': lap_times,
+                }],
+            },
+        }
+
+    def _ctx(self, lap_times):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.delete_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details(lap_times)
+        return ctx
+
+    def test_garbage_lap_number_excluded_from_expected_count(self):
+        """Stored: 1 lap (the good one). Expected must also be 1 → SKIP."""
+        good = {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                'FlagStatus': 0, 'TotalTime': '0:01:30.000'}
+        garbage = {'Lap': '$F', 'LapTime': '0:01:31.000', 'Position': '2',
+                   'FlagStatus': 0, 'TotalTime': '0:03:01.000'}
+        ctx = self._ctx([good, garbage])
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide',
+                              return_value=(1, 1)):
+                with patch.object(_mod, 'push_influx_race', return_value=True):
+                    with patch.object(_mod, 'delete_existing_laps') as mock_del:
+                        _mod.old_race(ctx, opts)
+        mock_del.assert_not_called()
+
+    def test_garbage_total_time_excluded_from_write(self):
+        """A lap whose TotalTime cannot anchor a timestamp would collide at the
+        session start and be silently deduplicated by InfluxDB — exclude it."""
+        good = {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                'FlagStatus': 0, 'TotalTime': '0:01:30.000'}
+        bad_time = {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '1',
+                    'FlagStatus': 0, 'TotalTime': '$F'}
+        ctx = self._ctx([good, bad_time])
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'print_rankings'):
+                _mod.old_race(ctx, opts)
+        lap_write = ctx.write_api.write.call_args_list[0]
+        assert len(lap_write.kwargs['record']) == 1
+
+
+class TestClassIndex:
+    def _session_details(self):
+        def comp(number, category, laps):
+            return {'Number': number, 'Category': category,
+                    'LapTimes': [{'Lap': str(ln), 'Position': str(p)}
+                                 for ln, p in laps]}
+        return {
+            'Session': {
+                'Categories': {'1': {'Name': 'A'}, '2': {'Name': 'B'}},
+                'SortedCompetitors': [
+                    comp('10', '1', [(1, 1), (2, 1)]),
+                    comp('11', '1', [(1, 3), (2, 2)]),
+                    comp('20', '2', [(1, 2), (2, 3)]),
+                ],
+            },
+        }
+
+    def test_index_matches_per_car_resolution(self):
+        details = self._session_details()
+        index = _mod._build_class_index(details)
+        # Hard-coded expected class positions catch regressions the self-comparison
+        # below would miss (the no-index path builds the same index internally).
+        assert _mod._resolve_class_historical('10', details, index) == ('A', {1: 1, 2: 1})
+        assert _mod._resolve_class_historical('11', details, index) == ('A', {1: 2, 2: 2})
+        assert _mod._resolve_class_historical('20', details, index) == ('B', {1: 1, 2: 1})
+        for number in ('10', '11', '20'):
+            assert (_mod._resolve_class_historical(number, details)
+                    == _mod._resolve_class_historical(number, details, index))
+
+    def test_unknown_car_returns_none(self):
+        details = self._session_details()
+        index = _mod._build_class_index(details)
+        assert _mod._resolve_class_historical('99', details, index) == (None, {})
+
+    def test_old_race_builds_index_once_per_session(self):
+        session = {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'Name': 'S1', 'SessionStartDateEpoc': 1000,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [
+                    {'Number': str(n), 'Category': '1', 'FirstName': 'F',
+                     'LastName': f'L{n}', 'Position': str(n), 'Laps': '1',
+                     'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
+                     'AdditionalData': '',
+                     'LapTimes': [{'Lap': '1', 'LapTime': '0:01:30.000',
+                                   'Position': str(n), 'FlagStatus': 0,
+                                   'TotalTime': '0:01:30.000'}]}
+                    for n in (1, 2, 3)
+                ],
+            },
+        }
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.delete_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = session
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_build_class_index',
+                          wraps=_mod._build_class_index) as mock_index:
+            with patch.object(_mod, 'push_influx_race', return_value=True):
+                with patch.object(_mod, 'print_rankings'):
+                    _mod.old_race(ctx, opts)
+        assert mock_index.call_count == 1  # once per session, not per competitor

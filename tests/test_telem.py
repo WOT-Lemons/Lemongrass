@@ -1,4 +1,5 @@
 import importlib
+import logging
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -130,6 +131,32 @@ class TestNewFuelStatus:
         with patch.object(_mod, "Point", side_effect=capture_point):
             _mod.new_fuel_status(r)
         assert captured_name[0] == "-Fuel-System-Status"
+
+    def test_uses_system_1_status_when_systems_differ(self):
+        """Dual-bank ECU: system 1 in failure mode must not be masked by
+        system 2's closed-loop status (dict order used to decide the winner)."""
+        r = MagicMock()
+        r.command = _Cmd("b'0103': Fuel System Status")
+        r.value = [
+            "Open loop due to system failure",
+            "Closed loop, using oxygen sensor feedback to determine fuel mix",
+        ]
+        _mod.new_fuel_status(r)
+        assert _mod.pending_points[0]._fields == {"value": 3}
+
+
+class TestConfigureObdLogging:
+    def test_no_debug_by_default(self, monkeypatch):
+        monkeypatch.delenv("OBD_DEBUG", raising=False)
+        _mod.obd.logger.setLevel.reset_mock()
+        _mod._configure_obd_logging()
+        _mod.obd.logger.setLevel.assert_not_called()
+
+    def test_debug_enabled_via_env(self, monkeypatch):
+        monkeypatch.setenv("OBD_DEBUG", "1")
+        _mod.obd.logger.setLevel.reset_mock()
+        _mod._configure_obd_logging()
+        _mod.obd.logger.setLevel.assert_called_once_with(_mod.obd.logging.DEBUG)
 
 
 class TestNewAirStatus:
@@ -434,6 +461,29 @@ class TestFlushPoints:
         write_api.write.assert_called_once()
         assert len(_mod.pending_points) == 0
 
+    def test_flushes_in_batches(self):
+        _mod.pending_points.extend(f"p{i}" for i in range(5))
+        write_api = MagicMock()
+        _mod.flush_points(write_api, batch_size=2)
+        assert write_api.write.call_count == 3
+        assert len(_mod.pending_points) == 0
+
+    def test_requeues_only_unwritten_on_midbatch_failure(self):
+        _mod.pending_points.extend(["p1", "p2", "p3", "p4", "p5"])
+        write_api = MagicMock()
+        write_api.write.side_effect = [None, Exception("boom")]
+        _mod.flush_points(write_api, batch_size=2)
+        assert _mod.pending_points == ["p3", "p4", "p5"]
+
+    def test_backlog_capped_dropping_oldest(self):
+        """A multi-hour outage must not grow the backlog until the Pi OOMs."""
+        write_api = MagicMock()
+        write_api.write.side_effect = Exception("boom")
+        with patch.object(_mod, "MAX_PENDING_POINTS", 3):
+            _mod.pending_points.extend(["p1", "p2", "p3", "p4"])
+            _mod.flush_points(write_api)
+        assert _mod.pending_points == ["p2", "p3", "p4"]
+
 
 class TestRouteCommand:
     def test_excludes_pattern_matches(self):
@@ -498,3 +548,60 @@ class TestRouteCommand:
                     assert _mod._route_command(command) is None, command.name
                     checked += 1
         assert checked > 90  # the mode-2 twins alone number ~96; 0 means vacuous
+
+
+class TestQueuePoint:
+    def setup_method(self):
+        _reset()
+        _mod._last_append_monotonic = 0.0
+
+    def test_appends_and_stamps_last_append_time(self):
+        _mod._queue_point("p")
+        assert _mod.pending_points == ["p"]
+        assert _mod._last_append_monotonic > 0
+
+    def test_enqueue_capped_dropping_oldest_with_warning(self, caplog):
+        """A hung flush must not let callbacks grow memory unbounded — and the
+        drop must leave a trace in the logs, matching flush_points."""
+        _mod._dropped_since_warn = 0
+        _mod._last_drop_warn_monotonic = float('-inf')
+        with patch.object(_mod, "MAX_PENDING_POINTS", 3):
+            _mod.pending_points.extend(["p1", "p2", "p3"])
+            with caplog.at_level(logging.WARNING):
+                _mod._queue_point("p4")
+        assert _mod.pending_points == ["p2", "p3", "p4"]
+        assert any("dropped" in r.message.lower() for r in caplog.records)
+
+    def test_enqueue_drop_warning_is_rate_limited(self, caplog):
+        """One warning per interval, not one per dropped point — sustained
+        saturation would otherwise flood journald with a line per callback."""
+        _mod._dropped_since_warn = 0
+        _mod._last_drop_warn_monotonic = float('-inf')
+        with patch.object(_mod, "MAX_PENDING_POINTS", 3):
+            _mod.pending_points.extend(["p1", "p2", "p3"])
+            with caplog.at_level(logging.WARNING):
+                _mod._queue_point("p4")
+                _mod._queue_point("p5")
+        assert sum("dropped" in r.message.lower() for r in caplog.records) == 1
+
+
+class TestConnectionHealthy:
+    def test_healthy_when_connected_and_data_recent(self):
+        conn = MagicMock()
+        conn.is_connected.return_value = True
+        _mod._last_append_monotonic = _mod.monotonic()
+        assert _mod._connection_healthy(conn) is True
+
+    def test_unhealthy_when_disconnected(self):
+        conn = MagicMock()
+        conn.is_connected.return_value = False
+        _mod._last_append_monotonic = _mod.monotonic()
+        assert _mod._connection_healthy(conn) is False
+
+    def test_unhealthy_when_data_stale(self):
+        """ELM adapter alive but ECU silent (ignition off): no callback has
+        queued a point for over STALE_DATA_TIMEOUT_S — treat as dead."""
+        conn = MagicMock()
+        conn.is_connected.return_value = True
+        _mod._last_append_monotonic = _mod.monotonic() - (_mod.STALE_DATA_TIMEOUT_S + 1)
+        assert _mod._connection_healthy(conn) is False

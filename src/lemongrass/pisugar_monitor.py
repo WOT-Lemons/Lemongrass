@@ -23,6 +23,8 @@ logger = logging.getLogger('pisugar-monitor')
 PISUGAR_API = "http://localhost:8421"
 PISUGAR_CONFIG = "/etc/pisugar-server/config.json"
 TOKEN_REFRESH_MARGIN = 300  # seconds before expiry to proactively refresh
+HTTP_TIMEOUT_S = 5  # a wedged pisugar-server must not hang the monitor forever
+STARTUP_RETRY_DELAY_S = 5
 
 
 def read_credentials():
@@ -43,7 +45,7 @@ def login(username, password):
         data=b"",
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
         return resp.read().decode().strip()
 
 
@@ -52,14 +54,18 @@ def token_expiry(token):
     try:
         payload_b64 = token.split('.')[1]
         payload_b64 += '=' * (-len(payload_b64) % 4)
-        payload = json.loads(base64.b64decode(payload_b64))
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
         return payload.get('exp')
     except Exception:
         return None
 
 
-def exec_command(command, token=None):
-    """Send a command to the PiSugar HTTP API and return the parsed value."""
+def exec_command(command, token=None, coerce=True):
+    """Send a command to the PiSugar HTTP API and return the parsed value.
+
+    coerce=False returns the raw string — used for device tags, where numeric
+    coercion would mangle version strings like "1.10" into 1.1.
+    """
     headers = {"Content-Type": "text/plain"}
     if token:
         headers["x-pisugar-token"] = token
@@ -69,11 +75,13 @@ def exec_command(command, token=None):
         headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
         raw = resp.read().decode().strip()
     _, sep, value = raw.partition(": ")
     if sep:
         raw = value
+    if not coerce:
+        return raw
     if raw.lower() == "true":
         return True
     if raw.lower() == "false":
@@ -82,6 +90,31 @@ def exec_command(command, token=None):
         return float(raw)
     except ValueError:
         return raw
+
+
+def _startup_connect(username, password):
+    """Log in and read device tags, retrying until pisugar-server responds.
+
+    At Pi boot this service can start before pisugar-server binds :8421; the
+    monitor is useless without these reads and startup is idempotent, so retry
+    forever rather than die with a traceback.
+    """
+    while True:
+        try:
+            token = None
+            if username and password:
+                token = login(username, password)
+                logger.info("Authenticated with pisugar-server")
+            tags = {
+                "server_version": exec_command("get version", token, coerce=False),
+                "model": exec_command("get model", token, coerce=False),
+                "firmware_version": exec_command("get firmware_version", token, coerce=False),
+            }
+            return token, tags
+        except Exception:
+            logger.exception(
+                "pisugar-server not reachable; retrying in %ds", STARTUP_RETRY_DELAY_S)
+            sleep(STARTUP_RETRY_DELAY_S)
 
 
 def build_point(measurement, value, tags=None):
@@ -118,21 +151,12 @@ def main():
         logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
         sys.exit(1)
 
-    pisugar_token = None
     username, password = read_credentials()
-    if username and password:
-        pisugar_token = login(username, password)
-        logger.info("Authenticated with pisugar-server")
+    pisugar_token, device_tags = _startup_connect(username, password)
+    logger.info("PiSugar device: %s", device_tags)
 
     with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
-
-        device_tags = {
-            "server_version": exec_command("get version", pisugar_token),
-            "model": exec_command("get model", pisugar_token),
-            "firmware_version": exec_command("get firmware_version", pisugar_token),
-        }
-        logger.info("PiSugar device: %s", device_tags)
 
         while True:
             if pisugar_token and username and password:

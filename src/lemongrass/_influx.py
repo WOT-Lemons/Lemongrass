@@ -6,6 +6,7 @@ InfluxDBClient the same way.
 """
 import logging
 import os
+import re
 import sys
 
 from urllib3 import Retry
@@ -48,3 +49,23 @@ def connect():
     return InfluxDBClient(
         url=INFLUX_URL, token=token, org=INFLUX_ORG, retries=INFLUX_RETRIES
     )
+
+
+# Lap timestamps are session-anchored and Flux `stop` is exclusive, so laps can
+# legitimately fall outside the nominal race bounds; pad the window instead of
+# trusting Start/EndDateEpoc exactly. The race_id tag filter stays the exact selector.
+# Shared by race_backfill and race_diagnose so the two padding windows can't drift.
+WINDOW_PAD_S = 86400
+
+
+_FLUX_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
+
+def invalid_flux_ids(values):
+    """Return the values unsafe to interpolate into a Flux string literal.
+
+    Race/car identifiers are interpolated into Flux queries and delete
+    predicates; restricting them to [A-Za-z0-9_-] rules out quotes and other
+    metacharacters that would break (or alter) the query.
+    """
+    return [v for v in values if not _FLUX_ID_RE.fullmatch(str(v))]
