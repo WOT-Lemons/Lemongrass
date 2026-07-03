@@ -56,8 +56,8 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
    or open Grafana at http://localhost:3000 (login `admin` / `local-dev-password`)
    — the InfluxDB datasource and lemongrass dashboards (**laps**, **race-control**, **standings**)
    are pre-provisioned. The OBD dashboards (**telegraf**, **car252-pisugar-ups**) and OBD panels
-   in **race-control** show no data locally because OBD/`stats_252` collection is not configured
-   for local testing.
+   in **race-control** show no data until you start the emulator-backed telem stack (see
+   "Emulated OBD telemetry" below).
 
 5. Tear down (add `-v` to wipe data and re-trigger bucket init next start):
 
@@ -68,8 +68,46 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
    Storage is persistent named Docker volumes, so a plain `down` keeps your seeded
    data across restarts; pass `-v` only when you want a clean reset.
 
-**Note:** telemetry/OBD commands (`telem`, `pisugar-monitor`) are out of scope for
-local testing — they write to a `stats_252` bucket that this stack does not create.
+### Emulated OBD telemetry
+
+The `telem` service normally reads a physical ELM327 adapter. For local testing, a
+virtual ELM327 ([`ELM327-emulator`](https://pypi.org/project/ELM327-emulator/)) runs as
+the `elm327` service and telem connects to it over TCP (`socket://elm327:35000`). Both
+live behind a `telem` compose profile, so the default `up` still starts only InfluxDB +
+Grafana.
+
+Run the "car in a box" stack:
+
+```bash
+docker compose -f local-testing/docker-compose.yml --profile telem up --build -d
+```
+
+telem writes emulated data to the `stats_252` bucket (seeded by the InfluxDB init
+scripts), so the **telegraf** dashboard and the OBD panels in **race-control** show live
+data. The `stats_252` bucket and its DBRP are created only on a **fresh** InfluxDB volume,
+so if you added them to an existing stack, recreate the volume:
+
+```bash
+docker compose -f local-testing/docker-compose.yml --profile telem down -v
+docker compose -f local-testing/docker-compose.yml --profile telem up --build -d
+```
+
+(`pisugar-monitor` remains out of scope for local testing — it needs PiSugar UPS hardware.)
+
+### Running the OBD integration tests
+
+The default `uv run pytest` run is mock-only and fast. The integration tests drive telem's
+real OBD path against the emulator and are excluded by the `integration` marker. The
+emulator is installed imperatively (kept out of `uv.lock`):
+
+```bash
+uv sync
+bash local-testing/install-emulator.sh
+uv run --no-sync pytest -m integration tests/
+```
+
+`--no-sync` prevents `uv run` from pruning the imperatively-installed emulator. CI runs
+this same sequence in the `integration` job.
 
 **Unreachable InfluxDB:** if the server is down or unreachable, commands retry a few
 times, then exit non-zero with a one-line `cannot reach InfluxDB at …` message
