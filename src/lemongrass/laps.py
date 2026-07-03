@@ -71,6 +71,7 @@ class MonitorStatus(enum.Enum):
 
     RACE_ENDED = "race_ended"
     INTERRUPTED = "interrupted"
+    NO_LIVE_DATA = "no_live_data"
 
 
 @dataclass
@@ -256,8 +257,11 @@ def _run_race(ctx, opts, response):
             old_race(ctx, opts)
         else:
             logging.info("Race %s is currently live.", ctx.race_id)
-            if live_race(ctx, opts) is MonitorStatus.INTERRUPTED:
+            result = live_race(ctx, opts)
+            if result is MonitorStatus.INTERRUPTED:
                 sys.exit(130)
+            if result is MonitorStatus.NO_LIVE_DATA:
+                return 1
         return 0
     except KeyboardInterrupt:
         logging.info("Interrupted, exiting.")
@@ -278,24 +282,23 @@ def live_race(ctx, opts):
 
     print_rankings([], True, opts.selected_class, {})
 
-    competitor_details = {}
-    laps = []
-
     # Get lap times from live racer
     logging.debug("Getting lap times for %s from race %s.", ctx.car_number, ctx.race_id)
     response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
 
-    if response['Successful']:
-        laps = response['Details']['Laps']
-        competitor_details = response['Details']['Competitor']
+    if not response['Successful']:
+        logging.error(
+            "No live data for car %s in race %s — check that the car number is "
+            "registered in the live feed", ctx.car_number, ctx.race_id)
+        return MonitorStatus.NO_LIVE_DATA
 
-    # Make name
-    competitor_details['Name'] = (
-        competitor_details['FirstName'] + ' ' + competitor_details['LastName'])
+    laps = response['Details']['Laps']
+    competitor_details = response['Details']['Competitor']
 
     first = competitor_details.get('FirstName', '')
     last = competitor_details.get('LastName', '')
-    competitor_name = f"{first} {last}".strip() or None
+    competitor_details['Name'] = f"{first} {last}".strip()
+    competitor_name = competitor_details['Name'] or None
     car_info = competitor_details.get('AdditionalData') or None
     class_name, class_position = _resolve_class_live(session_response, ctx.car_number)
 

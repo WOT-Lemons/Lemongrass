@@ -3201,3 +3201,33 @@ class TestMainMissingToken:
         assert exc_info.value.code == 1
         assert any('RACEMONITOR_TOKENS' in r.message and 'RACEMONITOR_TOKEN' in r.message
                    for r in caplog.records)
+
+
+class TestLiveRaceNoData:
+    def _ctx(self):
+        ctx = _mod.RaceContext('123', '99', MagicMock(), None, 0)
+        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.live.get_racer.return_value = {'Successful': False}
+        return ctx
+
+    def test_unsuccessful_get_racer_returns_no_live_data(self):
+        """A car number missing from the live feed must fail cleanly, not KeyError."""
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'print_rankings'):
+            result = _mod.live_race(self._ctx(), opts)
+        assert result is _mod.MonitorStatus.NO_LIVE_DATA
+
+    def test_unsuccessful_get_racer_logs_error(self, caplog):
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'print_rankings'):
+            with caplog.at_level(logging.ERROR):
+                _mod.live_race(self._ctx(), opts)
+        assert any('99' in r.message for r in caplog.records)
+
+    def test_run_race_returns_1_on_no_live_data(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'live_race',
+                          return_value=_mod.MonitorStatus.NO_LIVE_DATA):
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 1
