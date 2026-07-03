@@ -547,3 +547,36 @@ class TestRouteCommand:
                     assert _mod._route_command(command) is None, command.name
                     checked += 1
         assert checked > 90  # the mode-2 twins alone number ~96; 0 means vacuous
+
+
+class TestQueuePoint:
+    def setup_method(self):
+        _reset()
+        _mod._last_append_monotonic = 0.0
+
+    def test_appends_and_stamps_last_append_time(self):
+        _mod._queue_point("p")
+        assert _mod.pending_points == ["p"]
+        assert _mod._last_append_monotonic > 0
+
+
+class TestConnectionHealthy:
+    def test_healthy_when_connected_and_data_recent(self):
+        conn = MagicMock()
+        conn.is_connected.return_value = True
+        _mod._last_append_monotonic = _mod.monotonic()
+        assert _mod._connection_healthy(conn) is True
+
+    def test_unhealthy_when_disconnected(self):
+        conn = MagicMock()
+        conn.is_connected.return_value = False
+        _mod._last_append_monotonic = _mod.monotonic()
+        assert _mod._connection_healthy(conn) is False
+
+    def test_unhealthy_when_data_stale(self):
+        """ELM adapter alive but ECU silent (ignition off): no callback has
+        queued a point for over STALE_DATA_TIMEOUT_S — treat as dead."""
+        conn = MagicMock()
+        conn.is_connected.return_value = True
+        _mod._last_append_monotonic = _mod.monotonic() - (_mod.STALE_DATA_TIMEOUT_S + 1)
+        assert _mod._connection_healthy(conn) is False

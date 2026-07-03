@@ -3,9 +3,10 @@
 
 import logging
 import os
+import sys
 import threading
 from datetime import datetime, timezone
-from time import sleep
+from time import monotonic, sleep
 
 import obd
 from influxdb_client import Point
@@ -49,6 +50,18 @@ _connection = None  # set by main(); lets new_status trigger on-demand DTC looku
 _last_dtc_count = 0
 _dtc_fetch_failures = 0
 
+# Watchdog: exit (for a supervisor restart) when no data has arrived this long.
+STALE_DATA_TIMEOUT_S = 60
+_last_append_monotonic = 0.0
+
+
+def _queue_point(point):
+    """Append a point to the pending batch and mark data as flowing."""
+    global _last_append_monotonic
+    with pending_lock:
+        pending_points.append(point)
+        _last_append_monotonic = monotonic()
+
 
 def _measurement_name(r):
     """Derive the InfluxDB measurement name from a response's command string."""
@@ -73,8 +86,7 @@ def new_value(r):
     except AttributeError:
         logger.debug("Caught AttributeError in new_value")
         return
-    with pending_lock:
-        pending_points.append(point)
+    _queue_point(point)
 
 
 def new_fuel_status(r):
@@ -97,10 +109,7 @@ def new_fuel_status(r):
     if fuel_status == 3:
         logger.warning("Caught open loop due to system failure")
 
-    with pending_lock:
-        pending_points.append(
-            Point(measurement).field("value", fuel_status).time(ts)
-        )
+    _queue_point(Point(measurement).field("value", fuel_status).time(ts))
 
 
 def new_air_status(r):
@@ -117,10 +126,7 @@ def new_air_status(r):
 
     air_status = AIR_STATUS_MAP.get(r.value, 255)
 
-    with pending_lock:
-        pending_points.append(
-            Point(measurement).field("value", air_status).time(ts)
-        )
+    _queue_point(Point(measurement).field("value", air_status).time(ts))
 
 
 def _query_fuel_type_once(connection):
@@ -145,10 +151,7 @@ def _query_fuel_type_once(connection):
         logger.debug("Caught IndexError in _query_fuel_type_once")
         return
 
-    with pending_lock:
-        pending_points.append(
-            Point(measurement).field("value", r.value).time(ts)
-        )
+    _queue_point(Point(measurement).field("value", r.value).time(ts))
 
 
 def _fetch_and_store_dtcs():
@@ -179,8 +182,7 @@ def _fetch_and_store_dtcs():
     # failure -- store it so a STATUS/GET_DTC disagreement doesn't retry forever.
     codes = ",".join(code for code, _ in r.value)
     ts = datetime.now(timezone.utc)
-    with pending_lock:
-        pending_points.append(Point("-Get-DTCs").field("value", codes).time(ts))
+    _queue_point(Point("-Get-DTCs").field("value", codes).time(ts))
     return True
 
 
@@ -217,13 +219,10 @@ def new_status(r):
         logger.debug("Caught IndexError in new_status")
         return
 
-    with pending_lock:
-        pending_points.append(
-            Point(f"{measurement}-MIL").field("value", int(r.value.MIL)).time(ts)
-        )
-        pending_points.append(
-            Point(f"{measurement}-DTC-Count").field("value", r.value.DTC_count).time(ts)
-        )
+    _queue_point(Point(f"{measurement}-MIL").field("value", int(r.value.MIL)).time(ts))
+    _queue_point(
+        Point(f"{measurement}-DTC-Count").field("value", r.value.DTC_count).time(ts)
+    )
 
     # Only the primary STATUS command drives the on-demand DTC lookup;
     # STATUS_DRIVE_CYCLE just records its own MIL/count.
@@ -268,6 +267,23 @@ def _configure_obd_logging():
         obd.logger.setLevel(obd.logging.DEBUG)
 
 
+def _connection_healthy(connection):
+    """False when the OBD link is gone or no data has arrived recently.
+
+    python-obd's Async loop keeps running after the adapter browns out or the
+    ignition cycles, delivering only null responses — every callback then
+    early-returns and telemetry silently stops. Both signals are checked: the
+    reported connection status, and time since a callback last queued a point.
+    """
+    if not connection.is_connected():
+        logger.error("OBD connection lost")
+        return False
+    if monotonic() - _last_append_monotonic > STALE_DATA_TIMEOUT_S:
+        logger.error("No OBD data received for %ds", STALE_DATA_TIMEOUT_S)
+        return False
+    return True
+
+
 def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
     """Write all pending points to InfluxDB in batches of batch_size.
 
@@ -302,7 +318,7 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
 
 def main():
     """Main loop of OBD-II scraping"""
-    global _connection
+    global _connection, _last_append_monotonic
 
     with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
@@ -333,10 +349,17 @@ def main():
             logger.warning("Could not find voltage monitoring command - skipping")
 
         connection.start()
+        _last_append_monotonic = monotonic()
 
         while True:
             sleep(0.5)
             flush_points(write_api)
+            if not _connection_healthy(connection):
+                # Exit nonzero so the container/systemd restart policy re-runs
+                # the well-tested startup connect sequence; flush what's left.
+                flush_points(write_api)
+                logger.error("Exiting for supervisor restart")
+                sys.exit(1)
 
 
 if __name__ == "__main__":
