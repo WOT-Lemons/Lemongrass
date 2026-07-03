@@ -54,10 +54,16 @@ _dtc_fetch_failures = 0
 STALE_DATA_TIMEOUT_S = 60
 _last_append_monotonic = 0.0
 
+# Enqueue-side drops happen once per callback while saturated; warn at most
+# this often (with a cumulative count) instead of once per dropped point.
+_DROP_WARN_INTERVAL_S = 60
+_dropped_since_warn = 0
+_last_drop_warn_monotonic = float('-inf')
+
 
 def _queue_point(point):
     """Append a point to the pending batch and mark data as flowing."""
-    global _last_append_monotonic
+    global _last_append_monotonic, _dropped_since_warn, _last_drop_warn_monotonic
     with pending_lock:
         pending_points.append(point)
         overflow = len(pending_points) - MAX_PENDING_POINTS
@@ -65,6 +71,14 @@ def _queue_point(point):
             # Producers can outpace a hung or delayed flush; cap here too so
             # callbacks can't grow memory unbounded before flush_points requeues.
             del pending_points[:overflow]
+            _dropped_since_warn += overflow
+            now = monotonic()
+            if now - _last_drop_warn_monotonic >= _DROP_WARN_INTERVAL_S:
+                logger.warning(
+                    "Backlog exceeded %d points; dropped %d oldest on enqueue",
+                    MAX_PENDING_POINTS, _dropped_since_warn)
+                _dropped_since_warn = 0
+                _last_drop_warn_monotonic = now
         _last_append_monotonic = monotonic()
 
 

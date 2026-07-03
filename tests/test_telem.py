@@ -1,4 +1,5 @@
 import importlib
+import logging
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -558,6 +559,30 @@ class TestQueuePoint:
         _mod._queue_point("p")
         assert _mod.pending_points == ["p"]
         assert _mod._last_append_monotonic > 0
+
+    def test_enqueue_capped_dropping_oldest_with_warning(self, caplog):
+        """A hung flush must not let callbacks grow memory unbounded — and the
+        drop must leave a trace in the logs, matching flush_points."""
+        _mod._dropped_since_warn = 0
+        _mod._last_drop_warn_monotonic = float('-inf')
+        with patch.object(_mod, "MAX_PENDING_POINTS", 3):
+            _mod.pending_points.extend(["p1", "p2", "p3"])
+            with caplog.at_level(logging.WARNING):
+                _mod._queue_point("p4")
+        assert _mod.pending_points == ["p2", "p3", "p4"]
+        assert any("dropped" in r.message.lower() for r in caplog.records)
+
+    def test_enqueue_drop_warning_is_rate_limited(self, caplog):
+        """One warning per interval, not one per dropped point — sustained
+        saturation would otherwise flood journald with a line per callback."""
+        _mod._dropped_since_warn = 0
+        _mod._last_drop_warn_monotonic = float('-inf')
+        with patch.object(_mod, "MAX_PENDING_POINTS", 3):
+            _mod.pending_points.extend(["p1", "p2", "p3"])
+            with caplog.at_level(logging.WARNING):
+                _mod._queue_point("p4")
+                _mod._queue_point("p5")
+        assert sum("dropped" in r.message.lower() for r in caplog.records) == 1
 
 
 class TestConnectionHealthy:
