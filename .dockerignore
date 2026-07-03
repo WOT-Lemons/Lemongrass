@@ -27,3 +27,9 @@ tests
 *.md
 *.txt
 LICENSE
+
+# Re-include files the Dockerfile COPYs (Dockerfile:4). Without these, the
+# *.md / LICENSE excludes above make `docker build .` fail on BuildKit with
+# "COPY ... not found".
+!README.md
+!LICENSE
