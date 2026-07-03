@@ -460,6 +460,29 @@ class TestFlushPoints:
         write_api.write.assert_called_once()
         assert len(_mod.pending_points) == 0
 
+    def test_flushes_in_batches(self):
+        _mod.pending_points.extend(f"p{i}" for i in range(5))
+        write_api = MagicMock()
+        _mod.flush_points(write_api, batch_size=2)
+        assert write_api.write.call_count == 3
+        assert len(_mod.pending_points) == 0
+
+    def test_requeues_only_unwritten_on_midbatch_failure(self):
+        _mod.pending_points.extend(["p1", "p2", "p3", "p4", "p5"])
+        write_api = MagicMock()
+        write_api.write.side_effect = [None, Exception("boom")]
+        _mod.flush_points(write_api, batch_size=2)
+        assert _mod.pending_points == ["p3", "p4", "p5"]
+
+    def test_backlog_capped_dropping_oldest(self):
+        """A multi-hour outage must not grow the backlog until the Pi OOMs."""
+        write_api = MagicMock()
+        write_api.write.side_effect = Exception("boom")
+        with patch.object(_mod, "MAX_PENDING_POINTS", 3):
+            _mod.pending_points.extend(["p1", "p2", "p3", "p4"])
+            _mod.flush_points(write_api)
+        assert _mod.pending_points == ["p2", "p3", "p4"]
+
 
 class TestRouteCommand:
     def test_excludes_pattern_matches(self):

@@ -19,6 +19,11 @@ logger = logging.getLogger('telem')
 EXCLUDED_PATTERNS = ["MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
 SKIP_NAMES = {"FREEZE_DTC", "GET_DTC", "GET_CURRENT_DTC", "CLEAR_DTC", "FUEL_TYPE"}
 MAX_DTC_FETCH_FAILURES = 3
+
+# Backlog bound for InfluxDB outages: callbacks keep queueing while writes fail;
+# beyond this many points the oldest are dropped rather than OOM-ing the Pi.
+MAX_PENDING_POINTS = 50_000
+FLUSH_BATCH_SIZE = 5_000
 STATUS_COMMANDS = {"STATUS", "STATUS_DRIVE_CYCLE"}
 
 FUEL_STATUS_MAP = {
@@ -263,20 +268,36 @@ def _configure_obd_logging():
         obd.logger.setLevel(obd.logging.DEBUG)
 
 
-def flush_points(write_api):
-    """Write all pending points to InfluxDB in a single request."""
+def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
+    """Write all pending points to InfluxDB in batches of batch_size.
+
+    On a failed write the unwritten remainder is re-queued, capped at
+    MAX_PENDING_POINTS with the oldest dropped, so an extended outage cannot
+    grow the backlog without bound — and recovery after the outage goes out in
+    bounded requests instead of one giant write.
+    """
     with pending_lock:
         if not pending_points:
             return
         batch = pending_points.copy()
         pending_points.clear()
+    written = 0
     try:
-        write_api.write(bucket='stats_252/autogen', record=batch)
-        logger.info("Flushed %d points to InfluxDB", len(batch))
+        for i in range(0, len(batch), batch_size):
+            write_api.write(bucket='stats_252/autogen', record=batch[i:i + batch_size])
+            written += len(batch[i:i + batch_size])
+        logger.info("Flushed %d points to InfluxDB", written)
     except Exception as e:
-        logger.error('Failed to write %d points to InfluxDB: %s', len(batch), e)
+        unwritten = batch[written:]
+        logger.error('Failed to write %d points to InfluxDB: %s', len(unwritten), e)
         with pending_lock:
-            pending_points[:0] = batch
+            pending_points[:0] = unwritten
+            overflow = len(pending_points) - MAX_PENDING_POINTS
+            if overflow > 0:
+                del pending_points[:overflow]
+                logger.warning(
+                    "Backlog exceeded %d points; dropped %d oldest",
+                    MAX_PENDING_POINTS, overflow)
 
 
 def main():
