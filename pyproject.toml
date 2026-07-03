@@ -51,4 +51,4 @@ select = ["E", "F", "W", "D1", "I", "B", "UP", "RUF", "N", "C4", "SIM"]
 "tests/**" = ["D1", "SIM117"]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.14"]
+dev = ["pytest>=8", "ruff>=0.14,<1.0"]
