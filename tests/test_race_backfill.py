@@ -593,3 +593,20 @@ class TestMainTokenResolution:
                     _mod.main()
         assert exc_info.value.code == 1
 
+
+class TestInputValidation:
+    def test_car_number_with_quote_exits_1(self):
+        import lemongrass.race_backfill as rb
+        with patch.object(sys, 'argv', ['lemongrass-race-backfill', '--car', 'x"y']):
+            with pytest.raises(SystemExit) as exc:
+                rb.main()
+        assert exc.value.code == 1
+
+    def test_override_with_quote_exits_1(self):
+        import lemongrass.race_backfill as rb
+        with patch.object(sys, 'argv',
+                          ['lemongrass-race-backfill', '--override', '123:x"y']):
+            with pytest.raises(SystemExit) as exc:
+                rb.main()
+        assert exc.value.code == 1
+

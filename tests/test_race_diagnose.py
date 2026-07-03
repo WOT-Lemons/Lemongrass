@@ -60,3 +60,12 @@ class TestMainTokenResolution:
         out = capsys.readouterr().out
         assert 'RACEMONITOR_TOKENS' in out
         assert 'RACEMONITOR_TOKEN' in out
+
+
+class TestInputValidation:
+    def test_race_id_with_quote_exits_before_any_query(self):
+        import lemongrass.race_diagnose as rd
+        with patch.object(sys, 'argv', ['lemongrass-race-diagnose', 'x"y', '42']):
+            with pytest.raises(SystemExit) as exc:
+                rd.main()
+        assert exc.value.code == 1

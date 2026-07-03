@@ -6,7 +6,6 @@ Run `lemongrass races <subcommand> --help` for per-subcommand options.
 """
 
 import argparse
-import re
 import sys
 from datetime import datetime, timezone
 
@@ -15,7 +14,6 @@ from lemongrass import _influx
 EPOCH_START = '1970-01-01T00:00:00Z'
 
 _SUBCOMMANDS = ('list', 'prune', 'backfill', 'diagnose')
-_RACE_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 def main():
@@ -108,7 +106,7 @@ def _handle_prune():
     args = parser.parse_args()
     race_ids = list(dict.fromkeys(args.race_id))
 
-    invalid_ids = [rid for rid in race_ids if not _RACE_ID_RE.fullmatch(rid)]
+    invalid_ids = _influx.invalid_flux_ids(race_ids)
     if invalid_ids:
         print("invalid race ID(s):", ", ".join(f'"{r}"' for r in invalid_ids), file=sys.stderr)
         sys.exit(1)

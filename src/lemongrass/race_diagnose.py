@@ -122,6 +122,11 @@ def main():
 
     race_id, car_number = sys.argv[1], sys.argv[2]
 
+    bad = _influx.invalid_flux_ids([race_id, car_number])
+    if bad:
+        print("invalid identifier(s):", ", ".join(f'"{b}"' for b in bad), file=sys.stderr)
+        sys.exit(1)
+
     rm_token = resolve_tokens()
     influx_token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
 

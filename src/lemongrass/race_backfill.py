@@ -320,6 +320,12 @@ def main():
     """Entry point: parse args, discover races, then backfill or validate."""
     args = _build_parser().parse_args()
 
+    bad = _influx.invalid_flux_ids(
+        [args.car_number, *args.overrides.keys(), *args.overrides.values()])
+    if bad:
+        logging.error("invalid identifier(s): %s", ", ".join(repr(b) for b in bad))
+        sys.exit(1)
+
     if args.upgrade_stored:
         exclusive = [
             bool(args.overrides),
