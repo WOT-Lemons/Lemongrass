@@ -72,6 +72,7 @@ class MonitorStatus(enum.Enum):
     RACE_ENDED = "race_ended"
     INTERRUPTED = "interrupted"
     NO_LIVE_DATA = "no_live_data"
+    WRITE_FAILED = "write_failed"
 
 
 @dataclass
@@ -275,6 +276,8 @@ def _run_race(ctx, opts, response):
                 sys.exit(130)
             if result is MonitorStatus.NO_LIVE_DATA:
                 return 1
+            if result is MonitorStatus.WRITE_FAILED:
+                return 1
         return 0
     except KeyboardInterrupt:
         logging.info("Interrupted, exiting.")
@@ -339,9 +342,10 @@ def live_race(ctx, opts):
     print(lap_time_df.to_string(index=False))
     print(UNDERLINE)
 
+    race_meta_written = True
     if opts.network_mode:
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-        push_influx_race(ctx, race_ts_ms)
+        race_meta_written = push_influx_race(ctx, race_ts_ms)
         if live_session_id is not None:
             push_influx_session(ctx, live_session_id, live_session_name, None)
         if laps:
@@ -360,7 +364,12 @@ def live_race(ctx, opts):
 
     if opts.monitor_mode:
         return monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
-                               session_id=live_session_id)
+                               session_id=live_session_id, race_meta_written=race_meta_written)
+
+    if opts.network_mode and not race_meta_written:
+        # No monitor loop to retry in; signal a failed run so a rerun restores
+        # the (possibly deleted) race metadata point.
+        return MonitorStatus.WRITE_FAILED
 
 
 def old_race(ctx, opts):
@@ -448,6 +457,14 @@ def old_race(ctx, opts):
                         **lap,
                         'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus'])),
                     })
+                if not influx_laps:
+                    # Every lap was filtered out; appending an empty competitor would
+                    # leave expected==0 and let the write path delete existing laps
+                    # without writing replacements.
+                    logging.warning(
+                        "No parseable laps for car %s; excluding competitor from backfill",
+                        comp_number)
+                    continue
                 class_name, class_positions = _resolve_class_historical(
                     comp_number, session_details, class_index)
                 session_entry['competitors'].append({
@@ -652,7 +669,7 @@ def write_csv(filename, competitor_lap_times):
 
 
 def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
-                    session_id=None) -> MonitorStatus | None:
+                    session_id=None, race_meta_written=True) -> MonitorStatus | None:
     """Poll for new laps during a live race, printing and optionally pushing each to InfluxDB.
 
     Returns MonitorStatus.RACE_ENDED when the race ends naturally, or
@@ -660,6 +677,10 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     _stop_event may be injected for testing; defaults to a new threading.Event.
     session_id is tracked across polls and tags each written lap point; a new
     session push fires whenever the live session ID changes.
+    race_meta_written reflects whether the caller's initial push_influx_race
+    succeeded; when False (or after the epoch is corrected below) the metadata
+    write is retried each poll until it lands, so a transient delete/write
+    failure self-heals without aborting lap capture.
     """
     logging.info("Monitoring car %s...", ctx.car_number)
     print(UNDERLINE)
@@ -688,7 +709,12 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                         if ctx.metadata is not None:
                             ctx.metadata.end_time_epoc = race_details['Race'].get(
                                 'EndDateEpoc', ctx.metadata.end_time_epoc)
-                        push_influx_race(ctx, ctx.start_epoc * 1000)
+                        # Force a rewrite with the corrected timestamp; the retry
+                        # block below performs it and re-attempts on failure.
+                        race_meta_written = False
+
+            if opts.network_mode and ctx.start_epoc != 0 and not race_meta_written:
+                race_meta_written = push_influx_race(ctx, ctx.start_epoc * 1000)
 
             try:
                 session_response = ctx.client.live.get_session(ctx.race_id)
@@ -1085,12 +1111,12 @@ def _build_class_index(session_details):
         number = competitor['Number']
         category_by_car[number] = competitor['Category']
         lap_positions = {}
-        for lap in competitor['LapTimes']:
+        for lap in competitor.get('LapTimes', []):
             try:
                 lap_positions[int(lap['Lap'])] = int(lap['Position'])
-            except (ValueError, TypeError):
+            except (KeyError, ValueError, TypeError):
                 logging.debug("%s in class resolution; skipping",
-                              _describe_bad_value(lap['Lap'], 'Lap'))
+                              _describe_bad_value(lap.get('Lap'), 'Lap'))
         laps_by_car[number] = lap_positions
         for lap_num, pos in lap_positions.items():
             positions_by_category[competitor['Category']][lap_num].append(pos)

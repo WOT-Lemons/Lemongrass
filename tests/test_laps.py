@@ -1306,6 +1306,75 @@ class TestLiveRaceStandingsWrite:
         mock_standings.assert_not_called()
 
 
+class TestLiveRaceMetadataFailure:
+    def _ctx(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000)
+        ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': {
+            'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+        ctx.client.live.get_racer.return_value = {
+            'Successful': True,
+            'Details': {
+                'Competitor': {
+                    'FirstName': 'Ben', 'LastName': 'K', 'Number': '42',
+                    'Transponder': 'T', 'BestPosition': '1', 'Position': '1',
+                    'Laps': '5', 'BestLap': '3', 'BestLapTime': '1:30.000',
+                    'TotalTime': '10:00.000', 'AdditionalData': None,
+                },
+                'Laps': [],
+            },
+        }
+        return ctx
+
+    def test_non_monitor_returns_write_failed_when_metadata_write_fails(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=False, interval=30)
+        with patch.object(_mod, 'push_influx_race', return_value=False):
+            with patch.object(_mod, 'push_influx_session'):
+                with patch.object(_mod, 'push_influx'):
+                    with patch.object(_mod, 'push_influx_standings_live'):
+                        result = _mod.live_race(ctx, opts)
+        assert result is _mod.MonitorStatus.WRITE_FAILED
+
+    def test_non_monitor_returns_none_when_metadata_write_succeeds(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=False, interval=30)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'push_influx_session'):
+                with patch.object(_mod, 'push_influx'):
+                    with patch.object(_mod, 'push_influx_standings_live'):
+                        result = _mod.live_race(ctx, opts)
+        assert result is None
+
+    def test_monitor_retries_metadata_write_until_success(self):
+        """A failed metadata write must be retried on later polls, not abort
+        the loop or be dropped after one attempt."""
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000)
+        ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        call_count = 0
+        def fake_get_session(race_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 3:
+                stop.set()
+            return {'Successful': True, 'Session': {
+                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        # First write fails, second succeeds; a third poll must not push again.
+        with patch.object(_mod, 'push_influx_race', side_effect=[False, True]) as mock_race:
+            with patch.object(_mod, 'refresh_competitor', return_value=[]):
+                with patch.object(_mod, 'push_influx_standings_live', return_value={}):
+                    _mod.monitor_routine(ctx, [], opts, _stop_event=stop,
+                                         race_meta_written=False)
+
+        assert mock_race.call_count == 2
+
+
 class TestOldRaceClassWiring:
     def _session_details(self, car_number='42', cat_id='1', cat_name='A'):
         return {
@@ -3589,6 +3658,11 @@ class TestClassIndex:
     def test_index_matches_per_car_resolution(self):
         details = self._session_details()
         index = _mod._build_class_index(details)
+        # Hard-coded expected class positions catch regressions the self-comparison
+        # below would miss (the no-index path builds the same index internally).
+        assert _mod._resolve_class_historical('10', details, index) == ('A', {1: 1, 2: 1})
+        assert _mod._resolve_class_historical('11', details, index) == ('A', {1: 2, 2: 2})
+        assert _mod._resolve_class_historical('20', details, index) == ('B', {1: 1, 2: 1})
         for number in ('10', '11', '20'):
             assert (_mod._resolve_class_historical(number, details)
                     == _mod._resolve_class_historical(number, details, index))
