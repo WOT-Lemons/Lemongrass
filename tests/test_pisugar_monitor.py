@@ -1,6 +1,6 @@
 import base64
 import json
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
 from urllib.error import URLError
 
 import pytest
@@ -113,7 +113,7 @@ class TestStartupConnect:
         """The monitor often boots before pisugar-server binds :8421; it must
         retry instead of dying with a traceback."""
         with patch.object(_mod, "login", side_effect=[URLError("refused"), "tok"]) as mock_login:
-            with patch.object(_mod, "exec_command", return_value="PiSugar 3"):
+            with patch.object(_mod, "exec_command", return_value="PiSugar 3") as mock_exec:
                 with patch.object(_mod, "sleep") as mock_sleep:
                     token, tags = _mod._startup_connect("u", "p")
         assert token == "tok"
@@ -121,6 +121,13 @@ class TestStartupConnect:
         mock_sleep.assert_called_once_with(_mod.STARTUP_RETRY_DELAY_S)
         assert tags == {"server_version": "PiSugar 3", "model": "PiSugar 3",
                         "firmware_version": "PiSugar 3"}
+        # Device tags must be read raw; coerce=False keeps "PiSugar 3" from being
+        # numerically mangled.
+        assert mock_exec.call_args_list == [
+            call("get version", "tok", coerce=False),
+            call("get model", "tok", coerce=False),
+            call("get firmware_version", "tok", coerce=False),
+        ]
 
     def test_no_credentials_skips_login(self):
         with patch.object(_mod, "login") as mock_login:
