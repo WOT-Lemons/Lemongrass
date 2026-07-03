@@ -25,15 +25,34 @@ def _reset():
 class TestConnect:
     def test_defaults_to_obd_symlink(self, monkeypatch):
         monkeypatch.delenv("OBD_PORT", raising=False)
+        monkeypatch.delenv("OBD_BAUDRATE", raising=False)
         with patch.object(_mod.obd, "Async") as mock_async:
             _mod.connect()
         mock_async.assert_called_once_with(portstr="/dev/obd")
 
     def test_uses_obd_port_env_override(self, monkeypatch):
         monkeypatch.setenv("OBD_PORT", "/dev/ttyUSB0")
+        monkeypatch.delenv("OBD_BAUDRATE", raising=False)
         with patch.object(_mod.obd, "Async") as mock_async:
             _mod.connect()
         mock_async.assert_called_once_with(portstr="/dev/ttyUSB0")
+
+    def test_passes_baudrate_when_set(self, monkeypatch):
+        monkeypatch.setenv("OBD_PORT", "socket://elm327:35000")
+        monkeypatch.setenv("OBD_BAUDRATE", "38400")
+        with patch.object(_mod.obd, "Async") as mock_async:
+            _mod.connect()
+        mock_async.assert_called_once_with(
+            portstr="socket://elm327:35000", baudrate=38400
+        )
+
+    def test_omits_baudrate_when_unset(self, monkeypatch):
+        monkeypatch.setenv("OBD_PORT", "/dev/obd")
+        monkeypatch.delenv("OBD_BAUDRATE", raising=False)
+        with patch.object(_mod.obd, "Async") as mock_async:
+            _mod.connect()
+        _, kwargs = mock_async.call_args
+        assert "baudrate" not in kwargs
 
 
 class TestNewValue:
