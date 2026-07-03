@@ -356,8 +356,8 @@ def main():
             flush_points(write_api)
             if not _connection_healthy(connection):
                 # Exit nonzero so the container/systemd restart policy re-runs
-                # the well-tested startup connect sequence; flush what's left.
-                flush_points(write_api)
+                # the well-tested startup connect sequence; the flush at the top
+                # of this iteration already covers pending points.
                 logger.error("Exiting for supervisor restart")
                 sys.exit(1)
 
