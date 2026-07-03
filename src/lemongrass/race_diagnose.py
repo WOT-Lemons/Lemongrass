@@ -31,6 +31,11 @@ from lemongrass._env import resolve_tokens
 
 EPOCH_START = '1970-01-01T00:00:00Z'
 
+# Lap timestamps are session-anchored and Flux `stop` is exclusive, so laps can
+# legitimately fall outside the nominal race bounds; pad the window instead of
+# trusting Start/EndDateEpoc exactly. The race_id tag filter stays the exact selector.
+WINDOW_PAD_S = 86400
+
 
 def epoc_to_str(epoc):
     """Convert a Unix epoch integer to a human-readable UTC string."""
@@ -86,13 +91,16 @@ def diagnose_influx(query_api, race_id, car_number, start_epoc=0, end_epoc=0):
     print(f'\n=== InfluxDB: race {race_id}, car {car_number} ===')
 
     range_start = (
-        datetime.fromtimestamp(start_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        datetime.fromtimestamp(start_epoc - WINDOW_PAD_S, tz=timezone.utc)
+        .strftime('%Y-%m-%dT%H:%M:%SZ')
         if start_epoc else EPOCH_START
     )
     if not end_epoc:
         print(f"  Warning: end_time_epoc not set for race {race_id}, using now() as range stop")
-    range_stop = (datetime.fromtimestamp(end_epoc, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                  if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+    range_stop = (
+        datetime.fromtimestamp(end_epoc + WINDOW_PAD_S, tz=timezone.utc)
+        .strftime('%Y-%m-%dT%H:%M:%SZ')
+        if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
 
     tables = query_api.query(
         f'from(bucket: "{_influx.BUCKET_LAPS}")\n'

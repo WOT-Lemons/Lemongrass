@@ -69,3 +69,19 @@ class TestInputValidation:
             with pytest.raises(SystemExit) as exc:
                 rd.main()
         assert exc.value.code == 1
+
+
+class TestWindowPadding:
+    def test_range_padded_one_day_each_side(self):
+        """Flux stop is exclusive and lap timestamps are session-anchored, so a
+        session running past the nominal EndDateEpoc would be invisible to
+        diagnose, mis-reporting a write bug."""
+        import lemongrass.race_diagnose as rd
+        query_api = MagicMock()
+        query_api.query.return_value = []
+        start = 864000   # 1970-01-11
+        end = 950400     # 1970-01-12
+        rd.diagnose_influx(query_api, '999', '42', start_epoc=start, end_epoc=end)
+        flux = query_api.query.call_args.args[0]
+        assert 'start: 1970-01-10T00:00:00Z' in flux
+        assert 'stop: 1970-01-13T00:00:00Z' in flux

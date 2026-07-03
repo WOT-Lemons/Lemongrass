@@ -270,7 +270,7 @@ class TestValidateBackfill:
         _mod.validate_backfill([('101', '42')], query_api)
         laps_flux = query_api.query.call_args_list[1].args[0]
         assert '1970-01-01' not in laps_flux
-        assert '2022-06-01' in laps_flux
+        assert '2022-05-31' in laps_flux  # race_start (2022-06-01) padded back one day
 
     def test_races_query_filters_by_end_time_epoc_field(self):
         query_api = self._make_query_api(actual_cars={'42': 10})
@@ -609,4 +609,27 @@ class TestInputValidation:
             with pytest.raises(SystemExit) as exc:
                 rb.main()
         assert exc.value.code == 1
+
+
+class TestValidateWindowPadding:
+    def test_lap_query_padded_one_day_each_side(self):
+        import lemongrass.race_backfill as rb
+        query_api = MagicMock()
+
+        race_record = MagicMock()
+        race_record.values = {'race_name': 'Test Race', 'race_id': '999'}
+        race_record.get_time.return_value = datetime(2020, 1, 2, tzinfo=timezone.utc)
+        race_record.get_value.return_value = int(
+            datetime(2020, 1, 4, tzinfo=timezone.utc).timestamp())
+        race_table = MagicMock()
+        race_table.records = [race_record]
+
+        lap_table = MagicMock()
+        lap_table.records = []
+        query_api.query.side_effect = [[race_table], [lap_table]]
+
+        rb.validate_backfill([('999', '42')], query_api)
+        lap_flux = query_api.query.call_args_list[1].args[0]
+        assert 'start: 2020-01-01T00:00:00Z' in lap_flux
+        assert 'stop: 2020-01-05T00:00:00Z' in lap_flux
 
