@@ -25,6 +25,7 @@ dependencies = [
     "obd~=0.7",
     "pandas~=2.3",
     "race-monitor>=0.6.1,<1",
+    "urllib3>=2",
 ]
 
 [project.urls]
@@ -50,4 +51,4 @@ select = ["E", "F", "W", "D1", "I", "B", "UP", "RUF", "N", "C4", "SIM"]
 "tests/**" = ["D1", "SIM117"]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.14"]
