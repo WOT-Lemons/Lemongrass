@@ -161,6 +161,53 @@ class TestInfluxErrorHandling:
         assert 'bucket "laps" not found' in err
 
 
+class TestRaceMonitorErrors:
+    def test_429_exhaustion_exits_1_with_rate_limit_message(self, capsys):
+        """race-monitor 0.7.0 raises RaceMonitorHTTPError(429) once retries are
+        exhausted; the CLI must report it cleanly, not crash with a traceback."""
+        from race_monitor import RaceMonitorHTTPError
+
+        def raise_429():
+            raise RaceMonitorHTTPError(429, "Too Many Requests")
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_429):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        err = capsys.readouterr().err
+        assert 'rate limit' in err.lower()
+        assert '429' in err
+
+    def test_other_http_error_exits_1_with_status(self, capsys):
+        from race_monitor import RaceMonitorHTTPError
+
+        def raise_500():
+            raise RaceMonitorHTTPError(500, "boom")
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_500):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        err = capsys.readouterr().err
+        assert '500' in err
+        assert 'rate limit' not in err.lower()
+
+    def test_base_error_exits_1_without_traceback(self, capsys):
+        from race_monitor import RaceMonitorError
+
+        def raise_base():
+            raise RaceMonitorError("no tokens configured")
+
+        with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
+            with patch('lemongrass.races.main', raise_base):
+                with pytest.raises(SystemExit) as wrapped:
+                    cli.main()
+        assert wrapped.value.code == 1
+        assert 'no tokens configured' in capsys.readouterr().err
+
+
 class TestExitCodePropagation:
     def test_subcommand_return_value_becomes_exit_code(self):
         """laps.main() returns 1 on failure; the dispatcher must not swallow it."""

@@ -168,7 +168,7 @@ requires-dist = [
     { name = "influxdb-client", specifier = "~=1.47" },
     { name = "obd", specifier = "~=0.7" },
     { name = "pandas", specifier = "~=2.3" },
-    { name = "race-monitor", specifier = ">=0.6.1,<1" },
+    { name = "race-monitor", specifier = ">=0.7.0,<1" },
     { name = "urllib3", specifier = ">=2" },
 ]
 
@@ -556,15 +556,15 @@ wheels = [
 
 [[package]]
 name = "race-monitor"
-version = "0.6.1"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "idna" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/87/ae/2d78c5c9672f433bb85fcddd1b563782986adee70405f89f587b5ad0dde3/race_monitor-0.6.1.tar.gz", hash = "sha256:3ecd79287fc9beef3a69a2e28d2c9aee8a70052376ba09800d8499289568c2f9", size = 14434, upload-time = "2026-06-29T02:56:00.864Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/02/6a9a67ef45f9ba96e2c927d734548f24dfd7aca4f176f6735eaca202bed9/race_monitor-0.7.0.tar.gz", hash = "sha256:b5e11b645e1ea818c937793261ba7ad0a926f818b26693ebf322d53726650512", size = 16179, upload-time = "2026-07-03T17:22:09.156Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/6a/58c88bcf2ffbcadbaf2af18df6ee613b421e071eee9613ca42e6b9ee4112/race_monitor-0.6.1-py3-none-any.whl", hash = "sha256:33ee95fe41e4b88dffbcbd538566854e1cecd518ea6bd8b3ef0c5c39e3cf2440", size = 20313, upload-time = "2026-06-29T02:55:59.526Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/91/7ff9ff7a3bdcd7513843054e53f3e97a8935475c6562b7005926a7e73e4d/race_monitor-0.7.0-py3-none-any.whl", hash = "sha256:427e1a761d0ad5732e523d4fb76fc130e403d4098c945595706764a2e3d2f220", size = 22720, upload-time = "2026-07-03T17:22:08.043Z" },
 ]
 
 [[package]]
