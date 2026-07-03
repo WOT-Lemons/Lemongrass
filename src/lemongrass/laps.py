@@ -818,7 +818,12 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
     start_epoc_ms = effective_epoc * 1000
     points = []
     for lap in laps:
-        time_lap_completed_ms = start_epoc_ms + (_time_to_ms(lap['TotalTime']) or 0)
+        total_time_ms = _time_to_ms(lap['TotalTime'])
+        if total_time_ms is None:
+            logging.warning("%s for %s; skipping lap",
+                            _describe_bad_value(lap['TotalTime'], 'TotalTime'), competitor_name)
+            continue
+        time_lap_completed_ms = start_epoc_ms + total_time_ms
         lap_time_ms = _time_to_ms(lap['LapTime'])
         try:
             lap_num = int(lap['Lap'])

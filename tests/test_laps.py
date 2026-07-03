@@ -820,13 +820,15 @@ class TestPushInfluxClassInfo:
         _mod.push_influx(ctx, laps, False)
         assert 'lap_time' not in self._record(write_api)
 
-    def test_unparseable_total_time_anchors_to_start_epoc(self):
+    def test_unparseable_total_time_skips_lap_entirely(self):
+        """A lap with unparseable TotalTime must not be written at all — anchoring
+        it at start_epoc_ms + 0 would silently collide/dedupe with any other lap
+        legitimately timestamped at session start."""
         ctx, write_api = self._ctx()  # start_epoc=0
         laps = [{'Lap': '1', 'LapTime': '1:30.000', 'Position': '1',
                  'FlagStatus': 'Green', 'TotalTime': '3$H'}]
         _mod.push_influx(ctx, laps, False)
-        # TotalTime unparseable → falls back to 0; timestamp = start_epoc_ms + 0 = 0
-        assert self._record(write_api).endswith(' 0')
+        write_api.write.assert_not_called()
 
     def test_explicit_car_number_overrides_ctx(self):
         ctx, write_api = self._ctx()  # ctx.car_number = '42'
@@ -3327,6 +3329,38 @@ class TestBuildLapPointsStreamingToken:
             points = _mod._build_lap_points(ctx, laps, 'Driver', None, None, None, 1000000, '42')
         assert len(points) == 1  # lap still written, position omitted
         assert 'Race Information' in caplog.text
+
+
+class TestBuildLapPointsBadTotalTime:
+    """A lap whose TotalTime can't be parsed would otherwise be silently anchored
+    at session start (start_epoc_ms + 0); the live/monitor path must skip it like
+    the historical backfill path already does (old_race pre-filters there)."""
+
+    def test_lap_with_garbage_total_time_excluded_from_points(self):
+        laps = [{'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '$F'}]
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000000)
+        points = _mod._build_lap_points(ctx, laps, 'Driver', None, None, None, 1000000, '42')
+        assert points == []
+
+    def test_logs_warning_for_garbage_total_time(self, caplog):
+        laps = [{'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                 'FlagStatus': 'Green', 'TotalTime': '$F'}]
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000000)
+        with caplog.at_level(logging.WARNING):
+            _mod._build_lap_points(ctx, laps, 'Driver', None, None, None, 1000000, '42')
+        assert any('$F' in r.message for r in caplog.records)
+
+    def test_other_laps_still_written_when_one_has_bad_total_time(self):
+        good = {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                'FlagStatus': 'Green', 'TotalTime': '0:01:30.000'}
+        bad = {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '1',
+               'FlagStatus': 'Green', 'TotalTime': '$F'}
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000000)
+        points = _mod._build_lap_points(ctx, [good, bad], 'Driver', None, None, None,
+                                         1000000, '42')
+        assert len(points) == 1
+        assert 'lap_no=1i' in points[0].to_line_protocol()
 
 
 class TestMainMissingToken:
