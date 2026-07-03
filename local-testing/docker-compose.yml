@@ -37,6 +37,30 @@ services:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
 
+  elm327:
+    build:
+      context: elm327
+    profiles: ["telem"]
+    stdin_open: true   # emulator's cmd console exits on stdin EOF
+
+  telem:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    profiles: ["telem"]
+    command: ["lemongrass", "telem"]
+    environment:
+      OBD_PORT: socket://elm327:35000
+      OBD_BAUDRATE: "38400"
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_ORG: lemongrass
+      INFLUX_TELEMETRY_TOKEN: local-dev-token
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      elm327:
+        condition: service_started
+
 volumes:
   influxdb-data:
   grafana-data:
