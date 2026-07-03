@@ -1,6 +1,7 @@
 import base64
 import json
 from unittest.mock import MagicMock, mock_open, patch
+from urllib.error import URLError
 
 import pytest
 
@@ -90,3 +91,40 @@ class TestMain:
                         _mod.main()
         assert exc.value.code == 1
         login.assert_not_called()
+
+
+class TestExecCommandCoercion:
+    def test_raw_mode_preserves_version_strings(self):
+        """Firmware '1.10' must not become the float 1.1 in device tags."""
+        with patch.object(_mod.urllib.request, "urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.read.return_value = \
+                b"firmware_version: 1.10"
+            assert _mod.exec_command("get firmware_version", coerce=False) == "1.10"
+
+    def test_default_mode_still_coerces_floats(self):
+        with patch.object(_mod.urllib.request, "urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.read.return_value = \
+                b"battery: 84.5"
+            assert _mod.exec_command("get battery") == 84.5
+
+
+class TestStartupConnect:
+    def test_retries_until_server_reachable(self):
+        """The monitor often boots before pisugar-server binds :8421; it must
+        retry instead of dying with a traceback."""
+        with patch.object(_mod, "login", side_effect=[URLError("refused"), "tok"]) as mock_login:
+            with patch.object(_mod, "exec_command", return_value="PiSugar 3"):
+                with patch.object(_mod, "sleep") as mock_sleep:
+                    token, tags = _mod._startup_connect("u", "p")
+        assert token == "tok"
+        assert mock_login.call_count == 2
+        mock_sleep.assert_called_once_with(_mod.STARTUP_RETRY_DELAY_S)
+        assert tags == {"server_version": "PiSugar 3", "model": "PiSugar 3",
+                        "firmware_version": "PiSugar 3"}
+
+    def test_no_credentials_skips_login(self):
+        with patch.object(_mod, "login") as mock_login:
+            with patch.object(_mod, "exec_command", return_value="PiSugar 3"):
+                token, _tags = _mod._startup_connect(None, None)
+        assert token is None
+        mock_login.assert_not_called()
