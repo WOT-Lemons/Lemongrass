@@ -587,6 +587,7 @@ def old_race(ctx, opts):
                 logging.error(
                     "Standings incomplete for race %s and the cleanup delete failed; "
                     "rerun with --force to rewrite standings", ctx.race_id)
+            return 1
 
     print_rankings(sorted_competitors, False, opts.selected_class,
                    session_details['Session']['Categories'])

@@ -2398,6 +2398,31 @@ class TestOldRaceMetadataFailure:
             result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': False})
         assert result == 1
 
+    def test_standings_write_failure_fails_run(self):
+        """Standings were wiped after a partial write and need a rewrite — the
+        run must report failure so race-backfill retries, matching the
+        metadata-write path above."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'push_influx_standings_historical',
+                              return_value=False):
+                with patch.object(_mod, 'delete_existing_standings', return_value=True):
+                    with patch.object(_mod, 'print_rankings'):
+                        result = _mod.old_race(ctx, opts)
+        assert result == 1
+
+    def test_standings_cleanup_delete_failure_also_fails_run(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'push_influx_standings_historical',
+                              return_value=False):
+                with patch.object(_mod, 'delete_existing_standings', return_value=False):
+                    with patch.object(_mod, 'print_rankings'):
+                        result = _mod.old_race(ctx, opts)
+        assert result == 1
+
 
 class TestPushInfluxSession:
     def _ctx(self):
