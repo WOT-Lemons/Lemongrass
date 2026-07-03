@@ -3422,3 +3422,62 @@ class TestOldRaceSessionFetching:
             with patch.object(_mod, 'print_rankings'):
                 _mod.old_race(ctx, opts)
         assert ctx.client.results.session_details.call_count == 2
+
+
+class TestOldRaceExpectedCountFiltering:
+    """One garbage lap must not make expected != written forever, which defeats
+    --skip-if-complete and re-deletes/rewrites the race on every backfill run."""
+
+    def _session_details(self, lap_times):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'Name': 'S1', 'SessionStartDateEpoc': 1000,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [{
+                    'Number': '42', 'Category': '1', 'FirstName': 'Jane',
+                    'LastName': 'Doe', 'Position': '1', 'Laps': '2',
+                    'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
+                    'AdditionalData': '', 'LapTimes': lap_times,
+                }],
+            },
+        }
+
+    def _ctx(self, lap_times):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        ctx.delete_api = MagicMock()
+        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+        ctx.client.results.session_details.return_value = self._session_details(lap_times)
+        return ctx
+
+    def test_garbage_lap_number_excluded_from_expected_count(self):
+        """Stored: 1 lap (the good one). Expected must also be 1 → SKIP."""
+        good = {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                'FlagStatus': 0, 'TotalTime': '0:01:30.000'}
+        garbage = {'Lap': '$F', 'LapTime': '0:01:31.000', 'Position': '2',
+                   'FlagStatus': 0, 'TotalTime': '0:03:01.000'}
+        ctx = self._ctx([good, garbage])
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide',
+                              return_value=(1, 1)):
+                with patch.object(_mod, 'push_influx_race', return_value=True):
+                    with patch.object(_mod, 'delete_existing_laps') as mock_del:
+                        _mod.old_race(ctx, opts)
+        mock_del.assert_not_called()
+
+    def test_garbage_total_time_excluded_from_write(self):
+        """A lap whose TotalTime cannot anchor a timestamp would collide at the
+        session start and be silently deduplicated by InfluxDB — exclude it."""
+        good = {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                'FlagStatus': 0, 'TotalTime': '0:01:30.000'}
+        bad_time = {'Lap': '2', 'LapTime': '0:01:31.000', 'Position': '1',
+                    'FlagStatus': 0, 'TotalTime': '$F'}
+        ctx = self._ctx([good, bad_time])
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'print_rankings'):
+                _mod.old_race(ctx, opts)
+        lap_write = ctx.write_api.write.call_args_list[0]
+        assert len(lap_write.kwargs['record']) == 1

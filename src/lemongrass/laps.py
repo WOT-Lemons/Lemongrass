@@ -416,10 +416,28 @@ def old_race(ctx, opts):
                     or None
                 )
                 comp_car_info = competitor.get('AdditionalData') or None
-                influx_laps = [
-                    {**lap, 'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus']))}
-                    for lap in comp_laps
-                ]
+                influx_laps = []
+                for lap in comp_laps:
+                    # Filter here — not only in _build_lap_points — so the expected
+                    # count used by --skip-if-complete matches what actually gets
+                    # written; otherwise one garbage lap re-triggers the delete+
+                    # rewrite on every backfill run.
+                    try:
+                        int(lap['Lap'])
+                    except (ValueError, TypeError):
+                        logging.warning(
+                            "%s for car %s; excluding lap from backfill",
+                            _describe_bad_value(lap['Lap'], 'Lap'), comp_number)
+                        continue
+                    if _time_to_ms(lap['TotalTime']) is None:
+                        logging.warning(
+                            "%s for car %s; excluding lap from backfill",
+                            _describe_bad_value(lap['TotalTime'], 'TotalTime'), comp_number)
+                        continue
+                    influx_laps.append({
+                        **lap,
+                        'FlagStatus': flag_map.get(lap['FlagStatus'], str(lap['FlagStatus'])),
+                    })
                 class_name, class_positions = _resolve_class_historical(
                     comp_number, session_details)
                 session_entry['competitors'].append({
