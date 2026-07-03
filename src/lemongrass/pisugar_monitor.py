@@ -23,6 +23,7 @@ logger = logging.getLogger('pisugar-monitor')
 PISUGAR_API = "http://localhost:8421"
 PISUGAR_CONFIG = "/etc/pisugar-server/config.json"
 TOKEN_REFRESH_MARGIN = 300  # seconds before expiry to proactively refresh
+HTTP_TIMEOUT_S = 5  # a wedged pisugar-server must not hang the monitor forever
 
 
 def read_credentials():
@@ -43,7 +44,7 @@ def login(username, password):
         data=b"",
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
         return resp.read().decode().strip()
 
 
@@ -52,7 +53,7 @@ def token_expiry(token):
     try:
         payload_b64 = token.split('.')[1]
         payload_b64 += '=' * (-len(payload_b64) % 4)
-        payload = json.loads(base64.b64decode(payload_b64))
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
         return payload.get('exp')
     except Exception:
         return None
@@ -69,7 +70,7 @@ def exec_command(command, token=None):
         headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
         raw = resp.read().decode().strip()
     _, sep, value = raw.partition(": ")
     if sep:

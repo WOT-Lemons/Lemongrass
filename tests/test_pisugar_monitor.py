@@ -34,6 +34,14 @@ class TestTokenExpiry:
             payload = {"exp": 9999, "pad": extra}
             assert token_expiry(_make_jwt(payload)) == 9999
 
+    def test_base64url_payload_decoded(self):
+        """JWT payloads are base64url; b64decode silently drops '-'/'_' and
+        corrupts the payload, permanently disabling proactive refresh."""
+        payload = {"exp": 4102444800, "k": ">>>"}
+        body = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+        assert "-" in body or "_" in body  # guard: must exercise base64url chars
+        assert token_expiry(f"header.{body}.sig") == 4102444800
+
 
 class TestReadCredentials:
     def test_returns_credentials_from_config(self):
@@ -53,6 +61,20 @@ class TestReadCredentials:
         data = json.dumps({"other": "value"})
         with patch("builtins.open", mock_open(read_data=data)):
             assert read_credentials() == (None, None)
+
+
+class TestHttpTimeouts:
+    def test_login_passes_timeout(self):
+        with patch.object(_mod.urllib.request, "urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.read.return_value = b"tok"
+            _mod.login("u", "p")
+        assert mock_open.call_args.kwargs["timeout"] == _mod.HTTP_TIMEOUT_S
+
+    def test_exec_command_passes_timeout(self):
+        with patch.object(_mod.urllib.request, "urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.read.return_value = b"battery: 84.5"
+            _mod.exec_command("get battery")
+        assert mock_open.call_args.kwargs["timeout"] == _mod.HTTP_TIMEOUT_S
 
 
 class TestMain:
