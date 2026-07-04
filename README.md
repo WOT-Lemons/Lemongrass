@@ -183,10 +183,14 @@ lemongrass laps RACE_ID              # full field
 > **Persisting CSV output:** `lemongrass laps -o` writes a `.csv` to the container's
 > working directory (`/data`). The container runs as a non-root user, so that write
 > stays inside the container and is lost on exit unless you mount a writable directory
-> at `/data`:
+> at `/data`. Bind mounts keep their host ownership, so pass `--user` to run as your
+> host user — the CSV then lands in `./out` owned by you:
 >
 > ```shell
-> docker run --rm -it --env-file .env -v "$(pwd)/out:/data" \
+> mkdir -p out
+> docker run --rm -it --env-file .env \
+>   --user "$(id -u):$(id -g)" \
+>   -v "$(pwd)/out:/data" \
 >   ghcr.io/wot-lemons/lemongrass:latest \
 >   lemongrass laps RACE_ID CAR_NUMBER -o
 > ```
