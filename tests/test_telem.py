@@ -1,6 +1,4 @@
-import importlib
 import logging
-import sys
 from unittest.mock import MagicMock, patch
 
 import lemongrass.telem as _mod
@@ -549,17 +547,10 @@ class TestRouteCommand:
     def test_no_real_dtc_command_is_watched(self):
         # Guard against the real library inventory, not just names we expect:
         # no mode-2 freeze-frame twin and no mode-03/07 DTC command may route
-        # to a callback. conftest mocks obd suite-wide, so temporarily import
-        # the real module (same pop/restore idiom conftest uses for race_monitor).
-        mock_obd = sys.modules.pop("obd")
-        try:
-            real_obd = importlib.import_module("obd")
-        finally:
-            sys.modules["obd"] = mock_obd
-
+        # to a callback.
         dtc_commands = {"GET_DTC", "GET_CURRENT_DTC", "CLEAR_DTC", "FREEZE_DTC"}
         checked = 0
-        for mode in real_obd.commands.modes:
+        for mode in _mod.obd.commands.modes:
             for command in mode:
                 if command is None:
                     continue
