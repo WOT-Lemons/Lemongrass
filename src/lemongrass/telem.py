@@ -272,8 +272,20 @@ def connect():
 
     Defaults to the ``/dev/obd`` udev symlink (passed into the container via a
     device mapping). ``OBD_PORT`` overrides it for host-based testing.
+
+    ``OBD_BAUDRATE`` optionally pins the baud rate. Real USB adapters leave it
+    unset so python-obd auto-detects; the emulator's ``socket://`` transport
+    needs it set (e.g. 38400) because python-obd only skips auto-baud for
+    ``/dev/pts`` pseudo-terminals, not TCP sockets.
     """
-    return obd.Async(portstr=os.environ.get('OBD_PORT', '/dev/obd'))
+    kwargs = {'portstr': os.environ.get('OBD_PORT', '/dev/obd')}
+    baud = os.environ.get('OBD_BAUDRATE')
+    if baud:
+        try:
+            kwargs['baudrate'] = int(baud)
+        except ValueError:
+            raise ValueError(f"OBD_BAUDRATE must be an integer, got {baud!r}") from None
+    return obd.Async(**kwargs)
 
 
 def _configure_obd_logging():

@@ -17,15 +17,17 @@ green lint — run both before pushing.
 
 When prod is unavailable, run the full pipeline against a local InfluxDB.
 
-1. Start the stack (InfluxDB on `:8086`, Grafana on `:3000`):
+1. Start the stack (InfluxDB on `:8086`, Grafana on `:3000`, plus the emulated
+   OBD car — an ELM327 emulator + `telem`):
 
    ```bash
-   docker compose -f local-testing/docker-compose.yml up -d
+   docker compose -f local-testing/docker-compose.yml up --build -d
    ```
 
-   First start creates org `lemongrass`, a pinned operator token
-   (`local-dev-token`), and the `laps`, `races`, and `race_sessions` buckets.
-   These are non-secret, local-only values.
+   `--build` builds the `elm327` and `telem` images on first start (and after
+   changes). First start creates org `lemongrass`, a pinned operator token
+   (`local-dev-token`), and the `laps`, `races`, `race_sessions`, and
+   `stats_252/autogen` buckets. These are non-secret, local-only values.
 
 2. Point the CLI at the local stack by sourcing the committed app env:
 
@@ -55,9 +57,10 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
 
    or open Grafana at http://localhost:3000 (login `admin` / `local-dev-password`)
    — the InfluxDB datasource and lemongrass dashboards (**laps**, **race-control**, **standings**)
-   are pre-provisioned. The OBD dashboards (**telegraf**, **car252-pisugar-ups**) and OBD panels
-   in **race-control** show no data locally because OBD/`stats_252` collection is not configured
-   for local testing.
+   are pre-provisioned. The **telegraf** dashboard and the OBD panels in **race-control** render
+   emulated telemetry from the `telem` service, which starts with the default stack (see
+   "Emulated OBD telemetry" below). **car252-pisugar-ups** stays empty — it needs PiSugar UPS
+   hardware.
 
 5. Tear down (add `-v` to wipe data and re-trigger bucket init next start):
 
@@ -68,8 +71,40 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
    Storage is persistent named Docker volumes, so a plain `down` keeps your seeded
    data across restarts; pass `-v` only when you want a clean reset.
 
-**Note:** telemetry/OBD commands (`telem`, `pisugar-monitor`) are out of scope for
-local testing — they write to a `stats_252` bucket that this stack does not create.
+### Emulated OBD telemetry
+
+The `telem` service normally reads a physical ELM327 adapter. For local testing, a
+virtual ELM327 ([`ELM327-emulator`](https://pypi.org/project/ELM327-emulator/)) runs as
+the `elm327` service and telem connects to it over TCP (`socket://elm327:35000`). Both
+start as part of the default stack (step 1), so telem streams emulated OBD data with no
+extra flags.
+
+telem writes emulated data to the `stats_252/autogen` bucket (seeded by the InfluxDB init
+scripts), so the **telegraf** dashboard and the OBD panels in **race-control** show live
+data. That bucket and its DBRP are created only on a **fresh** InfluxDB volume, so if you
+had a stack running before these were added, recreate the volume:
+
+```bash
+docker compose -f local-testing/docker-compose.yml down -v
+docker compose -f local-testing/docker-compose.yml up --build -d
+```
+
+(`pisugar-monitor` remains out of scope for local testing — it needs PiSugar UPS hardware.)
+
+### Running the OBD integration tests
+
+The default `uv run pytest` run is mock-only and fast. The integration tests drive telem's
+real OBD path against the emulator and are excluded by the `integration` marker. The
+emulator is installed imperatively (kept out of `uv.lock`):
+
+```bash
+uv sync
+bash local-testing/install-emulator.sh
+uv run --no-sync pytest -m integration tests/
+```
+
+`--no-sync` prevents `uv run` from pruning the imperatively-installed emulator. CI runs
+this same sequence in the `integration` job.
 
 **Unreachable InfluxDB:** if the server is down or unreachable, commands retry a few
 times, then exit non-zero with a one-line `cannot reach InfluxDB at …` message

@@ -38,6 +38,33 @@ datasources:
     secureJsonData:
       httpHeaderValue1: Token local-dev-token
 
+  # OBD/telemetry InfluxQL datasources (v1 DBRP db=stats_252) — back the
+  # telegraf, car252-pisugar-ups, and race-control OBD panels. UIDs match the
+  # datasource UIDs baked into the dashboard JSON (copied from prod).
+  - name: stats_252
+    uid: ddpgw53c4nojkd
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: false
+    jsonData:
+      dbName: stats_252
+      httpHeaderName1: Authorization
+    secureJsonData:
+      httpHeaderValue1: Token local-dev-token
+
+  - name: stats_252_pisugar
+    uid: f3134d95-85f2-4173-9d6b-5ce95b10bbd0
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: false
+    jsonData:
+      dbName: stats_252
+      httpHeaderName1: Authorization
+    secureJsonData:
+      httpHeaderValue1: Token local-dev-token
+
   # Flux datasources — back the dashboard template variables.
   - name: laps_flux
     uid: wotl-laps-flux

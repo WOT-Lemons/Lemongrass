@@ -9,6 +9,7 @@ on:
       - 'Dockerfile'
       - 'pyproject.toml'
       - 'uv.lock'
+      - 'local-testing/**'
 
 jobs:
   test:
@@ -29,3 +30,25 @@ jobs:
 
       - name: Run tests
         run: uv run --frozen --with pytest pytest tests/
+
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: "0.11.24"
+          python-version: "3.14"
+
+      - name: Sync project (frozen)
+        run: uv sync --frozen
+
+      - name: Install ELM327 emulator
+        run: bash local-testing/install-emulator.sh
+
+      - name: Run integration tests
+        run: uv run --no-sync pytest -m integration tests/

@@ -37,6 +37,39 @@ services:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
 
+  elm327:
+    build:
+      context: elm327
+    # Port comes from OBD_EMULATOR_PORT (.env); compose interpolates it into
+    # this exec-form command, overriding the image's default CMD.
+    command: ["python", "-m", "elm", "-s", "car", "-n", "${OBD_EMULATOR_PORT}"]
+    stdin_open: true   # emulator's cmd console exits on stdin EOF
+    healthcheck:
+      # Healthy only once the emulator socket accepts connections, so telem
+      # doesn't race the listener. python is present in the uv base image.
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', ${OBD_EMULATOR_PORT}), timeout=2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+
+  telem:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["lemongrass", "telem"]
+    environment:
+      OBD_PORT: socket://elm327:${OBD_EMULATOR_PORT}
+      OBD_BAUDRATE: "38400"
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_ORG: lemongrass
+      INFLUX_TELEMETRY_TOKEN: local-dev-token
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      elm327:
+        condition: service_healthy
+
 volumes:
   influxdb-data:
   grafana-data:
