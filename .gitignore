@@ -128,6 +128,8 @@ activemq-data/
 
 # Environments
 .env
+# Non-secret: the local test stack's single source for the emulator port.
+!local-testing/.env
 .envrc
 .venv
 env/

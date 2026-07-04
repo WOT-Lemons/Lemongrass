@@ -5,6 +5,8 @@ emulator installed via local-testing/install-emulator.sh. The emulator is
 spawned as a subprocess and never imported, so this module imports cleanly even
 when the emulator is absent (the tests are simply deselected by default).
 """
+import os
+import select
 import socket
 import subprocess
 import sys
@@ -27,17 +29,28 @@ def _free_port():
 
 
 def _wait_for_ready(proc, needle, timeout):
-    """Block until the emulator prints its 'listening' line, or fail loudly."""
+    """Block until the emulator prints its 'listening' line, or fail loudly.
+
+    Reads the raw stdout fd via ``select`` so the deadline is enforced *during*
+    the wait — a plain ``readline()`` blocks until a newline arrives and would
+    ignore the timeout if the emulator stalled mid-line.
+    """
     deadline = time.monotonic() + timeout
+    fd = proc.stdout.fileno()
     captured = []
+    buf = ""
     while time.monotonic() < deadline:
-        line = proc.stdout.readline()
-        if not line:
+        ready, _, _ = select.select([fd], [], [], deadline - time.monotonic())
+        if not ready:
+            continue
+        chunk = os.read(fd, 4096).decode(errors="replace")
+        if not chunk:  # EOF
             if proc.poll() is not None:
                 raise RuntimeError("emulator exited early:\n" + "".join(captured))
             continue
-        captured.append(line)
-        if needle in line:
+        captured.append(chunk)
+        buf += chunk
+        if needle in buf:
             return
     raise RuntimeError(f"emulator not ready in {timeout}s:\n" + "".join(captured))
 
