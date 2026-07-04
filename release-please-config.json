@@ -6,11 +6,7 @@
     { "type": "fix", "section": "Bug Fixes" },
     { "type": "perf", "section": "Performance Improvements" },
     { "type": "revert", "section": "Reverts" },
-    { "type": "deps", "section": "Dependencies" },
-    { "type": "chore", "section": "Miscellaneous" },
-    { "type": "refactor", "section": "Miscellaneous" },
-    { "type": "ci", "section": "Miscellaneous" },
-    { "type": "build", "section": "Miscellaneous" }
+    { "type": "deps", "section": "Dependencies" }
   ],
   "packages": {
     ".": {}
