@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.1](https://github.com/WOT-Lemons/Lemongrass/compare/v4.0.0...v4.0.1) (2026-07-04)
+
+
+### Miscellaneous
+
+* **cleanup:** loop package prune to a fixed point and run daily ([#185](https://github.com/WOT-Lemons/Lemongrass/issues/185)) ([659655c](https://github.com/WOT-Lemons/Lemongrass/commit/659655cb6e274f573c8ee9dde257b5337d78a61f))
+
 ## [4.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v3.1.0...v4.0.0) (2026-07-04)
 
 
