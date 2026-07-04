@@ -167,15 +167,15 @@ class TestNewFuelStatus:
 class TestConfigureObdLogging:
     def test_no_debug_by_default(self, monkeypatch):
         monkeypatch.delenv("OBD_DEBUG", raising=False)
-        _mod.obd.logger.setLevel.reset_mock()
-        _mod._configure_obd_logging()
-        _mod.obd.logger.setLevel.assert_not_called()
+        with patch.object(_mod.obd.logger, "setLevel") as mock_set_level:
+            _mod._configure_obd_logging()
+        mock_set_level.assert_not_called()
 
     def test_debug_enabled_via_env(self, monkeypatch):
         monkeypatch.setenv("OBD_DEBUG", "1")
-        _mod.obd.logger.setLevel.reset_mock()
-        _mod._configure_obd_logging()
-        _mod.obd.logger.setLevel.assert_called_once_with(_mod.obd.logging.DEBUG)
+        with patch.object(_mod.obd.logger, "setLevel") as mock_set_level:
+            _mod._configure_obd_logging()
+        mock_set_level.assert_called_once_with(logging.DEBUG)
 
 
 class TestNewAirStatus:
