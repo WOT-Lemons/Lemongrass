@@ -8,6 +8,14 @@
   "semanticCommitType": "deps",
   "semanticCommitScope": null,
   "minimumReleaseAge": "7 days",
+  "packageRules": [
+    {
+      "description": "astral-sh/uv releases faster than the 7-day stability gate, so the newest tag is always <7 days old and the base-image FROM update never matures out of 'pending' — freezing us several releases behind. Relax the soak for this one trusted, digest-pinned first-party image only; the 7-day default still protects every other dependency.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/astral-sh/uv"],
+      "minimumReleaseAge": "1 day"
+    }
+  ],
   "pep621": {
     "enabled": true
   }
