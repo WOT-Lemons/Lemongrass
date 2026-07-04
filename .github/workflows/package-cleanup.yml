@@ -6,7 +6,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 23 * * 0' # weekly on Sunday at 23:00 UTC
+    - cron: '0 23 * * *' # daily at 23:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -42,60 +42,72 @@ jobs:
       matrix:
         package: [lemongrass]
     steps:
-      - name: Delete orphaned ${{ matrix.package }} attestation manifests
+      - name: Prune orphaned attestations and untagged ${{ matrix.package }} versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          # Collect all currently-known version digests
-          all_digests=$(gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
-            --jq '[.[] | .name] | .[]')
-
-          # Delete sha256-<hex> tagged attestation indexes whose subject is no longer present.
-          # Runs before the untagged cleanup so the freed inner SBOM blobs are caught in that pass.
-          gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
-            --jq '.[] | select(any(.metadata.container.tags[]?; test("^sha256-[0-9a-f]{64}$"))) | "\(.id) \(first(.metadata.container.tags[] | select(test("^sha256-[0-9a-f]{64}$"))))"' | \
-          while read -r version_id tag; do
-            subject="sha256:${tag#sha256-}"
-            if echo "$all_digests" | grep -qF "$subject"; then
-              echo "Keeping ${{ matrix.package }} attestation $tag (subject exists)"
-            else
-              gh api --method DELETE "/orgs/wot-lemons/packages/container/${{ matrix.package }}/versions/$version_id"
-              echo "Deleted orphaned ${{ matrix.package }} attestation $tag (subject $subject gone)"
-            fi
-          done
-
-      - name: Delete untagged ${{ matrix.package }} versions
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
+          pkg='${{ matrix.package }}'
+          api="/orgs/wot-lemons/packages/container/$pkg/versions"
 
           # Login so buildx imagetools can inspect multi-arch manifests
-          echo "$GH_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "$GH_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
 
-          # Collect all digests referenced by tagged manifest lists (platform images, attestations).
-          # sort -u deduplicates tags so aliases (1.0.0, 1.0, 1, latest) don't trigger redundant calls.
-          referenced_digests=""
-          while IFS= read -r tag; do
-            digests=$(docker buildx imagetools inspect \
-              "ghcr.io/wot-lemons/${{ matrix.package }}:$tag" \
-              --raw | jq -r '.manifests[]?.digest // empty')
-            referenced_digests="$referenced_digests"$'\n'"$digests"
-          done < <(gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
-            --jq '[.[] | .metadata.container.tags[]] | .[]' | sort -u)
+          # Deletions cascade one level per pass: removing an untagged image
+          # index orphans its sha256-<digest> attestation, and removing that
+          # attestation orphans the SBOM blob it wrapped. Each pass only sees the
+          # state it snapshotted at its start, so a single sweep peels off just
+          # one layer -- which is why this used to need several manual re-runs.
+          # Loop the whole sweep, re-snapshotting each pass, until a full pass
+          # deletes nothing. seq is a safety cap; the tree is only ~3 deep.
+          for pass in $(seq 1 10); do
+            deleted=0
 
-          # Delete only untagged versions not referenced by any tagged manifest
-          gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
-            --jq '.[] | select(.metadata.container.tags | length == 0) | "\(.id) \(.name)"' | \
-          while read -r version_id digest; do
-            if echo "$referenced_digests" | grep -qF "$digest"; then
-              echo "Skipping ${{ matrix.package }} $digest (referenced by a tagged manifest)"
-            else
-              gh api --method DELETE "/orgs/wot-lemons/packages/container/${{ matrix.package }}/versions/$version_id"
-              echo "Deleted untagged ${{ matrix.package }} version $version_id ($digest)"
-            fi
+            # (A) Delete sha256-<hex> attestation indexes whose subject is gone.
+            versions=$(gh api "$api" --paginate)
+            all_digests=$(echo "$versions" | jq -r '.[].name')
+            while read -r version_id tag; do
+              [ -z "$version_id" ] && continue
+              subject="sha256:${tag#sha256-}"
+              if echo "$all_digests" | grep -qF "$subject"; then
+                echo "Keeping $pkg attestation $tag (subject exists)"
+              else
+                gh api --method DELETE "$api/$version_id"
+                echo "Deleted orphaned $pkg attestation $tag (subject $subject gone)"
+                deleted=$((deleted + 1))
+              fi
+            done < <(echo "$versions" | jq -r '.[] | select(any(.metadata.container.tags[]?; test("^sha256-[0-9a-f]{64}$"))) | "\(.id) \(first(.metadata.container.tags[] | select(test("^sha256-[0-9a-f]{64}$"))))"')
+
+            # Re-snapshot so blobs freed by (A) are visible to (B) this same pass.
+            versions=$(gh api "$api" --paginate)
+
+            # Collect all digests referenced by tagged manifest lists (platform
+            # images, attestations). sort -u dedupes aliases (1.0.0, 1.0, 1,
+            # latest) so they don't trigger redundant imagetools calls.
+            referenced_digests=""
+            while IFS= read -r tag; do
+              [ -z "$tag" ] && continue
+              digests=$(docker buildx imagetools inspect \
+                "ghcr.io/wot-lemons/$pkg:$tag" \
+                --raw | jq -r '.manifests[]?.digest // empty')
+              referenced_digests="$referenced_digests"$'\n'"$digests"
+            done < <(echo "$versions" | jq -r '[.[] | .metadata.container.tags[]] | .[]' | sort -u)
+
+            # (B) Delete untagged versions not referenced by any tagged manifest.
+            while read -r version_id digest; do
+              [ -z "$version_id" ] && continue
+              if echo "$referenced_digests" | grep -qF "$digest"; then
+                echo "Skipping $pkg $digest (referenced by a tagged manifest)"
+              else
+                gh api --method DELETE "$api/$version_id"
+                echo "Deleted untagged $pkg version $version_id ($digest)"
+                deleted=$((deleted + 1))
+              fi
+            done < <(echo "$versions" | jq -r '.[] | select(.metadata.container.tags | length == 0) | "\(.id) \(.name)"')
+
+            echo "Pass $pass: deleted $deleted version(s)"
+            [ "$deleted" -eq 0 ] && break
           done
 
       - name: Delete ${{ matrix.package }} PR images for closed PRs
@@ -105,7 +117,7 @@ jobs:
           # Self-heal: prune pr-* images whose PR is no longer open. The
           # cleanup-pr job only catches a clean "closed" event for a single PR
           # number; superseded/autoclosed bot PRs can slip through, so sweep
-          # them here on the weekly schedule.
+          # them here on the scheduled run.
           gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
             --jq '.[] | select(.metadata.container.tags[]? | startswith("pr-")) | "\(.id) \(.metadata.container.tags[] | select(startswith("pr-")))"' | \
           while read version_id tag; do
