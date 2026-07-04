@@ -5,10 +5,22 @@
     ":semanticCommits",
     "docker:pinDigests"
   ],
-  "semanticCommitType": "deps",
+  "semanticCommitType": "chore",
   "semanticCommitScope": null,
   "minimumReleaseAge": "7 days",
   "packageRules": [
+    {
+      "description": "Runtime dependencies ship in the published wheel, so their bumps should cut a release. Everything else Renovate touches (dev groups, GitHub Actions, the uv build stage) defaults to a non-releasable 'chore'.",
+      "matchManagers": ["pep621"],
+      "matchDepTypes": ["project.dependencies"],
+      "semanticCommitType": "deps"
+    },
+    {
+      "description": "The runtime base image ships in the published container, which is built only on release tags — so a base-image bump must cut a release to reach the published image. The uv builder stage is build-only and stays a non-releasable 'chore'.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["python"],
+      "semanticCommitType": "deps"
+    },
     {
       "description": "astral-sh/uv releases faster than the 7-day stability gate, so the newest tag is always <7 days old and the base-image FROM update never matures out of 'pending' — freezing us several releases behind. Relax the soak for this one trusted, digest-pinned first-party image only; the 7-day default still protects every other dependency.",
       "matchDatasources": ["docker"],
