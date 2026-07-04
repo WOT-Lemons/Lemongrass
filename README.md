@@ -180,6 +180,21 @@ lemongrass laps RACE_ID CAR_NUMBER   # single car
 lemongrass laps RACE_ID              # full field
 ```
 
+> **Persisting CSV output:** `lemongrass laps -o` writes a `.csv` to the container's
+> working directory (`/data`). The container runs as a non-root user, so that write
+> stays inside the container and is lost on exit unless you mount a writable directory
+> at `/data`. Bind mounts keep their host ownership, so pass `--user` to run as your
+> host user — the CSV then lands in `./out` owned by you:
+>
+> ```shell
+> mkdir -p out
+> docker run --rm -it --env-file .env \
+>   --user "$(id -u):$(id -g)" \
+>   -v "$(pwd)/out:/data" \
+>   ghcr.io/wot-lemons/lemongrass:latest \
+>   lemongrass laps RACE_ID CAR_NUMBER -o
+> ```
+
 Real example:
 
 ```shell
@@ -275,7 +290,7 @@ lemongrass races <subcommand> [args]
 ```
 
 | Subcommand | Description |
-|------------|-------------|
+| ------------ | ------------- |
 | `list` | Show all stored races with lap counts and schema status |
 | `prune RACE_ID...` | Delete all data for one or more races from InfluxDB |
 | `backfill` | Run historical backfill for all tracked races (delegates to `lemongrass race-backfill`; use `--help` for all options) |
@@ -302,7 +317,7 @@ lemongrass races diagnose 144185 252
 The `backfill` subcommand delegates to `lemongrass race-backfill` and supports these flags:
 
 | Flag | Description |
-|------|-------------|
+| ------ | ------------- |
 | `--dry-run` | Print what would be backfilled without writing anything |
 | `--force` | Re-backfill every race, even those already complete and current |
 | `--upgrade-stored` | Re-process laps already in InfluxDB whose `schema_version` is older than current — faster than `--force` because it skips re-fetching from RaceMonitor |
@@ -327,7 +342,7 @@ InfluxDB stack instead of prod, see [CONTRIBUTING.md](CONTRIBUTING.md).
 As of v2.0.0, the individual entry points (`laps`, `telem`, `race-backfill`, `pisugar-monitor`, `race-diagnose`) were replaced by a single `lemongrass` command. If you have the old package installed, update and prefix commands with `lemongrass`:
 
 | Before | After |
-|--------|-------|
+| -------- | ------- |
 | `laps RACE_ID CAR_NUMBER` | `lemongrass laps RACE_ID CAR_NUMBER` |
 | `telem` | `lemongrass telem` |
 | `race-backfill` | `lemongrass race-backfill` or `lemongrass races backfill` |
