@@ -5,6 +5,8 @@
     ":semanticCommits",
     "docker:pinDigests"
   ],
+  "semanticCommitType": "deps",
+  "semanticCommitScope": null,
   "minimumReleaseAge": "7 days",
   "pep621": {
     "enabled": true
