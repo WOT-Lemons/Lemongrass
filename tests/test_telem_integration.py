@@ -52,8 +52,6 @@ def _wait_for_ready(proc, host, port, timeout):
 def emulator():
     # obd is the real library by default now, so no module swap is needed here;
     # telem.obd already points at it.
-    import obd as real_obd
-
     port = _free_port()
     proc = subprocess.Popen(
         [sys.executable, "-m", "elm", "-s", "car", "-n", str(port)],
@@ -65,7 +63,7 @@ def emulator():
     )
     try:
         _wait_for_ready(proc, "127.0.0.1", port, timeout=30)
-        yield Emu(url=f"socket://127.0.0.1:{port}", obd=real_obd)
+        yield Emu(url=f"socket://127.0.0.1:{port}", obd=telem.obd)
     finally:
         proc.terminate()
         try:
