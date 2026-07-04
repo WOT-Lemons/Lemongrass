@@ -1,4 +1,5 @@
 import sys
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -288,7 +289,6 @@ class TestHandleList:
         totals:   dict {race_id: total_lap_count}
         currents: dict {race_id: current_schema_lap_count}
         """
-        from datetime import datetime, timezone
 
         def fake_query(flux):
             if 'bucket: "races"' in flux:
@@ -298,7 +298,7 @@ class TestHandleList:
                     rec = MagicMock()
                     rec.values = {'race_id': race_id, 'race_name': race_name}
                     rec.get_time.return_value = datetime.strptime(
-                        date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+                        date_str, '%Y-%m-%d').replace(tzinfo=UTC)
                     table.records = [rec]
                     tables.append(table)
                 return tables

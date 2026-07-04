@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -196,7 +196,7 @@ class TestValidateBackfill:
         if actual_cars is None:
             actual_cars = {}
         if race_start is None:
-            race_start = datetime(2022, 1, 1, tzinfo=timezone.utc)
+            race_start = datetime(2022, 1, 1, tzinfo=UTC)
 
         def fake_query(flux):
             table = MagicMock()
@@ -264,7 +264,7 @@ class TestValidateBackfill:
         assert query_api.query.call_count == 1
 
     def test_laps_query_scoped_to_race_time_bounds(self):
-        race_start = datetime(2022, 6, 1, tzinfo=timezone.utc)
+        race_start = datetime(2022, 6, 1, tzinfo=UTC)
         query_api = self._make_query_api(actual_cars={'42': 10},
                                          race_start=race_start, race_end_epoc=1672531200)
         _mod.validate_backfill([('101', '42')], query_api)
@@ -618,9 +618,9 @@ class TestValidateWindowPadding:
 
         race_record = MagicMock()
         race_record.values = {'race_name': 'Test Race', 'race_id': '999'}
-        race_record.get_time.return_value = datetime(2020, 1, 2, tzinfo=timezone.utc)
+        race_record.get_time.return_value = datetime(2020, 1, 2, tzinfo=UTC)
         race_record.get_value.return_value = int(
-            datetime(2020, 1, 4, tzinfo=timezone.utc).timestamp())
+            datetime(2020, 1, 4, tzinfo=UTC).timestamp())
         race_table = MagicMock()
         race_table.records = [race_record]
 

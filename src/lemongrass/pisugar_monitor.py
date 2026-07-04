@@ -9,7 +9,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import sleep, time
 
 from influxdb_client import Point
@@ -122,7 +122,7 @@ def build_point(measurement, value, tags=None):
     point = Point(measurement)
     for k, v in (tags or {}).items():
         point = point.tag(k, v)
-    point = point.field("value", value).time(datetime.now(timezone.utc))
+    point = point.field("value", value).time(datetime.now(UTC))
     logger.debug(point)
     return point
 

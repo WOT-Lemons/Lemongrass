@@ -3,7 +3,7 @@ name = "lemongrass"
 version = "3.1.0"
 description = "Telemetry stack for 24 Hours of Lemons"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{name = "WOT-Lemons"}]
 license = "MIT"
 license-files = ["LICENSE"]
@@ -13,7 +13,6 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -23,8 +22,8 @@ classifiers = [
 dependencies = [
     "influxdb-client~=1.47",
     "obd~=0.7",
-    "pandas~=2.3",
-    "race-monitor>=0.7.0,<1",
+    "pandas~=3.0",
+    "race-monitor>=1.0,<2.0",
     "urllib3>=2",
 ]
 

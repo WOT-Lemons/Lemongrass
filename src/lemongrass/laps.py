@@ -21,7 +21,7 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas
 from influxdb_client import Point, WritePrecision
@@ -948,7 +948,7 @@ def push_influx_race(ctx, timestamp_ms):
     try:
         ctx.delete_api.delete(
             start='1970-01-01T00:00:00Z',
-            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="race" AND race_id="{ctx.race_id}"',
             bucket=_influx.BUCKET_RACES,
         )
@@ -974,7 +974,7 @@ def push_influx_session(ctx, session_id, session_name, start_epoc):
     try:
         ctx.delete_api.delete(
             start=EPOCH_START,
-            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="session" AND session_id="{session_id}"',
             bucket=_influx.BUCKET_SESSIONS,
         )
@@ -1051,7 +1051,7 @@ def delete_existing_laps(ctx):
     try:
         ctx.delete_api.delete(
             start='1970-01-01T00:00:00Z',
-            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="lap" AND race_id="{ctx.race_id}"',
             bucket=_influx.BUCKET_LAPS,
         )
@@ -1068,7 +1068,7 @@ def delete_existing_standings(ctx):
     try:
         ctx.delete_api.delete(
             start='1970-01-01T00:00:00Z',
-            stop=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="standings" AND race_id="{ctx.race_id}"',
             bucket=_influx.BUCKET_LAPS,
         )
