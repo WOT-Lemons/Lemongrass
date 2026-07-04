@@ -50,14 +50,8 @@ def _wait_for_ready(proc, host, port, timeout):
 
 @pytest.fixture(scope="module")
 def emulator():
-    # conftest.py installs a MagicMock for `obd`; swap in the real library and
-    # rebind it onto telem for the duration of this module.
-    saved = sys.modules.pop("obd", None)
-    import obd as real_obd
-
-    orig_telem_obd = telem.obd
-    telem.obd = real_obd
-
+    # obd is the real library by default now, so no module swap is needed here;
+    # telem.obd already points at it.
     port = _free_port()
     proc = subprocess.Popen(
         [sys.executable, "-m", "elm", "-s", "car", "-n", str(port)],
@@ -69,18 +63,13 @@ def emulator():
     )
     try:
         _wait_for_ready(proc, "127.0.0.1", port, timeout=30)
-        yield Emu(url=f"socket://127.0.0.1:{port}", obd=real_obd)
+        yield Emu(url=f"socket://127.0.0.1:{port}", obd=telem.obd)
     finally:
         proc.terminate()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
-        telem.obd = orig_telem_obd
-        if saved is not None:
-            sys.modules["obd"] = saved
-        else:
-            sys.modules.pop("obd", None)
 
 
 @pytest.fixture

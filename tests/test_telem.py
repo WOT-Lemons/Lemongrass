@@ -1,6 +1,4 @@
-import importlib
 import logging
-import sys
 from unittest.mock import MagicMock, patch
 
 import lemongrass.telem as _mod
@@ -167,15 +165,15 @@ class TestNewFuelStatus:
 class TestConfigureObdLogging:
     def test_no_debug_by_default(self, monkeypatch):
         monkeypatch.delenv("OBD_DEBUG", raising=False)
-        _mod.obd.logger.setLevel.reset_mock()
-        _mod._configure_obd_logging()
-        _mod.obd.logger.setLevel.assert_not_called()
+        with patch.object(_mod.obd.logger, "setLevel") as mock_set_level:
+            _mod._configure_obd_logging()
+        mock_set_level.assert_not_called()
 
     def test_debug_enabled_via_env(self, monkeypatch):
         monkeypatch.setenv("OBD_DEBUG", "1")
-        _mod.obd.logger.setLevel.reset_mock()
-        _mod._configure_obd_logging()
-        _mod.obd.logger.setLevel.assert_called_once_with(_mod.obd.logging.DEBUG)
+        with patch.object(_mod.obd.logger, "setLevel") as mock_set_level:
+            _mod._configure_obd_logging()
+        mock_set_level.assert_called_once_with(logging.DEBUG)
 
 
 class TestNewAirStatus:
@@ -549,17 +547,10 @@ class TestRouteCommand:
     def test_no_real_dtc_command_is_watched(self):
         # Guard against the real library inventory, not just names we expect:
         # no mode-2 freeze-frame twin and no mode-03/07 DTC command may route
-        # to a callback. conftest mocks obd suite-wide, so temporarily import
-        # the real module (same pop/restore idiom conftest uses for race_monitor).
-        mock_obd = sys.modules.pop("obd")
-        try:
-            real_obd = importlib.import_module("obd")
-        finally:
-            sys.modules["obd"] = mock_obd
-
+        # to a callback.
         dtc_commands = {"GET_DTC", "GET_CURRENT_DTC", "CLEAR_DTC", "FREEZE_DTC"}
         checked = 0
-        for mode in real_obd.commands.modes:
+        for mode in _mod.obd.commands.modes:
             for command in mode:
                 if command is None:
                     continue
