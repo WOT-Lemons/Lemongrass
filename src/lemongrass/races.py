@@ -7,7 +7,7 @@ Run `lemongrass races <subcommand> --help` for per-subcommand options.
 
 import argparse
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from lemongrass import _influx
 
@@ -144,7 +144,7 @@ def _handle_prune():
                 print("Aborted.")
                 sys.exit(0)
 
-        now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        now = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
         delete_api = client.delete_api()
 
         failed = []

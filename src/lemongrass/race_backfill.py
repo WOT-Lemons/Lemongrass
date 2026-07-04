@@ -44,7 +44,7 @@ import argparse
 import logging
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from race_monitor import RaceMonitorClient
 
@@ -154,9 +154,9 @@ def validate_backfill(pairs, query_api):
             logging.warning("race %s: end_time_epoc=0 in races bucket, using now() as range stop",
                             race_id)
         range_stop = (
-            datetime.fromtimestamp(end_epoc + WINDOW_PAD_S, tz=timezone.utc)
+            datetime.fromtimestamp(end_epoc + WINDOW_PAD_S, tz=UTC)
             .strftime('%Y-%m-%dT%H:%M:%SZ')
-            if end_epoc else datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            if end_epoc else datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
         )
 
         lap_tables = query_api.query(
@@ -357,7 +357,7 @@ def main():
         logging.error("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN environment variable not set")
         sys.exit(1)
 
-    start_year_epoc = int(datetime(args.start_year, 1, 1, tzinfo=timezone.utc).timestamp())
+    start_year_epoc = int(datetime(args.start_year, 1, 1, tzinfo=UTC).timestamp())
 
     try:
         with RaceMonitorClient(api_token=tokens) as client:

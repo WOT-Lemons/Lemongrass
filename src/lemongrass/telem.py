@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import monotonic, sleep
 
 import obd
@@ -92,7 +92,7 @@ def _measurement_name(r):
 
 def new_value(r):
     """Queue new measurement for batch write to InfluxDB."""
-    ts = datetime.now(timezone.utc)
+    ts = datetime.now(UTC)
     measurement = _measurement_name(r)
     if measurement is None:
         logger.debug("Caught IndexError in new_value")
@@ -118,7 +118,7 @@ def new_fuel_status(r):
         logger.debug("Caught TypeError in new_fuel_status")
         return
 
-    ts = datetime.now(timezone.utc)
+    ts = datetime.now(UTC)
     measurement = _measurement_name(r)
     if measurement is None:
         logger.debug("Caught IndexError in new_fuel_status")
@@ -137,7 +137,7 @@ def new_air_status(r):
         logger.debug("Caught falsy value in new_air_status")
         return
 
-    ts = datetime.now(timezone.utc)
+    ts = datetime.now(UTC)
     measurement = _measurement_name(r)
     if measurement is None:
         logger.debug("Caught IndexError in new_air_status")
@@ -164,7 +164,7 @@ def _query_fuel_type_once(connection):
         logger.debug("Caught falsy value in _query_fuel_type_once")
         return
 
-    ts = datetime.now(timezone.utc)
+    ts = datetime.now(UTC)
     measurement = _measurement_name(r)
     if measurement is None:
         logger.debug("Caught IndexError in _query_fuel_type_once")
@@ -200,7 +200,7 @@ def _fetch_and_store_dtcs():
     # An empty list is a successful mode-03 answer ("no stored codes"), not a
     # failure -- store it so a STATUS/GET_DTC disagreement doesn't retry forever.
     codes = ",".join(code for code, _ in r.value)
-    ts = datetime.now(timezone.utc)
+    ts = datetime.now(UTC)
     _queue_point(Point("-Get-DTCs").field("value", codes).time(ts))
     return True
 
@@ -232,7 +232,7 @@ def new_status(r):
         logger.debug("Caught null value in new_status")
         return
 
-    ts = datetime.now(timezone.utc)
+    ts = datetime.now(UTC)
     measurement = _measurement_name(r)
     if measurement is None:
         logger.debug("Caught IndexError in new_status")
