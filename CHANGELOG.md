@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.1.0](https://github.com/WOT-Lemons/Lemongrass/compare/v3.0.2...v3.1.0) (2026-07-04)
+
+
+### Features
+
+* adopt race-monitor 0.7.0 and resolve code-review findings ([#170](https://github.com/WOT-Lemons/Lemongrass/issues/170)) ([dedd484](https://github.com/WOT-Lemons/Lemongrass/commit/dedd4845f82ac16e3f7f1632fdcaa100b9e16e27))
+* adopt race-monitor 0.7.0 and resolve code-review findings ([#170](https://github.com/WOT-Lemons/Lemongrass/issues/170)) ([dedd484](https://github.com/WOT-Lemons/Lemongrass/commit/dedd4845f82ac16e3f7f1632fdcaa100b9e16e27))
+* **telem:** ELM327 emulator for hardware-free local testing + CI integration ([#171](https://github.com/WOT-Lemons/Lemongrass/issues/171)) ([d608f63](https://github.com/WOT-Lemons/Lemongrass/commit/d608f635f26ba743bc9ed8ae0ead5a85dc290204))
+* **telem:** OBD watch-list optimization + trouble-code capture ([#167](https://github.com/WOT-Lemons/Lemongrass/issues/167)) ([3d90a28](https://github.com/WOT-Lemons/Lemongrass/commit/3d90a281be85e5aa011f662ce48dbd9e55f872cd))
+
+
+### Miscellaneous
+
+* **deps:** update dependency astral-sh/uv to v0.11.25 ([#172](https://github.com/WOT-Lemons/Lemongrass/issues/172)) ([c2d70cc](https://github.com/WOT-Lemons/Lemongrass/commit/c2d70cca092e9cf0b806c6567ac87bff63c21dd3))
+* **deps:** update dependency astral-sh/uv to v0.11.25 ([#173](https://github.com/WOT-Lemons/Lemongrass/issues/173)) ([c1a452a](https://github.com/WOT-Lemons/Lemongrass/commit/c1a452a25c5b9f83e5e5c0108b27eb15f0ad74b7))
+* **deps:** update grafana/grafana:12.4 docker digest to 26b8f35 ([#156](https://github.com/WOT-Lemons/Lemongrass/issues/156)) ([c1b48a4](https://github.com/WOT-Lemons/Lemongrass/commit/c1b48a4ce1e0125a929bda781485a58a4dab3b1f))
+* **deps:** update influxdb:2 docker digest to bfe360b ([#157](https://github.com/WOT-Lemons/Lemongrass/issues/157)) ([bf9a00c](https://github.com/WOT-Lemons/Lemongrass/commit/bf9a00c97f41ad6c4497ad3cbe2a8a175977e1f6))
+* **deps:** update python:3.14-slim-trixie docker digest to b877e50 ([#160](https://github.com/WOT-Lemons/Lemongrass/issues/160)) ([2a2b982](https://github.com/WOT-Lemons/Lemongrass/commit/2a2b982a176237753b516ee5d021f923ac3b6759))
+* **docker:** run lemongrass container as non-root user ([#174](https://github.com/WOT-Lemons/Lemongrass/issues/174)) ([5c6f5b2](https://github.com/WOT-Lemons/Lemongrass/commit/5c6f5b27e359309a8011f891191ffb56224fe8d4))
+* **release-please:** add Miscellaneous and Dependencies changelog sections ([#175](https://github.com/WOT-Lemons/Lemongrass/issues/175)) ([4ebefeb](https://github.com/WOT-Lemons/Lemongrass/commit/4ebefeb3fc16db3f330b1747d7417abf21424ffd))
+
 ## [3.0.2](https://github.com/WOT-Lemons/Lemongrass/compare/v3.0.1...v3.0.2) (2026-07-01)
 
 

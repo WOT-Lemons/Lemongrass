@@ -1,6 +1,6 @@
 [project]
 name = "lemongrass"
-version = "3.0.2"
+version = "3.1.0"
 description = "Telemetry stack for 24 Hours of Lemons"
 readme = "README.md"
 requires-python = ">=3.10"
