@@ -2824,7 +2824,7 @@ class TestPrintRankingsNonNumericPosition:
 
 
 class TestPrintRankingsSortOrder:
-    """Behavioral tests using real pandas (conftest mocks pandas; patch it back)."""
+    """Behavioral tests exercising the real pandas table-building path."""
 
     def _competitor(self, position='1', number='42', name='Jane', category='1', laps='5'):
         return {
@@ -2836,20 +2836,11 @@ class TestPrintRankingsSortOrder:
         return {'1': {'ID': '1', 'Name': 'Gold'}}
 
     def test_numeric_position_sorts_before_non_numeric(self, capsys):
-        import sys
-        # conftest mocks pandas in sys.modules; pop it to import the real one
-        pandas_mock = sys.modules.pop('pandas', None)
-        try:
-            import pandas as real_pandas
-        finally:
-            if pandas_mock is not None:
-                sys.modules['pandas'] = pandas_mock
         competitors = [
             self._competitor(position='6$G', number='99'),
             self._competitor(position='1', number='42'),
         ]
-        with patch.object(_mod, 'pandas', real_pandas):
-            _mod.print_rankings(competitors, False, None, self._categories())
+        _mod.print_rankings(competitors, False, None, self._categories())
         out = capsys.readouterr().out
         assert out.index('42') < out.index('99')
 
