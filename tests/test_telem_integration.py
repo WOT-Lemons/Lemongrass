@@ -5,8 +5,6 @@ emulator installed via local-testing/install-emulator.sh. The emulator is
 spawned as a subprocess and never imported, so this module imports cleanly even
 when the emulator is absent (the tests are simply deselected by default).
 """
-import os
-import select
 import socket
 import subprocess
 import sys
@@ -28,31 +26,26 @@ def _free_port():
     return port
 
 
-def _wait_for_ready(proc, needle, timeout):
-    """Block until the emulator prints its 'listening' line, or fail loudly.
+def _wait_for_ready(proc, host, port, timeout):
+    """Block until the emulator's TCP port accepts a connection, or fail loudly.
 
-    Reads the raw stdout fd via ``select`` so the deadline is enforced *during*
-    the wait — a plain ``readline()`` blocks until a newline arrives and would
-    ignore the timeout if the emulator stalled mid-line.
+    Probes the socket directly rather than parsing stdout: this confirms the
+    listener is actually accepting connections (the emulator prints its banner
+    from the cmd thread *before* the listener thread is necessarily ready) and
+    doesn't couple the test to a version-specific emulator log string.
     """
     deadline = time.monotonic() + timeout
-    fd = proc.stdout.fileno()
-    captured = []
-    buf = ""
+    last_err = None
     while time.monotonic() < deadline:
-        ready, _, _ = select.select([fd], [], [], deadline - time.monotonic())
-        if not ready:
-            continue
-        chunk = os.read(fd, 4096).decode(errors="replace")
-        if not chunk:  # EOF
-            if proc.poll() is not None:
-                raise RuntimeError("emulator exited early:\n" + "".join(captured))
-            continue
-        captured.append(chunk)
-        buf += chunk
-        if needle in buf:
-            return
-    raise RuntimeError(f"emulator not ready in {timeout}s:\n" + "".join(captured))
+        if proc.poll() is not None:
+            raise RuntimeError("emulator exited early:\n" + (proc.stdout.read() or ""))
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return
+        except OSError as exc:
+            last_err = exc
+            time.sleep(0.1)
+    raise RuntimeError(f"emulator not ready in {timeout}s (last error: {last_err})")
 
 
 @pytest.fixture(scope="module")
@@ -75,7 +68,7 @@ def emulator():
         bufsize=1,
     )
     try:
-        _wait_for_ready(proc, "running on TCP network port", timeout=30)
+        _wait_for_ready(proc, "127.0.0.1", port, timeout=30)
         yield Emu(url=f"socket://127.0.0.1:{port}", obd=real_obd)
     finally:
         proc.terminate()

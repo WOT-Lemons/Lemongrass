@@ -281,7 +281,10 @@ def connect():
     kwargs = {'portstr': os.environ.get('OBD_PORT', '/dev/obd')}
     baud = os.environ.get('OBD_BAUDRATE')
     if baud:
-        kwargs['baudrate'] = int(baud)
+        try:
+            kwargs['baudrate'] = int(baud)
+        except ValueError:
+            raise ValueError(f"OBD_BAUDRATE must be an integer, got {baud!r}") from None
     return obd.Async(**kwargs)
 
 

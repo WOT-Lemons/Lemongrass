@@ -9,6 +9,7 @@ on:
       - 'Dockerfile'
       - 'pyproject.toml'
       - 'uv.lock'
+      - 'local-testing/**'
 
 jobs:
   test:
