@@ -6,7 +6,6 @@
 ### Features
 
 * adopt race-monitor 0.7.0 and resolve code-review findings ([#170](https://github.com/WOT-Lemons/Lemongrass/issues/170)) ([dedd484](https://github.com/WOT-Lemons/Lemongrass/commit/dedd4845f82ac16e3f7f1632fdcaa100b9e16e27))
-* adopt race-monitor 0.7.0 and resolve code-review findings ([#170](https://github.com/WOT-Lemons/Lemongrass/issues/170)) ([dedd484](https://github.com/WOT-Lemons/Lemongrass/commit/dedd4845f82ac16e3f7f1632fdcaa100b9e16e27))
 * **telem:** ELM327 emulator for hardware-free local testing + CI integration ([#171](https://github.com/WOT-Lemons/Lemongrass/issues/171)) ([d608f63](https://github.com/WOT-Lemons/Lemongrass/commit/d608f635f26ba743bc9ed8ae0ead5a85dc290204))
 * **telem:** OBD watch-list optimization + trouble-code capture ([#167](https://github.com/WOT-Lemons/Lemongrass/issues/167)) ([3d90a28](https://github.com/WOT-Lemons/Lemongrass/commit/3d90a281be85e5aa011f662ce48dbd9e55f872cd))
 
