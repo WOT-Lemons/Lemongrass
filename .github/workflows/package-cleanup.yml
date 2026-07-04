@@ -6,7 +6,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 23 * * 0' # weekly on Sunday at 23:00 UTC
+    - cron: '0 23 * * *' # daily at 23:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -117,7 +117,7 @@ jobs:
           # Self-heal: prune pr-* images whose PR is no longer open. The
           # cleanup-pr job only catches a clean "closed" event for a single PR
           # number; superseded/autoclosed bot PRs can slip through, so sweep
-          # them here on the weekly schedule.
+          # them here on the scheduled run.
           gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
             --jq '.[] | select(.metadata.container.tags[]? | startswith("pr-")) | "\(.id) \(.metadata.container.tags[] | select(startswith("pr-")))"' | \
           while read version_id tag; do
