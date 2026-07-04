@@ -1,5 +1,23 @@
 # Changelog
 
+## [4.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v3.1.0...v4.0.0) (2026-07-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deps:** drops support for Python 3.10; requires Python 3.11+.
+
+### Features
+
+* **deps:** upgrade to pandas 3.0 and drop Python 3.10 ([#180](https://github.com/WOT-Lemons/Lemongrass/issues/180)) ([78ddc83](https://github.com/WOT-Lemons/Lemongrass/commit/78ddc834dd33905c546b70025ae6acb5a947d593)), closes [#178](https://github.com/WOT-Lemons/Lemongrass/issues/178)
+
+
+### Miscellaneous
+
+* **renovate:** relax stability gate for uv base image ([#184](https://github.com/WOT-Lemons/Lemongrass/issues/184)) ([5811590](https://github.com/WOT-Lemons/Lemongrass/commit/58115903b92646b8e5baed8fe08754e7afaca616))
+* update dependency astral-sh/uv to v0.11.26 ([#182](https://github.com/WOT-Lemons/Lemongrass/issues/182)) ([6434d03](https://github.com/WOT-Lemons/Lemongrass/commit/6434d037c0fe747eedf3b650586b27a10daff1a1))
+* update ghcr.io/astral-sh/uv docker tag to v0.11.26 ([#183](https://github.com/WOT-Lemons/Lemongrass/issues/183)) ([4d5c1ea](https://github.com/WOT-Lemons/Lemongrass/commit/4d5c1ea39a5405a0336a2f4cbc8a3c8f88fe141b))
+
 ## [3.1.0](https://github.com/WOT-Lemons/Lemongrass/compare/v3.0.2...v3.1.0) (2026-07-04)
 
 
