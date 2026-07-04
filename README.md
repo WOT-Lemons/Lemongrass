@@ -180,6 +180,17 @@ lemongrass laps RACE_ID CAR_NUMBER   # single car
 lemongrass laps RACE_ID              # full field
 ```
 
+> **Persisting CSV output:** `lemongrass laps -o` writes a `.csv` to the container's
+> working directory (`/data`). The container runs as a non-root user, so that write
+> stays inside the container and is lost on exit unless you mount a writable directory
+> at `/data`:
+>
+> ```shell
+> docker run --rm -it --env-file .env -v "$(pwd)/out:/data" \
+>   ghcr.io/wot-lemons/lemongrass:latest \
+>   lemongrass laps RACE_ID CAR_NUMBER -o
+> ```
+
 Real example:
 
 ```shell
