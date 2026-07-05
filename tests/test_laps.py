@@ -3836,6 +3836,11 @@ class TestStoredEndSettled:
         with patch.object(_mod.time, 'time', return_value=self._NOW):
             assert _mod.stored_end_settled(self._stored(self._NOW - 3600)) is False
 
+    def test_end_exactly_at_buffer_is_not_settled(self):
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            end = self._NOW - _mod._SETTLED_BUFFER_S
+            assert _mod.stored_end_settled(self._stored(end)) is False
+
     def test_end_just_inside_buffer_is_not_settled(self):
         with patch.object(_mod.time, 'time', return_value=self._NOW):
             end = self._NOW - _mod._SETTLED_BUFFER_S + 1

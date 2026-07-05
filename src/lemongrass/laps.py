@@ -66,12 +66,14 @@ _SETTLED_BUFFER_S = 4 * 86400  # 4 days
 class StoredRace:
     """Race-completeness fields read back from a stored race point.
 
-    schema_version and expected_lap_count are None when the point predates the
-    fields they name — callers must guard against None before comparing them.
+    Any field is None when absent from the point (schema_version and
+    expected_lap_count predate the fields they name; end_time_epoc is missing
+    only from a malformed point) — callers must guard against None before
+    comparing them.
     """
     schema_version: int | None
     expected_lap_count: int | None
-    end_time_epoc: int
+    end_time_epoc: int | None
 
 
 def _describe_bad_value(value: object, field: str) -> str:
