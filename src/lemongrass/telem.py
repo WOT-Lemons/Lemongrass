@@ -211,15 +211,19 @@ def _resolve_vin(connection):
 
     VIN is static per session, so main() calls this once and caches the result in
     the module-level _vin. OBD is the source of truth; CAR_VIN is a fallback (and
-    the only source when Mode 09 is unsupported). A telemetry point is never
+    the only source when the adapter returns no VIN). A telemetry point is never
     dropped for want of a VIN -- an unresolved VIN tags 'unknown' and logs.
+
+    The VIN is force-queried rather than gated on connection.supports(VIN): many
+    adapters (and the local emulator) under-report Mode 09 in the 0900 supported-
+    PIDs bitmask while still answering 0902, so gating on supports() would tag
+    'unknown' when the VIN is actually readable.
     """
     obd_vin = None
     try:
-        if connection.supports(obd.commands.VIN):
-            r = obd.OBD.query(connection, obd.commands.VIN, force=True)
-            if r.value:
-                obd_vin = str(r.value).strip()
+        r = obd.OBD.query(connection, obd.commands.VIN, force=True)
+        if r.value:
+            obd_vin = str(r.value).strip()
     except Exception:
         logger.exception("VIN query failed; falling back to CAR_VIN")
 

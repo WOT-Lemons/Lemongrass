@@ -292,10 +292,9 @@ class TestResolveVin:
     def setup_method(self):
         _reset()
 
-    def test_uses_obd_vin_when_supported(self, monkeypatch):
+    def test_uses_obd_vin_when_available(self, monkeypatch):
         monkeypatch.delenv("CAR_VIN", raising=False)
         connection = MagicMock()
-        connection.supports.return_value = True
         r = MagicMock()
         r.value = "1FATESTVIN0000001"
         with patch.object(_mod.obd.OBD, "query", return_value=r) as mock_query:
@@ -305,19 +304,31 @@ class TestResolveVin:
         )
         assert vin == "1FATESTVIN0000001"
 
-    def test_falls_back_to_env_when_obd_unsupported(self, monkeypatch):
-        monkeypatch.setenv("CAR_VIN", "ENVVIN00000000001")
+    def test_force_queries_vin_even_when_supports_false(self, monkeypatch):
+        monkeypatch.delenv("CAR_VIN", raising=False)
         connection = MagicMock()
         connection.supports.return_value = False
-        with patch.object(_mod.obd.OBD, "query") as mock_query:
+        r = MagicMock()
+        r.value = "1FATESTVIN0000004"
+        with patch.object(_mod.obd.OBD, "query", return_value=r) as mock_query:
             vin = _mod._resolve_vin(connection)
-        mock_query.assert_not_called()
+        mock_query.assert_called_once_with(
+            connection, _mod.obd.commands.VIN, force=True
+        )
+        assert vin == "1FATESTVIN0000004"
+
+    def test_falls_back_to_env_when_obd_returns_no_value(self, monkeypatch):
+        monkeypatch.setenv("CAR_VIN", "ENVVIN00000000001")
+        connection = MagicMock()
+        r = MagicMock()
+        r.value = None
+        with patch.object(_mod.obd.OBD, "query", return_value=r):
+            vin = _mod._resolve_vin(connection)
         assert vin == "ENVVIN00000000001"
 
     def test_falls_back_to_env_when_obd_query_raises(self, monkeypatch):
         monkeypatch.setenv("CAR_VIN", "ENVVIN00000000002")
         connection = MagicMock()
-        connection.supports.return_value = True
         with patch.object(_mod.obd.OBD, "query", side_effect=Exception("boom")):
             vin = _mod._resolve_vin(connection)
         assert vin == "ENVVIN00000000002"
@@ -325,7 +336,6 @@ class TestResolveVin:
     def test_unknown_when_nothing_resolves(self, monkeypatch):
         monkeypatch.delenv("CAR_VIN", raising=False)
         connection = MagicMock()
-        connection.supports.return_value = True
         r = MagicMock()
         r.value = None
         with patch.object(_mod.obd.OBD, "query", return_value=r):
@@ -335,7 +345,6 @@ class TestResolveVin:
     def test_warns_and_prefers_obd_on_mismatch(self, monkeypatch, caplog):
         monkeypatch.setenv("CAR_VIN", "ENVVIN00000000003")
         connection = MagicMock()
-        connection.supports.return_value = True
         r = MagicMock()
         r.value = "OBDVIN00000000003"
         with patch.object(_mod.obd.OBD, "query", return_value=r), \
