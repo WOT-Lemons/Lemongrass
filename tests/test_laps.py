@@ -3875,6 +3875,14 @@ class TestRaceCompleteInInflux:
             with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(0, 0)):
                 assert _mod.race_complete_in_influx(self._ctx(), stored) is False
 
+    def test_standings_present_but_stale_is_false(self):
+        # Standings exist (std_total > 0) but some predate the current schema
+        # (std_current < std_total) — a prior run whose standings phase went stale.
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 10)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(5, 3)):
+                assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
     def test_all_good_is_true(self):
         stored = self._stored(expected=10)
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 10)):
