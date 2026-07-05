@@ -54,6 +54,27 @@ SCHEMA_VERSION = 4
 _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5
 
+# How far in the past a race's stored end time must be before the Influx-only skip
+# will trust it as fully over. Sessions can share one race_id across a multi-day
+# event, so a stored end that is only recently past may still have a later session
+# going live; only skip once the whole event is settled well behind us. Anything
+# more recent falls through to the authoritative is_live RaceMonitor check.
+_SETTLED_BUFFER_S = 4 * 86400  # 4 days
+
+
+@dataclass(frozen=True)
+class StoredRace:
+    """Race-completeness fields read back from a stored race point.
+
+    Any field is None when absent from the point (schema_version and
+    expected_lap_count predate the fields they name; end_time_epoc is missing
+    only from a malformed point) — callers must guard against None before
+    comparing them.
+    """
+    schema_version: int | None
+    expected_lap_count: int | None
+    end_time_epoc: int | None
+
 
 def _describe_bad_value(value: object, field: str) -> str:
     """Return a log string distinguishing known streaming tokens from random garbage."""
@@ -195,6 +216,21 @@ def main():
         skip_if_complete=args.skip_if_complete,
         dry_run=args.dry_run,
     )
+
+    # Fast path: for the historical backfill (--skip-if-complete), decide whether
+    # to skip entirely from Influx before making any RaceMonitor call. Gated on
+    # skip_if_complete (set only by race-backfill), so interactive and monitor
+    # runs never enter here; stored_end_settled keeps any possibly-live race on
+    # the normal is_live path. To force a re-backfill past this skip (e.g. a race
+    # whose lap count was revised after it was stored), use
+    # `race-backfill --upgrade-stored [--force]`, which re-runs laps without
+    # --skip-if-complete and so never enters this branch.
+    if opts.network_mode and opts.skip_if_complete and not opts.dry_run \
+            and _influx_only_skip(race_id):
+        logging.info(
+            "SKIP: race %s already complete and current "
+            "(from Influx, no RaceMonitor fetch)", race_id)
+        return 0
 
     try:
         with RaceMonitorClient(api_token=tokens) as client:
@@ -524,7 +560,7 @@ def old_race(ctx, opts):
                     race_ts_ms = (
                         ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                     )
-                    if not push_influx_race(ctx, race_ts_ms):
+                    if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
                         logging.error(
                             "Race metadata write failed for race %s — failing the "
                             "run so the next backfill retries", ctx.race_id)
@@ -559,7 +595,7 @@ def old_race(ctx, opts):
             logging.warning("Skipping race stamp so next run will re-backfill")
             return 1
 
-        if not push_influx_race(ctx, race_ts_ms):
+        if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
             logging.error(
                 "Race metadata write failed for race %s — failing the run so the "
                 "next backfill retries", ctx.race_id)
@@ -934,7 +970,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
     return True
 
 
-def push_influx_race(ctx, timestamp_ms):
+def push_influx_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
     """Write one race metadata point to the races bucket, replacing any prior point.
 
     Returns True on success. Returns False when metadata is missing or the
@@ -962,6 +998,10 @@ def push_influx_race(ctx, timestamp_ms):
             .field("end_time_epoc", meta.end_time_epoc)
             .time(timestamp_ms, WritePrecision.MS)
         )
+        if expected_lap_count is not None:
+            point.field("schema_version", SCHEMA_VERSION)
+            point.field("expected_lap_count", expected_lap_count)
+            point.field("session_count", session_count)
         ctx.write_api.write(bucket=_influx.BUCKET_RACES, record=point)
         return True
     except Exception as e:
@@ -1099,6 +1139,83 @@ def existing_standings_counts_fieldwide(ctx):
     total = _count('r._field == "position"')
     current = _count(f'r._field == "schema_version" and r._value == {SCHEMA_VERSION}')
     return total, current
+
+
+def stored_race_completeness(ctx):
+    """Read the stored race metadata point for ctx.race_id from the races bucket.
+
+    Returns a StoredRace, or None when no race point exists. schema_version and
+    expected_lap_count are None when the point predates the fields they name —
+    callers must guard against None before comparing them numerically.
+    """
+    tables = ctx.query_api.query(
+        f'from(bucket: "{_influx.BUCKET_RACES}")\n'
+        f'  |> range(start: {EPOCH_START})\n'
+        f'  |> filter(fn: (r) => r._measurement == "race"\n'
+        f'      and r.race_id == "{ctx.race_id}")\n'
+        f'  |> last()\n'
+        f'  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")'
+    )
+    for table in tables:
+        for record in table.records:
+            vals = record.values
+            return StoredRace(
+                schema_version=vals.get('schema_version'),
+                expected_lap_count=vals.get('expected_lap_count'),
+                end_time_epoc=vals.get('end_time_epoc'),
+            )
+    return None
+
+
+def stored_end_settled(stored):
+    """True only when the race's stored end time is known and settled in the past.
+
+    The live-race guard for the Influx-only skip. Sessions can share one race_id
+    across a multi-day event, so a race whose stored end is 0 (unknown), in the
+    future, or only recently past (within _SETTLED_BUFFER_S) may still have a
+    later session going live. Only a race whose end is settled well behind us is
+    safe to skip from Influx alone; anything more recent must fall through to the
+    real is_live check rather than being skipped from Influx alone.
+    """
+    return bool(stored.end_time_epoc) and stored.end_time_epoc < time.time() - _SETTLED_BUFFER_S
+
+
+def race_complete_in_influx(ctx, stored):
+    """True when the stored race point proves this race is complete and current.
+
+    Mirrors old_race's skip predicate but sources the expected lap total from the
+    stored race point (Influx) instead of a RaceMonitor fetch. `stored` is passed
+    in already-fetched so main() does not query the race point twice. The
+    is-not-None guard is required: a pre-existing point has expected_lap_count
+    None, and None > 0 raises TypeError in Python 3.
+    """
+    if stored is None or stored.schema_version != SCHEMA_VERSION:
+        return False
+    if stored.expected_lap_count is None or stored.expected_lap_count <= 0:
+        return False
+    expected = stored.expected_lap_count
+    total, current = existing_lap_counts_fieldwide(ctx)
+    if not (total == current == expected):
+        return False
+    std_total, std_current = existing_standings_counts_fieldwide(ctx)
+    return std_total > 0 and std_current == std_total
+
+
+def _influx_only_skip(race_id):
+    """True when race_id is complete, current, and ended per Influx alone.
+
+    Opens a short-lived read-only Influx connection and answers the backfill skip
+    decision without any RaceMonitor call. Any race that is not definitively
+    ended (see stored_end_settled) returns False so it falls through to the normal
+    flow's is_live check.
+    """
+    with _influx.connect() as influx_client:
+        ctx = RaceContext(race_id, None, None, None, 0,
+                          query_api=influx_client.query_api())
+        stored = stored_race_completeness(ctx)
+        return (stored is not None
+                and stored_end_settled(stored)
+                and race_complete_in_influx(ctx, stored))
 
 
 def _build_class_index(session_details):

@@ -2336,6 +2336,34 @@ class TestPushInfluxRace:
         assert _mod.push_influx_race(ctx, 1000) is False
 
 
+class TestPushInfluxRaceFields:
+    def _ctx(self):
+        meta = _mod.RaceMetadata(
+            race_name='R', track_name='T', series_name='S', end_time_epoc=123)
+        return _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0,
+                                metadata=meta, delete_api=MagicMock())
+
+    def test_writes_expected_session_and_schema_fields(self):
+        ctx = self._ctx()
+        ok = _mod.push_influx_race(ctx, 1000, expected_lap_count=42, session_count=3)
+        assert ok is True
+        point = ctx.write_api.write.call_args.kwargs['record']
+        lp = point.to_line_protocol()
+        assert 'expected_lap_count=42i' in lp
+        assert 'session_count=3i' in lp
+        assert f'schema_version={_mod.SCHEMA_VERSION}i' in lp
+
+    def test_omits_new_fields_when_expected_not_supplied(self):
+        ctx = self._ctx()
+        ok = _mod.push_influx_race(ctx, 1000)
+        assert ok is True
+        lp = ctx.write_api.write.call_args.kwargs['record'].to_line_protocol()
+        assert 'end_time_epoc=' in lp
+        assert 'expected_lap_count' not in lp
+        assert 'session_count' not in lp
+        assert 'schema_version' not in lp
+
+
 class TestOldRaceMetadataFailure:
     def _session_details(self):
         return {
@@ -3743,3 +3771,207 @@ class TestClassIndex:
                 with patch.object(_mod, 'print_rankings'):
                     _mod.old_race(ctx, opts)
         assert mock_index.call_count == 1  # once per session, not per competitor
+
+
+class TestStoredRaceCompleteness:
+    def _ctx(self, record_values):
+        """record_values: dict for the pivoted race row, or None for 'no race point'."""
+        api = MagicMock()
+
+        def fake_query(_flux):
+            if record_values is None:
+                return []
+            table = MagicMock()
+            rec = MagicMock()
+            rec.values = record_values
+            table.records = [rec]
+            return [table]
+
+        api.query.side_effect = fake_query
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = api
+        return ctx
+
+    def test_returns_none_when_no_race_point(self):
+        ctx = self._ctx(None)
+        assert _mod.stored_race_completeness(ctx) is None
+
+    def test_reads_all_fields(self):
+        ctx = self._ctx({
+            'schema_version': _mod.SCHEMA_VERSION,
+            'expected_lap_count': 42,
+            'end_time_epoc': 123,
+        })
+        result = _mod.stored_race_completeness(ctx)
+        assert result == _mod.StoredRace(
+            schema_version=_mod.SCHEMA_VERSION, expected_lap_count=42, end_time_epoc=123)
+
+    def test_missing_new_fields_come_back_none(self):
+        ctx = self._ctx({'end_time_epoc': 123})
+        result = _mod.stored_race_completeness(ctx)
+        assert result.schema_version is None
+        assert result.expected_lap_count is None
+        assert result.end_time_epoc == 123
+
+
+class TestStoredEndSettled:
+    _NOW: ClassVar[int] = 1_000_000_000
+
+    def _stored(self, end_epoc):
+        return _mod.StoredRace(schema_version=4, expected_lap_count=1, end_time_epoc=end_epoc)
+
+    def test_zero_epoch_is_not_settled(self):
+        assert _mod.stored_end_settled(self._stored(0)) is False
+
+    def test_none_epoch_is_not_settled(self):
+        assert _mod.stored_end_settled(self._stored(None)) is False
+
+    def test_future_epoch_is_not_settled(self):
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            assert _mod.stored_end_settled(self._stored(self._NOW + 5000)) is False
+
+    def test_recent_past_within_buffer_is_not_settled(self):
+        # Ended an hour ago — a later session under the same race_id could still be
+        # live, so this must fall through to the authoritative is_live check.
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            assert _mod.stored_end_settled(self._stored(self._NOW - 3600)) is False
+
+    def test_end_exactly_at_buffer_is_not_settled(self):
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            end = self._NOW - _mod._SETTLED_BUFFER_S
+            assert _mod.stored_end_settled(self._stored(end)) is False
+
+    def test_end_just_inside_buffer_is_not_settled(self):
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            end = self._NOW - _mod._SETTLED_BUFFER_S + 1
+            assert _mod.stored_end_settled(self._stored(end)) is False
+
+    def test_end_beyond_buffer_is_settled(self):
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            end = self._NOW - _mod._SETTLED_BUFFER_S - 1
+            assert _mod.stored_end_settled(self._stored(end)) is True
+
+
+class TestRaceCompleteInInflux:
+    def _ctx(self):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        return ctx
+
+    def _stored(self, schema=None, expected=None):
+        schema = _mod.SCHEMA_VERSION if schema is None else schema
+        return _mod.StoredRace(
+            schema_version=schema, expected_lap_count=expected, end_time_epoc=123)
+
+    def test_none_stored_is_false(self):
+        assert _mod.race_complete_in_influx(self._ctx(), None) is False
+
+    def test_stale_schema_is_false(self):
+        stored = self._stored(schema=_mod.SCHEMA_VERSION - 1, expected=10)
+        assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_missing_expected_is_false(self):
+        stored = self._stored(expected=None)
+        assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_zero_expected_is_false(self):
+        stored = self._stored(expected=0)
+        assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_laps_below_expected_is_false(self):
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(9, 9)):
+            assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_laps_stale_schema_is_false(self):
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 9)):
+            assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_standings_missing_is_false(self):
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 10)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(0, 0)):
+                assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_standings_present_but_stale_is_false(self):
+        # Standings exist (std_total > 0) but some predate the current schema
+        # (std_current < std_total) — a prior run whose standings phase went stale.
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 10)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(5, 3)):
+                assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_all_good_is_true(self):
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 10)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(5, 5)):
+                assert _mod.race_complete_in_influx(self._ctx(), stored) is True
+
+
+class TestInfluxOnlySkip:
+    def _conn_ctx(self):
+        """Patch _influx.connect to yield a client whose query_api() is a MagicMock."""
+        cm = patch.object(_mod._influx, 'connect')
+        mock_conn = cm.start()
+        mock_conn.return_value.__enter__.return_value.query_api.return_value = MagicMock()
+        return cm
+
+    def test_true_when_complete_and_ended(self):
+        cm = self._conn_ctx()
+        try:
+            complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000)
+            with patch.object(_mod, 'stored_race_completeness', return_value=complete):
+                with patch.object(_mod, 'stored_end_settled', return_value=True):
+                    with patch.object(_mod, 'race_complete_in_influx', return_value=True):
+                        assert _mod._influx_only_skip('999') is True
+        finally:
+            cm.stop()
+
+    def test_false_when_no_stored_race(self):
+        cm = self._conn_ctx()
+        try:
+            with patch.object(_mod, 'stored_race_completeness', return_value=None):
+                assert _mod._influx_only_skip('999') is False
+        finally:
+            cm.stop()
+
+    def test_false_when_not_ended(self):
+        cm = self._conn_ctx()
+        try:
+            complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 0)
+            with patch.object(_mod, 'stored_race_completeness', return_value=complete):
+                with patch.object(_mod, 'stored_end_settled', return_value=False):
+                    assert _mod._influx_only_skip('999') is False
+        finally:
+            cm.stop()
+
+
+class TestMainFastPath:
+    _ARGV: ClassVar[list] = ['lemongrass-laps', '-n', '--skip-if-complete', '999']
+    _ENV: ClassVar[dict] = {'RACEMONITOR_TOKENS': 'T', 'INFLUX_TELEMETRY_TOKEN': 'I'}
+
+    def test_skips_without_racemonitor_when_complete(self):
+        with patch.object(_mod.sys, 'argv', self._ARGV):
+            with patch.dict(os.environ, self._ENV, clear=True):
+                with patch.object(_mod, '_influx_only_skip', return_value=True):
+                    with patch.object(_mod, 'RaceMonitorClient') as mock_rm:
+                        result = _mod.main()
+        assert result == 0
+        mock_rm.assert_not_called()
+
+    def test_falls_through_to_racemonitor_when_not_complete(self):
+        client = MagicMock()
+        client.race.details.return_value = {'Successful': False}
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+        with patch.object(_mod.sys, 'argv', self._ARGV):
+            with patch.dict(os.environ, self._ENV, clear=True):
+                with patch.object(_mod, '_influx_only_skip', return_value=False):
+                    with patch.object(_mod, 'RaceMonitorClient') as mock_rm:
+                        mock_rm.return_value.__enter__.return_value = client
+                        with patch.object(_mod._influx, 'connect') as mock_connect:
+                            mock_connect.return_value.__enter__.return_value = MagicMock()
+                            with patch.object(_mod, '_run_race', return_value=0):
+                                result = _mod.main()
+        assert result == 0
+        mock_rm.assert_called_once()
