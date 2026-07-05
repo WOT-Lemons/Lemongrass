@@ -18,6 +18,21 @@ from lemongrass._spool import Spool
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
 
+
+def _quiet_retry_logging():
+    """Silence urllib3's per-retry WARNING chatter.
+
+    urllib3 logs a WARNING on every retry attempt. During an Influx outage the
+    pump retries on each 0.5s cycle, which would bury flush_points' own
+    edge-triggered onset/recovery lines under a wall of identical retry
+    warnings. Our logging already reports outage state, so drop urllib3's
+    connection-retry logger to ERROR (genuine errors still surface).
+    """
+    logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
+
+
+_quiet_retry_logging()
+
 EXCLUDED_PATTERNS = ["MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
 SKIP_NAMES = {"FREEZE_DTC", "GET_DTC", "GET_CURRENT_DTC", "CLEAR_DTC", "FUEL_TYPE"}
 MAX_DTC_FETCH_FAILURES = 3
@@ -60,6 +75,10 @@ pending_lock = threading.Lock()
 
 _connection = None  # set by main(); lets new_status trigger on-demand DTC lookups
 _spool: Spool | None = None  # set by main()
+# Outage state, edge-triggered so a sustained outage logs once (WARN) at onset
+# and once (INFO) on recovery instead of one line per 0.5s pump cycle. Only
+# touched from the main pump thread (flush_points), so no lock is needed.
+_spooling = False
 # Both only ever written from the Async callback thread; no lock needed.
 _last_dtc_count = 0
 _dtc_fetch_failures = 0
@@ -339,6 +358,7 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
     in-memory backlog, bounded by MAX_PENDING_POINTS, so a misconfigured spool
     dir doesn't silently drop telemetry.
     """
+    global _spooling
     with pending_lock:
         if not pending_points:
             return True
@@ -350,10 +370,23 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
             write_api.write(bucket=WRITE_BUCKET, record=batch[i:i + batch_size])
             written += len(batch[i:i + batch_size])
         logger.info("Flushed %d points to InfluxDB", written)
+        if _spooling:
+            logger.info(
+                "InfluxDB reachable again; flushed %d points, draining spool",
+                written)
+            _spooling = False
         return True
     except Exception as e:
         unwritten = batch[written:]
-        logger.error('Failed to write %d points to InfluxDB: %s', len(unwritten), e)
+        if not _spooling:
+            logger.warning(
+                "InfluxDB write failed (%s); buffering telemetry to on-disk spool",
+                e)
+            _spooling = True
+        else:
+            logger.debug(
+                "InfluxDB still unreachable; spooling %d more points",
+                len(unwritten))
         spilled = _spool.append(unwritten) if _spool is not None else False
         if not spilled:
             # Spool unavailable (unusable dir or disk error) — fall back to the

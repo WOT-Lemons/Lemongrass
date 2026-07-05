@@ -23,6 +23,7 @@ def _reset():
     _mod._dtc_fetch_failures = 0
     _mod._connection = None
     _mod._spool = None
+    _mod._spooling = False
 
 
 class TestConnect:
@@ -524,6 +525,20 @@ class TestFlushPoints:
         assert _mod.pending_points == ["p1", "p2"]
 
 
+class TestLoggingConfig:
+    def test_quiets_urllib3_retry_warnings(self):
+        """urllib3 logs a WARNING per retry attempt; during an outage the pump
+        retries every 0.5s, which would bury our edge-triggered outage lines."""
+        target = logging.getLogger("urllib3.connectionpool")
+        original = target.level
+        try:
+            target.setLevel(logging.NOTSET)
+            _mod._quiet_retry_logging()
+            assert target.level == logging.ERROR
+        finally:
+            target.setLevel(original)
+
+
 class TestInfluxConnectTuning:
     def setup_method(self):
         _reset()
@@ -539,6 +554,64 @@ class TestInfluxConnectTuning:
                 _mod.main()
         influx_connect.assert_called_once_with(
             timeout=_mod.WRITE_TIMEOUT_MS, retries=_mod.WRITE_RETRIES)
+
+
+class TestSpoolStateLogging:
+    """Outage logging is edge-triggered: one WARN when we start spooling, one
+    INFO when Influx recovers, and no per-cycle spam in between."""
+
+    def setup_method(self):
+        _reset()
+        _mod._spool = MagicMock()  # append() truthy -> stays on the spool path
+
+    def _fail(self, write_api):
+        _mod.pending_points.append(Point("RPM").field("value", 1))
+        write_api.write.side_effect = Exception("influx down")
+        _mod.flush_points(write_api)
+
+    def _succeed(self, write_api):
+        _mod.pending_points.append(Point("RPM").field("value", 2))
+        write_api.write.side_effect = None
+        _mod.flush_points(write_api)
+
+    def test_first_spool_failure_logs_warning_and_sets_flag(self, caplog):
+        write_api = MagicMock()
+        with caplog.at_level(logging.DEBUG, logger="telem"):
+            self._fail(write_api)
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert any("buffering telemetry to on-disk spool" in r.message
+                   for r in warnings)
+        assert _mod._spooling is True
+
+    def test_repeated_failures_warn_once_then_debug(self, caplog):
+        write_api = MagicMock()
+        with caplog.at_level(logging.DEBUG, logger="telem"):
+            self._fail(write_api)
+            self._fail(write_api)
+        warnings = [r for r in caplog.records
+                    if r.levelname == "WARNING"
+                    and "buffering telemetry" in r.message]
+        assert len(warnings) == 1
+        assert any(r.levelname == "DEBUG" and "still unreachable" in r.message
+                   for r in caplog.records)
+
+    def test_recovery_logs_info_and_clears_flag(self, caplog):
+        write_api = MagicMock()
+        self._fail(write_api)
+        with caplog.at_level(logging.DEBUG, logger="telem"):
+            self._succeed(write_api)
+        assert any(r.levelname == "INFO" and "reachable again" in r.message
+                   for r in caplog.records)
+        assert _mod._spooling is False
+
+    def test_empty_flush_does_not_clear_spooling(self, caplog):
+        write_api = MagicMock()
+        self._fail(write_api)
+        assert _mod._spooling is True
+        with caplog.at_level(logging.DEBUG, logger="telem"):
+            _mod.flush_points(write_api)  # nothing pending -> early True
+        assert _mod._spooling is True  # empty flush is not proof of recovery
+        assert not any("reachable again" in r.message for r in caplog.records)
 
 
 class TestPump:
