@@ -2353,6 +2353,16 @@ class TestPushInfluxRaceFields:
         assert 'session_count=3i' in lp
         assert f'schema_version={_mod.SCHEMA_VERSION}i' in lp
 
+    def test_omits_new_fields_when_expected_not_supplied(self):
+        ctx = self._ctx()
+        ok = _mod.push_influx_race(ctx, 1000)
+        assert ok is True
+        lp = ctx.write_api.write.call_args.kwargs['record'].to_line_protocol()
+        assert 'end_time_epoc=' in lp
+        assert 'expected_lap_count' not in lp
+        assert 'session_count' not in lp
+        assert 'schema_version' not in lp
+
 
 class TestOldRaceMetadataFailure:
     def _session_details(self):

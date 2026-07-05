@@ -934,7 +934,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
     return True
 
 
-def push_influx_race(ctx, timestamp_ms, expected_lap_count, session_count):
+def push_influx_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
     """Write one race metadata point to the races bucket, replacing any prior point.
 
     Returns True on success. Returns False when metadata is missing or the
@@ -960,11 +960,12 @@ def push_influx_race(ctx, timestamp_ms, expected_lap_count, session_count):
             .tag("track_name", meta.track_name)
             .tag("series_name", meta.series_name)
             .field("end_time_epoc", meta.end_time_epoc)
-            .field("schema_version", SCHEMA_VERSION)
-            .field("expected_lap_count", expected_lap_count)
-            .field("session_count", session_count)
             .time(timestamp_ms, WritePrecision.MS)
         )
+        if expected_lap_count is not None:
+            point.field("schema_version", SCHEMA_VERSION)
+            point.field("expected_lap_count", expected_lap_count)
+            point.field("session_count", session_count)
         ctx.write_api.write(bucket=_influx.BUCKET_RACES, record=point)
         return True
     except Exception as e:
