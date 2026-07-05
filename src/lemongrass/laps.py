@@ -1143,6 +1143,27 @@ def stored_end_in_past(stored):
     return bool(stored.end_time_epoc) and stored.end_time_epoc < time.time()
 
 
+def race_complete_in_influx(ctx, stored):
+    """True when the stored race point proves this race is complete and current.
+
+    Mirrors old_race's skip predicate but sources the expected lap total from the
+    stored race point (Influx) instead of a RaceMonitor fetch. `stored` is passed
+    in already-fetched so main() does not query the race point twice. The
+    is-not-None guard is required: a pre-existing point has expected_lap_count
+    None, and None > 0 raises TypeError in Python 3.
+    """
+    if stored is None or stored.schema_version != SCHEMA_VERSION:
+        return False
+    if stored.expected_lap_count is None or stored.expected_lap_count <= 0:
+        return False
+    expected = stored.expected_lap_count
+    total, current = existing_lap_counts_fieldwide(ctx)
+    if not (total == current == expected):
+        return False
+    std_total, std_current = existing_standings_counts_fieldwide(ctx)
+    return std_total > 0 and std_current == std_total
+
+
 def _build_class_index(session_details):
     """Precompute per-session class-position data shared by every competitor.
 

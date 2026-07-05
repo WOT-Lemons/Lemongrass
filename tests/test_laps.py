@@ -3831,3 +3831,52 @@ class TestStoredEndInPast:
     def test_past_epoch_is_past(self):
         with patch.object(_mod.time, 'time', return_value=1000):
             assert _mod.stored_end_in_past(self._stored(500)) is True
+
+
+class TestRaceCompleteInInflux:
+    def _ctx(self):
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = MagicMock()
+        return ctx
+
+    def _stored(self, schema=None, expected=None):
+        schema = _mod.SCHEMA_VERSION if schema is None else schema
+        return _mod.StoredRace(
+            schema_version=schema, expected_lap_count=expected, end_time_epoc=123)
+
+    def test_none_stored_is_false(self):
+        assert _mod.race_complete_in_influx(self._ctx(), None) is False
+
+    def test_stale_schema_is_false(self):
+        stored = self._stored(schema=_mod.SCHEMA_VERSION - 1, expected=10)
+        assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_missing_expected_is_false(self):
+        stored = self._stored(expected=None)
+        assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_zero_expected_is_false(self):
+        stored = self._stored(expected=0)
+        assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_laps_below_expected_is_false(self):
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(9, 9)):
+            assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_laps_stale_schema_is_false(self):
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 9)):
+            assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_standings_missing_is_false(self):
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 10)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(0, 0)):
+                assert _mod.race_complete_in_influx(self._ctx(), stored) is False
+
+    def test_all_good_is_true(self):
+        stored = self._stored(expected=10)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 10)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(5, 5)):
+                assert _mod.race_complete_in_influx(self._ctx(), stored) is True
