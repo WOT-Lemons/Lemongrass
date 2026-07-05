@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from influxdb_client import Point
@@ -136,3 +137,18 @@ class TestReplay:
         assert s.replay_oldest(write_api, BUCKET) is True  # progress: file removed from queue
         assert list((tmp_path / "spool").glob("*.lp")) == []
         assert len(list((tmp_path / "spool").glob("*.bad"))) == 1
+
+    def test_unlink_oserror_does_not_propagate(self, tmp_path, monkeypatch, caplog):
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])
+        write_api = MagicMock()
+        # Make unlink raise OSError to simulate permission or disk error
+        def failing_unlink(self, missing_ok=False):
+            raise OSError("Permission denied")
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        with caplog.at_level(logging.WARNING):
+            result = s.replay_oldest(write_api, BUCKET)
+        # Should return True (data written successfully, cleanup error is non-fatal)
+        assert result is True
+        # Warning should be logged about the unlink failure
+        assert any("Could not remove replayed spool file" in r.message for r in caplog.records)

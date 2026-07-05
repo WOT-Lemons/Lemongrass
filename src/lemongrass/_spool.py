@@ -127,7 +127,10 @@ class Spool:
             return False  # 5xx / 429: retryable, keep the file
         except Exception:
             return False  # connectivity failure, keep the file
-        path.unlink(missing_ok=True)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Could not remove replayed spool file %s: %s", path.name, e)
         logger.info("Replayed spool file %s", path.name)
         return True
 
@@ -139,7 +142,10 @@ class Spool:
             salvaged = '\n'.join(lines[:-1]) + '\n'
             try:
                 write_api.write(bucket=bucket, record=salvaged)
-                path.unlink(missing_ok=True)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as e:
+                    logger.warning("Could not remove salvaged spool file %s: %s", path.name, e)
                 logger.warning(
                     "Dropped 1 unwritable line from spool file %s", path.name
                 )
@@ -147,7 +153,15 @@ class Spool:
             except Exception:
                 pass
         quarantine = path.with_suffix('.bad')
-        path.rename(quarantine)
+        try:
+            path.rename(quarantine)
+        except OSError as e:
+            logger.warning(
+                "Could not quarantine spool file %s -> %s: %s",
+                path.name,
+                quarantine.name,
+                e,
+            )
         logger.error(
             "Quarantined unwritable spool file %s -> %s",
             path.name,
