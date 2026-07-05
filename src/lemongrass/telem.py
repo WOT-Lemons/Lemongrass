@@ -74,8 +74,8 @@ def _queue_point(point):
         pending_points.append(point)
         overflow = len(pending_points) - MAX_PENDING_POINTS
         if overflow > 0:
-            # Producers can outpace a hung or delayed flush; cap here too so
-            # callbacks can't grow memory unbounded before flush_points requeues.
+            # Producers can outpace a hung or blocked flush; cap here too so
+            # callbacks can't grow memory unbounded while a flush is stuck.
             del pending_points[:overflow]
             _dropped_since_warn += overflow
             now = monotonic()
@@ -326,8 +326,10 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
 
     Returns True when everything pending was written (or nothing was pending),
     False when a write failed. On failure the unwritten remainder is serialized
-    to the on-disk spool (durable across the watchdog restart) instead of being
-    re-queued in RAM, so an outage cannot grow the in-memory backlog.
+    to the on-disk spool (durable across the watchdog restart); if the spool
+    can't durably accept it (disabled or a disk error), it falls back to the
+    in-memory backlog, bounded by MAX_PENDING_POINTS, so a misconfigured spool
+    dir doesn't silently drop telemetry.
     """
     with pending_lock:
         if not pending_points:
@@ -344,8 +346,19 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
     except Exception as e:
         unwritten = batch[written:]
         logger.error('Failed to write %d points to InfluxDB: %s', len(unwritten), e)
-        if _spool is not None:
-            _spool.append(unwritten)
+        spilled = _spool.append(unwritten) if _spool is not None else False
+        if not spilled:
+            # Spool unavailable (unusable dir or disk error) — fall back to the
+            # in-memory backlog so a misconfigured /data doesn't silently drop
+            # telemetry. Bounded by MAX_PENDING_POINTS, dropping oldest.
+            with pending_lock:
+                pending_points[:0] = unwritten
+                overflow = len(pending_points) - MAX_PENDING_POINTS
+                if overflow > 0:
+                    del pending_points[:overflow]
+                    logger.warning(
+                        "Backlog exceeded %d points; dropped %d oldest",
+                        MAX_PENDING_POINTS, overflow)
         return False
 
 

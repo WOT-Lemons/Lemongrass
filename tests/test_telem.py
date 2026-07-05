@@ -494,6 +494,17 @@ class TestFlushPoints:
         write_api.write.side_effect = Exception("boom")
         assert _mod.flush_points(write_api) is False
 
+    def test_failed_write_falls_back_to_ram_when_spool_cannot_accept(self):
+        """If the spool is unusable (disabled dir, disk error), the unwritten
+        batch must be re-queued in RAM rather than silently dropped."""
+        _mod._spool = MagicMock()
+        _mod._spool.append.return_value = False
+        _mod.pending_points.extend(["p1", "p2"])
+        write_api = MagicMock()
+        write_api.write.side_effect = Exception("network error")
+        assert _mod.flush_points(write_api) is False
+        assert _mod.pending_points == ["p1", "p2"]
+
 
 class TestPump:
     def setup_method(self):

@@ -16,6 +16,7 @@ class TestConfig:
     def test_from_env_defaults(self, monkeypatch):
         monkeypatch.delenv("TELEM_SPOOL_DIR", raising=False)
         monkeypatch.delenv("TELEM_SPOOL_MAX_BYTES", raising=False)
+        monkeypatch.setattr(Spool, "_ensure_dir", lambda self: True)
         s = Spool.from_env()
         assert str(s.dir) == DEFAULT_SPOOL_DIR
         assert s.max_bytes == DEFAULT_MAX_BYTES
@@ -137,6 +138,22 @@ class TestReplay:
         assert s.replay_oldest(write_api, BUCKET) is True  # progress: file removed from queue
         assert list((tmp_path / "spool").glob("*.lp")) == []
         assert len(list((tmp_path / "spool").glob("*.bad"))) == 1
+
+    def test_unreadable_oldest_file_is_quarantined(self, tmp_path, monkeypatch, caplog):
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])
+        write_api = MagicMock()
+
+        def failing_read_text(self, *args, **kwargs):
+            raise OSError("I/O error")
+
+        monkeypatch.setattr(Path, "read_text", failing_read_text)
+        with caplog.at_level(logging.ERROR):
+            result = s.replay_oldest(write_api, BUCKET)
+        assert result is True
+        assert list((tmp_path / "spool").glob("*.lp")) == []
+        assert len(list((tmp_path / "spool").glob("*.bad"))) == 1
+        write_api.write.assert_not_called()
 
     def test_unlink_oserror_does_not_propagate(self, tmp_path, monkeypatch, caplog):
         s = Spool(tmp_path / "spool")

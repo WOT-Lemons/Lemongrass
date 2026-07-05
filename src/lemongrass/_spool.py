@@ -66,9 +66,16 @@ class Spool:
         return self.dir / f'{next_seq:012d}{_SUFFIX}'
 
     def append(self, points):
-        """Serialize points to line protocol and fsync-append to the newest file."""
-        if not self.enabled or not points:
-            return
+        """Serialize points to line protocol and fsync-append to the newest file.
+
+        Returns True when the points were durably written to disk (or there
+        was nothing to do), False when they could not be durably stored --
+        callers must fall back to an in-memory backlog in that case.
+        """
+        if not self.enabled:
+            return False
+        if not points:
+            return True
         blob = ''.join(p.to_line_protocol() + '\n' for p in points).encode()
         path = self._append_path()
         try:
@@ -78,8 +85,9 @@ class Spool:
                 os.fsync(f.fileno())
         except OSError as e:
             logger.error("Spool append to %s failed: %s", path, e)
-            return
+            return False
         self._enforce_cap()
+        return True
 
     def _enforce_cap(self):
         files = self._files()
@@ -91,8 +99,8 @@ class Spool:
             try:
                 victim.unlink()
                 dropped += 1
-            except OSError:
-                pass
+            except OSError as e:
+                logger.warning("Could not evict spool file %s: %s", victim.name, e)
         if dropped:
             logger.warning(
                 "Spool exceeded %d bytes; dropped %d oldest file(s)",
@@ -117,14 +125,20 @@ class Spool:
         try:
             text = path.read_text()
         except OSError as e:
-            logger.error("Cannot read spool file %s: %s", path, e)
-            return False
+            logger.error("Cannot read spool file %s: %s; quarantining", path, e)
+            quarantine = path.with_suffix('.bad')
+            try:
+                path.rename(quarantine)
+            except OSError as e2:
+                logger.warning(
+                    "Could not quarantine unreadable spool file %s: %s", path.name, e2)
+            return True
         try:
             write_api.write(bucket=bucket, record=text)
         except ApiException as e:
             if e.status and 400 <= e.status < 500 and e.status != 429:
                 return self._handle_corrupt(write_api, bucket, path, text)
-            return False  # 5xx / 429: retryable, keep the file
+            return False  # 5xx / 429 / unknown status: retryable, keep the file
         except Exception:
             return False  # connectivity failure, keep the file
         try:
