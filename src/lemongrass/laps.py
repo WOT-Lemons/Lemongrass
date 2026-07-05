@@ -19,7 +19,7 @@ import os
 import sys
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -53,6 +53,8 @@ SCHEMA_VERSION = 4
 
 _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5
+
+StoredRace = namedtuple('StoredRace', ['schema_version', 'expected_lap_count', 'end_time_epoc'])
 
 
 def _describe_bad_value(value: object, field: str) -> str:
@@ -1103,6 +1105,32 @@ def existing_standings_counts_fieldwide(ctx):
     total = _count('r._field == "position"')
     current = _count(f'r._field == "schema_version" and r._value == {SCHEMA_VERSION}')
     return total, current
+
+
+def stored_race_completeness(ctx):
+    """Read the stored race metadata point for ctx.race_id from the races bucket.
+
+    Returns a StoredRace, or None when no race point exists. schema_version and
+    expected_lap_count are None when the point predates the fields they name —
+    callers must guard against None before comparing them numerically.
+    """
+    tables = ctx.query_api.query(
+        f'from(bucket: "{_influx.BUCKET_RACES}")\n'
+        f'  |> range(start: {EPOCH_START})\n'
+        f'  |> filter(fn: (r) => r._measurement == "race"\n'
+        f'      and r.race_id == "{ctx.race_id}")\n'
+        f'  |> last()\n'
+        f'  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")'
+    )
+    for table in tables:
+        for record in table.records:
+            vals = record.values
+            return StoredRace(
+                schema_version=vals.get('schema_version'),
+                expected_lap_count=vals.get('expected_lap_count'),
+                end_time_epoc=vals.get('end_time_epoc'),
+            )
+    return None
 
 
 def _build_class_index(session_details):

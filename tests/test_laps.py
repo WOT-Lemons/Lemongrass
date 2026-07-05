@@ -3771,3 +3771,44 @@ class TestClassIndex:
                 with patch.object(_mod, 'print_rankings'):
                     _mod.old_race(ctx, opts)
         assert mock_index.call_count == 1  # once per session, not per competitor
+
+
+class TestStoredRaceCompleteness:
+    def _ctx(self, record_values):
+        """record_values: dict for the pivoted race row, or None for 'no race point'."""
+        api = MagicMock()
+
+        def fake_query(_flux):
+            if record_values is None:
+                return []
+            table = MagicMock()
+            rec = MagicMock()
+            rec.values = record_values
+            table.records = [rec]
+            return [table]
+
+        api.query.side_effect = fake_query
+        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
+        ctx.query_api = api
+        return ctx
+
+    def test_returns_none_when_no_race_point(self):
+        ctx = self._ctx(None)
+        assert _mod.stored_race_completeness(ctx) is None
+
+    def test_reads_all_fields(self):
+        ctx = self._ctx({
+            'schema_version': _mod.SCHEMA_VERSION,
+            'expected_lap_count': 42,
+            'end_time_epoc': 123,
+        })
+        result = _mod.stored_race_completeness(ctx)
+        assert result == _mod.StoredRace(
+            schema_version=_mod.SCHEMA_VERSION, expected_lap_count=42, end_time_epoc=123)
+
+    def test_missing_new_fields_come_back_none(self):
+        ctx = self._ctx({'end_time_epoc': 123})
+        result = _mod.stored_race_completeness(ctx)
+        assert result.schema_version is None
+        assert result.expected_lap_count is None
+        assert result.end_time_epoc == 123
