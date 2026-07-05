@@ -3880,3 +3880,71 @@ class TestRaceCompleteInInflux:
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(10, 10)):
             with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(5, 5)):
                 assert _mod.race_complete_in_influx(self._ctx(), stored) is True
+
+
+class TestInfluxOnlySkip:
+    def _conn_ctx(self):
+        """Patch _influx.connect to yield a client whose query_api() is a MagicMock."""
+        cm = patch.object(_mod._influx, 'connect')
+        mock_conn = cm.start()
+        mock_conn.return_value.__enter__.return_value.query_api.return_value = MagicMock()
+        return cm
+
+    def test_true_when_complete_and_ended(self):
+        cm = self._conn_ctx()
+        try:
+            complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000)
+            with patch.object(_mod, 'stored_race_completeness', return_value=complete):
+                with patch.object(_mod, 'stored_end_in_past', return_value=True):
+                    with patch.object(_mod, 'race_complete_in_influx', return_value=True):
+                        assert _mod._influx_only_skip('999') is True
+        finally:
+            cm.stop()
+
+    def test_false_when_no_stored_race(self):
+        cm = self._conn_ctx()
+        try:
+            with patch.object(_mod, 'stored_race_completeness', return_value=None):
+                assert _mod._influx_only_skip('999') is False
+        finally:
+            cm.stop()
+
+    def test_false_when_not_ended(self):
+        cm = self._conn_ctx()
+        try:
+            complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 0)
+            with patch.object(_mod, 'stored_race_completeness', return_value=complete):
+                with patch.object(_mod, 'stored_end_in_past', return_value=False):
+                    assert _mod._influx_only_skip('999') is False
+        finally:
+            cm.stop()
+
+
+class TestMainFastPath:
+    _ARGV: ClassVar[list] = ['lemongrass-laps', '-n', '--skip-if-complete', '999']
+    _ENV: ClassVar[dict] = {'RACEMONITOR_TOKENS': 'T', 'INFLUX_TELEMETRY_TOKEN': 'I'}
+
+    def test_skips_without_racemonitor_when_complete(self):
+        with patch.object(_mod.sys, 'argv', self._ARGV):
+            with patch.dict(os.environ, self._ENV, clear=True):
+                with patch.object(_mod, '_influx_only_skip', return_value=True):
+                    with patch.object(_mod, 'RaceMonitorClient') as mock_rm:
+                        result = _mod.main()
+        assert result == 0
+        mock_rm.assert_not_called()
+
+    def test_falls_through_to_racemonitor_when_not_complete(self):
+        client = MagicMock()
+        client.race.details.return_value = {'Successful': False}
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+        with patch.object(_mod.sys, 'argv', self._ARGV):
+            with patch.dict(os.environ, self._ENV, clear=True):
+                with patch.object(_mod, '_influx_only_skip', return_value=False):
+                    with patch.object(_mod, 'RaceMonitorClient') as mock_rm:
+                        mock_rm.return_value.__enter__.return_value = client
+                        with patch.object(_mod._influx, 'connect') as mock_connect:
+                            mock_connect.return_value.__enter__.return_value = MagicMock()
+                            with patch.object(_mod, '_run_race', return_value=0):
+                                result = _mod.main()
+        assert result == 0
+        mock_rm.assert_called_once()

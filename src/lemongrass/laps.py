@@ -198,6 +198,18 @@ def main():
         dry_run=args.dry_run,
     )
 
+    # Fast path: for the historical backfill (--skip-if-complete), decide whether
+    # to skip entirely from Influx before making any RaceMonitor call. Gated on
+    # skip_if_complete (set only by race-backfill), so interactive and monitor
+    # runs never enter here; stored_end_in_past keeps any possibly-live race on
+    # the normal is_live path.
+    if opts.network_mode and opts.skip_if_complete and not opts.dry_run \
+            and _influx_only_skip(race_id):
+        logging.info(
+            "SKIP: race %s already complete and current "
+            "(from Influx, no RaceMonitor fetch)", race_id)
+        return 0
+
     try:
         with RaceMonitorClient(api_token=tokens) as client:
             race_details = client.race.details(race_id)
@@ -1162,6 +1174,23 @@ def race_complete_in_influx(ctx, stored):
         return False
     std_total, std_current = existing_standings_counts_fieldwide(ctx)
     return std_total > 0 and std_current == std_total
+
+
+def _influx_only_skip(race_id):
+    """True when race_id is complete, current, and ended per Influx alone.
+
+    Opens a short-lived read-only Influx connection and answers the backfill skip
+    decision without any RaceMonitor call. Any race that is not definitively
+    ended (see stored_end_in_past) returns False so it falls through to the normal
+    flow's is_live check.
+    """
+    with _influx.connect() as influx_client:
+        ctx = RaceContext(race_id, None, None, None, 0,
+                          query_api=influx_client.query_api())
+        stored = stored_race_completeness(ctx)
+        return (stored is not None
+                and stored_end_in_past(stored)
+                and race_complete_in_influx(ctx, stored))
 
 
 def _build_class_index(session_details):
