@@ -3530,15 +3530,15 @@
         "name": "vin",
         "label": "Car",
         "type": "custom",
-        "query": "bytearray(b'WP0ZZZ99ZTS39') : Test Car",
+        "query": "WP0ZZZ99ZTS39 : Test Car",
         "current": {
           "text": "Test Car",
-          "value": "bytearray(b'WP0ZZZ99ZTS39')"
+          "value": "WP0ZZZ99ZTS39"
         },
         "options": [
           {
             "text": "Test Car",
-            "value": "bytearray(b'WP0ZZZ99ZTS39')",
+            "value": "WP0ZZZ99ZTS39",
             "selected": true
           }
         ],
