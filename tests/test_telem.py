@@ -1,7 +1,11 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
+from influxdb_client import Point
+
 import lemongrass.telem as _mod
+from lemongrass._spool import Spool
 
 
 class _Cmd:
@@ -18,6 +22,8 @@ def _reset():
     _mod._last_dtc_count = 0
     _mod._dtc_fetch_failures = 0
     _mod._connection = None
+    _mod._spool = None
+    _mod._spooling = False
 
 
 class TestConnect:
@@ -451,32 +457,17 @@ class TestNewStatusDtcTrigger:
 class TestFlushPoints:
     def setup_method(self):
         _reset()
+        _mod._spool = MagicMock()
 
-    def test_writes_and_clears_pending_points(self):
-        _mod.pending_points.append("p1")
-        write_api = MagicMock()
-        _mod.flush_points(write_api)
-        write_api.write.assert_called_once()
-        assert len(_mod.pending_points) == 0
-
-    def test_does_nothing_when_empty(self):
-        write_api = MagicMock()
-        _mod.flush_points(write_api)
-        write_api.write.assert_not_called()
-
-    def test_restores_points_on_write_failure(self):
-        _mod.pending_points.append("p1")
-        write_api = MagicMock()
-        write_api.write.side_effect = Exception("network error")
-        _mod.flush_points(write_api)
-        assert len(_mod.pending_points) == 1
-
-    def test_writes_all_pending_points(self):
+    def test_returns_true_and_writes_all_pending(self):
         _mod.pending_points.extend(["p1", "p2", "p3"])
         write_api = MagicMock()
-        _mod.flush_points(write_api)
+        assert _mod.flush_points(write_api) is True
         write_api.write.assert_called_once()
         assert len(_mod.pending_points) == 0
+
+    def test_returns_true_when_nothing_pending(self):
+        assert _mod.flush_points(MagicMock()) is True
 
     def test_flushes_in_batches(self):
         _mod.pending_points.extend(f"p{i}" for i in range(5))
@@ -485,21 +476,178 @@ class TestFlushPoints:
         assert write_api.write.call_count == 3
         assert len(_mod.pending_points) == 0
 
-    def test_requeues_only_unwritten_on_midbatch_failure(self):
-        _mod.pending_points.extend(["p1", "p2", "p3", "p4", "p5"])
+    def test_failed_write_spills_batch_to_disk_and_clears_ram(self, tmp_path):
+        # Real Spool on tmp_path: assert the batch actually lands on disk, not
+        # merely that append() was called on a mock.
+        _mod._spool = Spool(tmp_path / "spool")
+        _mod.pending_points.append(Point("RPM").field("value", 3500))
+        write_api = MagicMock()
+        write_api.write.side_effect = Exception("network error")
+        assert _mod.flush_points(write_api) is False
+        assert _mod.pending_points == []
+        spooled = list((tmp_path / "spool").glob("*.lp"))
+        assert len(spooled) == 1
+        assert "RPM value=3500i" in spooled[0].read_text()
+
+    def test_spills_only_unwritten_on_midbatch_failure(self, tmp_path):
+        _mod._spool = Spool(tmp_path / "spool")
+        _mod.pending_points.extend(
+            Point("RPM").field("value", i) for i in range(1, 6)
+        )
         write_api = MagicMock()
         write_api.write.side_effect = [None, Exception("boom")]
-        _mod.flush_points(write_api, batch_size=2)
-        assert _mod.pending_points == ["p3", "p4", "p5"]
+        assert _mod.flush_points(write_api, batch_size=2) is False
+        assert _mod.pending_points == []
+        # First batch (values 1,2) reached Influx; only the unwritten remainder
+        # (3,4,5) is spilled to disk.
+        text = next((tmp_path / "spool").glob("*.lp")).read_text()
+        assert "value=3i" in text and "value=4i" in text and "value=5i" in text
+        assert "value=1i" not in text and "value=2i" not in text
 
-    def test_backlog_capped_dropping_oldest(self):
-        """A multi-hour outage must not grow the backlog until the Pi OOMs."""
+    def test_failed_write_with_no_spool_does_not_crash(self):
+        _mod._spool = None
+        _mod.pending_points.append("p1")
         write_api = MagicMock()
         write_api.write.side_effect = Exception("boom")
-        with patch.object(_mod, "MAX_PENDING_POINTS", 3):
-            _mod.pending_points.extend(["p1", "p2", "p3", "p4"])
-            _mod.flush_points(write_api)
-        assert _mod.pending_points == ["p2", "p3", "p4"]
+        assert _mod.flush_points(write_api) is False
+
+    def test_failed_write_falls_back_to_ram_when_spool_unusable(self, tmp_path):
+        """A genuinely disabled spool (unusable dir) must not silently drop
+        telemetry — the unwritten batch is re-queued in the bounded backlog."""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x")  # a file where the dir should be -> mkdir fails
+        _mod._spool = Spool(blocker / "spool")
+        assert _mod._spool.enabled is False
+        _mod.pending_points.extend(["p1", "p2"])
+        write_api = MagicMock()
+        write_api.write.side_effect = Exception("network error")
+        assert _mod.flush_points(write_api) is False
+        assert _mod.pending_points == ["p1", "p2"]
+
+
+class TestLoggingConfig:
+    def test_quiets_urllib3_retry_warnings(self):
+        """urllib3 logs a WARNING per retry attempt; during an outage the pump
+        retries every 0.5s, which would bury our edge-triggered outage lines."""
+        target = logging.getLogger("urllib3.connectionpool")
+        original = target.level
+        try:
+            target.setLevel(logging.NOTSET)
+            _mod._quiet_retry_logging()
+            assert target.level == logging.ERROR
+        finally:
+            target.setLevel(original)
+
+
+class TestInfluxConnectTuning:
+    def setup_method(self):
+        _reset()
+
+    def test_main_connects_with_short_timeout_and_trimmed_retries(self):
+        """The hot loop must build its Influx client with a short timeout and a
+        trimmed retry budget so a downed Influx fails fast to the spool."""
+        with patch.object(_mod._influx, "connect") as influx_connect, \
+                patch.object(_mod.Spool, "from_env"), \
+                patch.object(_mod, "_configure_obd_logging"), \
+                patch.object(_mod, "connect", side_effect=RuntimeError("stop")):
+            with pytest.raises(RuntimeError, match="stop"):
+                _mod.main()
+        influx_connect.assert_called_once_with(
+            timeout=_mod.WRITE_TIMEOUT_MS, retries=_mod.WRITE_RETRIES)
+
+
+class TestSpoolStateLogging:
+    """Outage logging is edge-triggered: one WARN when we start spooling, one
+    INFO when Influx recovers, and no per-cycle spam in between."""
+
+    def setup_method(self):
+        _reset()
+        _mod._spool = MagicMock()  # append() truthy -> stays on the spool path
+
+    def _fail(self, write_api):
+        _mod.pending_points.append(Point("RPM").field("value", 1))
+        write_api.write.side_effect = Exception("influx down")
+        _mod.flush_points(write_api)
+
+    def _succeed(self, write_api):
+        _mod.pending_points.append(Point("RPM").field("value", 2))
+        write_api.write.side_effect = None
+        _mod.flush_points(write_api)
+
+    def test_first_spool_failure_logs_warning_and_sets_flag(self, caplog):
+        write_api = MagicMock()
+        with caplog.at_level(logging.DEBUG, logger="telem"):
+            self._fail(write_api)
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert any("buffering telemetry to on-disk spool" in r.message
+                   for r in warnings)
+        assert _mod._spooling is True
+
+    def test_repeated_failures_warn_once_then_debug(self, caplog):
+        write_api = MagicMock()
+        with caplog.at_level(logging.DEBUG, logger="telem"):
+            self._fail(write_api)
+            self._fail(write_api)
+        warnings = [r for r in caplog.records
+                    if r.levelname == "WARNING"
+                    and "buffering telemetry" in r.message]
+        assert len(warnings) == 1
+        assert any(r.levelname == "DEBUG" and "still unreachable" in r.message
+                   for r in caplog.records)
+
+    def test_recovery_logs_info_and_clears_flag(self, caplog):
+        write_api = MagicMock()
+        self._fail(write_api)
+        with caplog.at_level(logging.DEBUG, logger="telem"):
+            self._succeed(write_api)
+        assert any(r.levelname == "INFO" and "reachable again" in r.message
+                   for r in caplog.records)
+        assert _mod._spooling is False
+
+    def test_empty_flush_does_not_clear_spooling(self, caplog):
+        write_api = MagicMock()
+        self._fail(write_api)
+        assert _mod._spooling is True
+        with caplog.at_level(logging.DEBUG, logger="telem"):
+            _mod.flush_points(write_api)  # nothing pending -> early True
+        assert _mod._spooling is True  # empty flush is not proof of recovery
+        assert not any("reachable again" in r.message for r in caplog.records)
+
+
+class TestPump:
+    def setup_method(self):
+        _reset()
+
+    def test_replays_spool_when_flush_succeeds(self):
+        _mod._spool = MagicMock()
+        write_api = MagicMock()
+        with patch.object(_mod, "flush_points", return_value=True):
+            _mod._pump(write_api)
+        _mod._spool.replay_oldest.assert_called_once_with(write_api, _mod.WRITE_BUCKET)
+
+    def test_skips_replay_when_flush_fails(self):
+        _mod._spool = MagicMock()
+        write_api = MagicMock()
+        with patch.object(_mod, "flush_points", return_value=False):
+            _mod._pump(write_api)
+        _mod._spool.replay_oldest.assert_not_called()
+
+    def test_no_spool_does_not_crash(self):
+        _mod._spool = None
+        with patch.object(_mod, "flush_points", return_value=True):
+            _mod._pump(MagicMock())  # must not raise
+
+    def test_crash_invariant_backlog_is_on_disk_not_ram(self, tmp_path):
+        """When Influx is down, the flush inside a pump cycle must leave the
+        backlog spilled to disk (durable across the watchdog sys.exit), never in
+        RAM. This is the load-bearing ordering the watchdog relies on."""
+        _mod._spool = Spool(tmp_path / "spool")
+        _mod.pending_points.append(Point("RPM").field("value", 3500))
+        write_api = MagicMock()
+        write_api.write.side_effect = ConnectionError("influx down")
+        _mod._pump(write_api)
+        assert _mod.pending_points == []                       # nothing left in RAM
+        assert len(list((tmp_path / "spool").glob("*.lp"))) == 1  # durable on disk
 
 
 class TestRouteCommand:

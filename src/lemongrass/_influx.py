@@ -24,31 +24,47 @@ BUCKET_SESSIONS = 'race_sessions'
 # NOT honor Retry-After: a downed Cloudflare tunnel returns 530 with
 # Retry-After: 120, which would otherwise hang the CLI for minutes. allowed_methods
 # is None so POST writes are retried too — the points written are idempotent.
-INFLUX_RETRIES = Retry(
-    total=3,
-    backoff_factor=1,
-    backoff_max=10,
-    status_forcelist=[429, 502, 503, 504, 530],
-    respect_retry_after_header=False,
-    allowed_methods=None,
-)
+def build_retries(total):
+    """Build the shared transient-error retry policy with a given attempt budget.
+
+    Batch commands use the 3-retry default; the telemetry hot loop trims this
+    (it has a durable spool as its real retry path) but keeps the same
+    forcelist/back-off semantics, so the policy lives in one place.
+    """
+    return Retry(
+        total=total,
+        backoff_factor=1,
+        backoff_max=10,
+        status_forcelist=[429, 502, 503, 504, 530],
+        respect_retry_after_header=False,
+        allowed_methods=None,
+    )
 
 
-def connect():
+INFLUX_RETRIES = build_retries(3)
+
+
+def connect(timeout=None, retries=INFLUX_RETRIES):
     """Return an InfluxDBClient wired with the shared URL/org/retries.
 
     Reads the token from INFLUX_TELEMETRY_TOKEN; logs an error and exits with
     status 1 if it is unset. The InfluxDBClient import is deferred so importing
     this module (which every command does) stays cheap.
+
+    `timeout` (ms) and `retries` let the telemetry hot loop fail fast to its
+    spool; when timeout is None the influxdb-client library default (10s) applies
+    so batch callers are unaffected.
     """
     token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
     if not token:
         logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
         sys.exit(1)
     from influxdb_client import InfluxDBClient
-    return InfluxDBClient(
-        url=INFLUX_URL, token=token, org=INFLUX_ORG, retries=INFLUX_RETRIES
-    )
+    kwargs = {'url': INFLUX_URL, 'token': token, 'org': INFLUX_ORG,
+              'retries': retries}
+    if timeout is not None:
+        kwargs['timeout'] = timeout
+    return InfluxDBClient(**kwargs)
 
 
 # Lap timestamps are session-anchored and Flux `stop` is exclusive, so laps can
