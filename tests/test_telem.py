@@ -24,6 +24,7 @@ def _reset():
     _mod._connection = None
     _mod._spool = None
     _mod._spooling = False
+    _mod._vin = "unknown"
 
 
 class TestConnect:
@@ -285,6 +286,63 @@ class TestQueryFuelTypeOnce:
                 patch.object(_mod, "Point", side_effect=capture_point):
             _mod._query_fuel_type_once(connection)
         assert captured_name[0] == "-Fuel-Type"
+
+
+class TestResolveVin:
+    def setup_method(self):
+        _reset()
+
+    def test_uses_obd_vin_when_supported(self, monkeypatch):
+        monkeypatch.delenv("CAR_VIN", raising=False)
+        connection = MagicMock()
+        connection.supports.return_value = True
+        r = MagicMock()
+        r.value = "1FATESTVIN0000001"
+        with patch.object(_mod.obd.OBD, "query", return_value=r) as mock_query:
+            vin = _mod._resolve_vin(connection)
+        mock_query.assert_called_once_with(
+            connection, _mod.obd.commands.VIN, force=True
+        )
+        assert vin == "1FATESTVIN0000001"
+
+    def test_falls_back_to_env_when_obd_unsupported(self, monkeypatch):
+        monkeypatch.setenv("CAR_VIN", "ENVVIN00000000001")
+        connection = MagicMock()
+        connection.supports.return_value = False
+        with patch.object(_mod.obd.OBD, "query") as mock_query:
+            vin = _mod._resolve_vin(connection)
+        mock_query.assert_not_called()
+        assert vin == "ENVVIN00000000001"
+
+    def test_falls_back_to_env_when_obd_query_raises(self, monkeypatch):
+        monkeypatch.setenv("CAR_VIN", "ENVVIN00000000002")
+        connection = MagicMock()
+        connection.supports.return_value = True
+        with patch.object(_mod.obd.OBD, "query", side_effect=Exception("boom")):
+            vin = _mod._resolve_vin(connection)
+        assert vin == "ENVVIN00000000002"
+
+    def test_unknown_when_nothing_resolves(self, monkeypatch):
+        monkeypatch.delenv("CAR_VIN", raising=False)
+        connection = MagicMock()
+        connection.supports.return_value = True
+        r = MagicMock()
+        r.value = None
+        with patch.object(_mod.obd.OBD, "query", return_value=r):
+            vin = _mod._resolve_vin(connection)
+        assert vin == "unknown"
+
+    def test_warns_and_prefers_obd_on_mismatch(self, monkeypatch, caplog):
+        monkeypatch.setenv("CAR_VIN", "ENVVIN00000000003")
+        connection = MagicMock()
+        connection.supports.return_value = True
+        r = MagicMock()
+        r.value = "OBDVIN00000000003"
+        with patch.object(_mod.obd.OBD, "query", return_value=r), \
+                caplog.at_level(logging.WARNING):
+            vin = _mod._resolve_vin(connection)
+        assert vin == "OBDVIN00000000003"
+        assert any("differs from CAR_VIN" in m for m in caplog.messages)
 
 
 class TestNewStatus:
@@ -714,8 +772,9 @@ class TestQueuePoint:
         _mod._last_append_monotonic = 0.0
 
     def test_appends_and_stamps_last_append_time(self):
-        _mod._queue_point("p")
-        assert _mod.pending_points == ["p"]
+        p = Point("p")
+        _mod._queue_point(p)
+        assert _mod.pending_points == [p]
         assert _mod._last_append_monotonic > 0
 
     def test_enqueue_capped_dropping_oldest_with_warning(self, caplog):
@@ -723,11 +782,12 @@ class TestQueuePoint:
         drop must leave a trace in the logs, matching flush_points."""
         _mod._dropped_since_warn = 0
         _mod._last_drop_warn_monotonic = float('-inf')
+        p1, p2, p3, p4 = Point("p1"), Point("p2"), Point("p3"), Point("p4")
         with patch.object(_mod, "MAX_PENDING_POINTS", 3):
-            _mod.pending_points.extend(["p1", "p2", "p3"])
+            _mod.pending_points.extend([p1, p2, p3])
             with caplog.at_level(logging.WARNING):
-                _mod._queue_point("p4")
-        assert _mod.pending_points == ["p2", "p3", "p4"]
+                _mod._queue_point(p4)
+        assert _mod.pending_points == [p2, p3, p4]
         assert any("dropped" in r.message.lower() for r in caplog.records)
 
     def test_enqueue_drop_warning_is_rate_limited(self, caplog):
@@ -735,12 +795,19 @@ class TestQueuePoint:
         saturation would otherwise flood journald with a line per callback."""
         _mod._dropped_since_warn = 0
         _mod._last_drop_warn_monotonic = float('-inf')
+        p1, p2, p3, p4, p5 = (
+            Point("p1"), Point("p2"), Point("p3"), Point("p4"), Point("p5"))
         with patch.object(_mod, "MAX_PENDING_POINTS", 3):
-            _mod.pending_points.extend(["p1", "p2", "p3"])
+            _mod.pending_points.extend([p1, p2, p3])
             with caplog.at_level(logging.WARNING):
-                _mod._queue_point("p4")
-                _mod._queue_point("p5")
+                _mod._queue_point(p4)
+                _mod._queue_point(p5)
         assert sum("dropped" in r.message.lower() for r in caplog.records) == 1
+
+    def test_tags_every_point_with_vin(self):
+        _mod._vin = "1FATESTVIN0000009"
+        _mod._queue_point(_mod.Point("rpm").field("value", 1))
+        assert _mod.pending_points[0]._tags == {"vin": "1FATESTVIN0000009"}
 
 
 class TestConnectionHealthy:

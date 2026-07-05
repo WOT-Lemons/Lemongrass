@@ -20,6 +20,12 @@ BUCKET_LAPS = 'laps'
 BUCKET_RACES = 'races'
 BUCKET_SESSIONS = 'race_sessions'
 
+# OBD car telemetry (vin-tagged) and PiSugar host telemetry (host-tagged),
+# born native v2 with bare names. The v2 write API matches the literal bucket
+# name and ignores DBRP, so these must be the exact write targets.
+BUCKET_TELEM = 'telem'
+BUCKET_PISUGAR = 'pisugar'
+
 # Bounded retry for transient failures (connection blips, retryable 5xx). We do
 # NOT honor Retry-After: a downed Cloudflare tunnel returns 530 with
 # Retry-After: 120, which would otherwise hang the CLI for minutes. allowed_methods

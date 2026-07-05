@@ -43,9 +43,7 @@ MAX_PENDING_POINTS = 50_000
 FLUSH_BATCH_SIZE = 5_000
 STATUS_COMMANDS = {"STATUS", "STATUS_DRIVE_CYCLE"}
 
-# Write bucket for both the live flush and spool replay; the v2 write path
-# ignores DBRP so the target bucket must carry this literal name.
-WRITE_BUCKET = 'stats_252/autogen'
+WRITE_BUCKET = _influx.BUCKET_TELEM
 
 # Influx client tuning for the 0.5s pump loop. A short per-request timeout and a
 # single retry keep a downed/hung Influx from blocking the hot path — the durable
@@ -75,6 +73,7 @@ pending_lock = threading.Lock()
 
 _connection = None  # set by main(); lets new_status trigger on-demand DTC lookups
 _spool: Spool | None = None  # set by main()
+_vin = "unknown"  # set by main() via _resolve_vin; tags every queued point
 # Outage state, edge-triggered so a sustained outage logs once (WARN) at onset
 # and once (INFO) on recovery instead of one line per 0.5s pump cycle. Only
 # touched from the main pump thread (flush_points), so no lock is needed.
@@ -97,6 +96,7 @@ _last_drop_warn_monotonic = float('-inf')
 def _queue_point(point):
     """Append a point to the pending batch and mark data as flowing."""
     global _last_append_monotonic, _dropped_since_warn, _last_drop_warn_monotonic
+    point.tag("vin", _vin)
     with pending_lock:
         pending_points.append(point)
         overflow = len(pending_points) - MAX_PENDING_POINTS
@@ -204,6 +204,35 @@ def _query_fuel_type_once(connection):
         return
 
     _queue_point(Point(measurement).field("value", r.value).time(ts))
+
+
+def _resolve_vin(connection):
+    """Resolve the car VIN for tagging: OBD Mode 09, then CAR_VIN env, then 'unknown'.
+
+    VIN is static per session, so main() calls this once and caches the result in
+    the module-level _vin. OBD is the source of truth; CAR_VIN is a fallback (and
+    the only source when Mode 09 is unsupported). A telemetry point is never
+    dropped for want of a VIN -- an unresolved VIN tags 'unknown' and logs.
+    """
+    obd_vin = None
+    try:
+        if connection.supports(obd.commands.VIN):
+            r = obd.OBD.query(connection, obd.commands.VIN, force=True)
+            if r.value:
+                obd_vin = str(r.value).strip()
+    except Exception:
+        logger.exception("VIN query failed; falling back to CAR_VIN")
+
+    env_vin = os.environ.get("CAR_VIN")
+    if obd_vin:
+        if env_vin and env_vin != obd_vin:
+            logger.warning(
+                "OBD VIN %s differs from CAR_VIN %s; using OBD VIN", obd_vin, env_vin)
+        return obd_vin
+    if env_vin:
+        return env_vin
+    logger.warning("VIN unresolved from OBD and CAR_VIN; tagging vin=unknown")
+    return "unknown"
 
 
 def _fetch_and_store_dtcs():
@@ -415,7 +444,7 @@ def _pump(write_api):
 
 def main():
     """Main loop of OBD-II scraping"""
-    global _connection, _last_append_monotonic, _spool
+    global _connection, _last_append_monotonic, _spool, _vin
 
     _spool = Spool.from_env()
 
@@ -436,6 +465,8 @@ def main():
 
         _connection = connection
         _query_fuel_type_once(connection)
+        _vin = _resolve_vin(connection)
+        logger.info("Tagging telemetry with vin=%s", _vin)
 
         for command in connection.supported_commands:
             callback = _route_command(command)
