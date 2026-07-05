@@ -524,7 +524,7 @@ def old_race(ctx, opts):
                     race_ts_ms = (
                         ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                     )
-                    if not push_influx_race(ctx, race_ts_ms):
+                    if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
                         logging.error(
                             "Race metadata write failed for race %s — failing the "
                             "run so the next backfill retries", ctx.race_id)
@@ -559,7 +559,7 @@ def old_race(ctx, opts):
             logging.warning("Skipping race stamp so next run will re-backfill")
             return 1
 
-        if not push_influx_race(ctx, race_ts_ms):
+        if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
             logging.error(
                 "Race metadata write failed for race %s — failing the run so the "
                 "next backfill retries", ctx.race_id)
@@ -934,7 +934,7 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
     return True
 
 
-def push_influx_race(ctx, timestamp_ms):
+def push_influx_race(ctx, timestamp_ms, expected_lap_count, session_count):
     """Write one race metadata point to the races bucket, replacing any prior point.
 
     Returns True on success. Returns False when metadata is missing or the
@@ -960,6 +960,9 @@ def push_influx_race(ctx, timestamp_ms):
             .tag("track_name", meta.track_name)
             .tag("series_name", meta.series_name)
             .field("end_time_epoc", meta.end_time_epoc)
+            .field("schema_version", SCHEMA_VERSION)
+            .field("expected_lap_count", expected_lap_count)
+            .field("session_count", session_count)
             .time(timestamp_ms, WritePrecision.MS)
         )
         ctx.write_api.write(bucket=_influx.BUCKET_RACES, record=point)

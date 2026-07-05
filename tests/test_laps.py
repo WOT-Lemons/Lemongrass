@@ -2336,6 +2336,24 @@ class TestPushInfluxRace:
         assert _mod.push_influx_race(ctx, 1000) is False
 
 
+class TestPushInfluxRaceFields:
+    def _ctx(self):
+        meta = _mod.RaceMetadata(
+            race_name='R', track_name='T', series_name='S', end_time_epoc=123)
+        return _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0,
+                                metadata=meta, delete_api=MagicMock())
+
+    def test_writes_expected_session_and_schema_fields(self):
+        ctx = self._ctx()
+        ok = _mod.push_influx_race(ctx, 1000, expected_lap_count=42, session_count=3)
+        assert ok is True
+        point = ctx.write_api.write.call_args.kwargs['record']
+        lp = point.to_line_protocol()
+        assert 'expected_lap_count=42i' in lp
+        assert 'session_count=3i' in lp
+        assert f'schema_version={_mod.SCHEMA_VERSION}i' in lp
+
+
 class TestOldRaceMetadataFailure:
     def _session_details(self):
         return {
