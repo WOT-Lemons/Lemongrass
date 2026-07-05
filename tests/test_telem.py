@@ -293,10 +293,12 @@ class TestResolveVin:
         _reset()
 
     def test_uses_obd_vin_when_available(self, monkeypatch):
+        # python-obd returns Mode 09 VIN as a bytearray; it must be decoded, not
+        # stringified (str(bytearray(...)) yields the literal "bytearray(b'...')").
         monkeypatch.delenv("CAR_VIN", raising=False)
         connection = MagicMock()
         r = MagicMock()
-        r.value = "1FATESTVIN0000001"
+        r.value = bytearray(b"1FATESTVIN0000001")
         with patch.object(_mod.obd.OBD, "query", return_value=r) as mock_query:
             vin = _mod._resolve_vin(connection)
         mock_query.assert_called_once_with(

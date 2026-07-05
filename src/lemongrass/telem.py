@@ -223,7 +223,10 @@ def _resolve_vin(connection):
     try:
         r = obd.OBD.query(connection, obd.commands.VIN, force=True)
         if r.value:
-            obd_vin = str(r.value).strip()
+            val = r.value
+            if isinstance(val, (bytes, bytearray)):
+                val = val.decode("ascii", errors="ignore")
+            obd_vin = str(val).strip()
     except Exception:
         logger.exception("VIN query failed; falling back to CAR_VIN")
 
