@@ -36,7 +36,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-pisugar-ql"
       },
       "description": "",
       "fieldConfig": {
@@ -101,7 +101,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-pisugar-ql"
           },
           "groupBy": [
             {
@@ -136,7 +136,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "host",
+              "operator": "=~",
+              "value": "/^$host$/"
+            }
+          ]
         }
       ],
       "title": "PiSugar Power Status",
@@ -159,7 +165,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-pisugar-ql"
       },
       "description": "PiSugar Temperature",
       "fieldConfig": {
@@ -214,7 +220,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-pisugar-ql"
           },
           "groupBy": [
             {
@@ -249,7 +255,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "host",
+              "operator": "=~",
+              "value": "/^$host$/"
+            }
+          ]
         }
       ],
       "title": "PiSugar Temperature",
@@ -258,7 +270,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-pisugar-ql"
       },
       "description": "PiSugar Battery Voltage",
       "fieldConfig": {
@@ -318,7 +330,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-pisugar-ql"
           },
           "groupBy": [
             {
@@ -353,7 +365,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "host",
+              "operator": "=~",
+              "value": "/^$host$/"
+            }
+          ]
         }
       ],
       "title": "PiSugar Battery Voltage",
@@ -363,7 +381,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-pisugar-ql"
       },
       "description": "PiSugar Battery Level",
       "fieldConfig": {
@@ -419,7 +437,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-pisugar-ql"
           },
           "groupBy": [
             {
@@ -454,7 +472,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "host",
+              "operator": "=~",
+              "value": "/^$host$/"
+            }
+          ]
         }
       ],
       "title": "PiSugar Battery Level",
@@ -467,7 +491,21 @@
   "schemaVersion": 40,
   "tags": [],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-pisugar-ql"
+        },
+        "query": "SHOW TAG VALUES FROM \"pisugar-battery-level\" WITH KEY = \"host\"",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": false
+      }
+    ]
   },
   "time": {
     "from": "now-15m",
@@ -475,7 +513,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "car252 PiSugar UPS",
+  "title": "PiSugar UPS",
   "uid": "aek7ov53gt62od",
   "version": 10,
   "weekStart": ""

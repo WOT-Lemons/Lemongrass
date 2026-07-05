@@ -1,16 +1,16 @@
 #!/bin/bash
 # Runs once, inside the influxdb container, after 10-create-buckets.sh on first
 # init (empty volume). Creates v1 DBRP mappings so the InfluxQL Grafana
-# datasources (wotl-laps-ql / wotl-races-ql / stats_252) can query the 2.x
-# buckets via the v1 API. The race_sessions bucket is queried only via Flux,
-# so it needs no DBRP.
+# datasources (wotl-laps-ql / wotl-races-ql / wotl-telem-ql / wotl-pisugar-ql /
+# stats_252) can query the 2.x buckets via the v1 API. The race_sessions bucket
+# is queried only via Flux, so it needs no DBRP.
 set -euo pipefail
 
 # During first-init the entrypoint runs influxd on INFLUXD_INIT_PORT (9999),
 # not 8086 — 8086 only binds after init completes.
 HOST="http://localhost:${INFLUXD_INIT_PORT:-9999}"
 
-for db in laps races; do
+for db in laps races telem pisugar; do
   bucket_id=$(influx bucket list \
     --name "$db" \
     --org "$DOCKER_INFLUXDB_INIT_ORG" \

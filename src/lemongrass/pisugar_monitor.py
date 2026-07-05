@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import os
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -35,6 +36,17 @@ def read_credentials():
         return config.get('auth_user'), config.get('auth_password')
     except (FileNotFoundError, json.JSONDecodeError):
         return None, None
+
+
+def _resolve_host():
+    """Host identity for tagging PiSugar (Pi) telemetry.
+
+    PiSugar data describes the Pi, not the car, so it is tagged by host rather
+    than VIN. HOST is wired to the Pi's real hostname in the deploy compose so
+    it matches telegraf's host tag; socket.gethostname() (the container ID under
+    Docker) is only a last-resort fallback.
+    """
+    return os.environ.get("HOST") or socket.gethostname()
 
 
 def login(username, password):
@@ -137,7 +149,7 @@ def write_points(write_api, points):
     reading has no value worth preserving.
     """
     try:
-        write_api.write(bucket='stats_252/autogen', record=points)
+        write_api.write(bucket=_influx.BUCKET_PISUGAR, record=points)
         logger.info("Wrote %d points to InfluxDB", len(points))
     except Exception:
         logger.exception("Failed to write %d points to InfluxDB", len(points))
@@ -153,6 +165,8 @@ def main():
 
     username, password = read_credentials()
     pisugar_token, device_tags = _startup_connect(username, password)
+    device_tags["host"] = _resolve_host()
+    logger.info("Tagging PiSugar telemetry with host=%s", device_tags["host"])
     logger.info("PiSugar device: %s", device_tags)
 
     with _influx.connect() as influx_client:

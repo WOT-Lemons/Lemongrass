@@ -929,7 +929,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -995,7 +995,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -1030,7 +1030,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Engine Coolant Temperature",
@@ -1039,7 +1045,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-pisugar-ql"
       },
       "description": "",
       "fieldConfig": {
@@ -1104,7 +1110,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-pisugar-ql"
           },
           "groupBy": [
             {
@@ -1149,7 +1155,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -1215,7 +1221,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -1250,7 +1256,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "OBD-II Voltage",
@@ -1380,7 +1392,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -1473,7 +1485,7 @@
           "alias": "Degrees Celcius",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -1508,7 +1520,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Engine Coolant Temperature",
@@ -1517,7 +1535,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -1604,7 +1622,7 @@
           "alias": "Throttle Position %",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -1639,13 +1657,19 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         },
         {
           "alias": "Vehicle Seed (MPH)",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -1686,7 +1710,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Throttle Position vs. Vehicle speed",
@@ -1695,7 +1725,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -1755,7 +1785,7 @@
           "alias": "RPM",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -1790,7 +1820,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Engine RPM",
@@ -1799,7 +1835,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -1890,7 +1926,7 @@
           "alias": "degrees",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -1925,7 +1961,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Timing Advance",
@@ -1934,7 +1976,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -2031,7 +2073,7 @@
           "alias": "Long term fuel trim",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -2066,13 +2108,19 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         },
         {
           "alias": "Short term fuel trim",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -2107,7 +2155,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Fuel Trims",
@@ -2116,7 +2170,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -2183,7 +2237,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -2224,7 +2278,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Vehicle Speed",
@@ -2233,7 +2293,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -2289,7 +2349,7 @@
           "alias": "Throttle Position",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -2324,7 +2384,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Throttle Position",
@@ -2333,7 +2399,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -2414,7 +2480,7 @@
           "alias": "Fuel System Status",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -2449,7 +2515,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Fuel System Status",
@@ -2458,7 +2530,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "description": "In gps",
       "fieldConfig": {
@@ -2548,7 +2620,7 @@
           "alias": "GPS",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -2583,7 +2655,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Mass Air Flow Rate",
@@ -2592,7 +2670,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -2681,7 +2759,7 @@
           "alias": "Kilopascal",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -2716,7 +2794,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Fuel Pressure",
@@ -2725,7 +2809,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -2814,7 +2898,7 @@
           "alias": "Volts",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -2843,7 +2927,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "O2 Sensor Voltage",
@@ -2852,7 +2942,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -2943,7 +3033,7 @@
           "alias": "MPH",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -2984,7 +3074,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Vehicle Speed",
@@ -2993,7 +3089,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -3093,7 +3189,7 @@
           "alias": "Revolutions Per Minute",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -3130,7 +3226,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Engine RPM",
@@ -3139,7 +3241,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "fieldConfig": {
         "defaults": {
@@ -3228,7 +3330,7 @@
           "alias": "Degrees Celcius",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -3263,7 +3365,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Intake Air Temperature",
@@ -3272,7 +3380,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-telem-ql"
       },
       "description": "Fuel system status is reported as 1 of 5 modes.\n0 - Open loop due to insufficient engine temperature\n1 - Closed loop, using oxygen sensor feedback to determine fuel mix\n2 - Open loop due to engine load OR fuel cut due to deceleration\n3 - Open loop due to system failure\n4 - Closed loop, using at least one oxygen sensor but there is a fault in the feedback system",
       "fieldConfig": {
@@ -3364,7 +3472,7 @@
           "alias": "Mode",
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-telem-ql"
           },
           "groupBy": [
             {
@@ -3399,7 +3507,13 @@
               }
             ]
           ],
-          "tags": []
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
         }
       ],
       "title": "Fuel System Status",
@@ -3412,6 +3526,25 @@
   "tags": [],
   "templating": {
     "list": [
+      {
+        "name": "vin",
+        "label": "Car",
+        "type": "custom",
+        "query": "Test Car : WP0ZZZ99ZTS39",
+        "current": {
+          "text": "Test Car",
+          "value": "WP0ZZZ99ZTS39"
+        },
+        "options": [
+          {
+            "text": "Test Car",
+            "value": "WP0ZZZ99ZTS39",
+            "selected": true
+          }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
       {
         "name": "raceid",
         "label": "Race",

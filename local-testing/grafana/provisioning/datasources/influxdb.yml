@@ -65,6 +65,32 @@ datasources:
     secureJsonData:
       httpHeaderValue1: Token local-dev-token
 
+  # Car OBD telemetry (vin-tagged) — backs the race-control OBD panels.
+  - name: telem
+    uid: wotl-telem-ql
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: false
+    jsonData:
+      dbName: telem
+      httpHeaderName1: Authorization
+    secureJsonData:
+      httpHeaderValue1: Token local-dev-token
+
+  # PiSugar host/UPS telemetry (host-tagged) — backs the pisugar dashboard.
+  - name: pisugar
+    uid: wotl-pisugar-ql
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: false
+    jsonData:
+      dbName: pisugar
+      httpHeaderName1: Authorization
+    secureJsonData:
+      httpHeaderValue1: Token local-dev-token
+
   # Flux datasources — back the dashboard template variables.
   - name: laps_flux
     uid: wotl-laps-flux

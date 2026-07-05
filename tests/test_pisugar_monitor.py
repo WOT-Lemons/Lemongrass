@@ -5,6 +5,7 @@ from urllib.error import URLError
 
 import pytest
 
+import lemongrass._influx as _influx
 import lemongrass.pisugar_monitor as _mod
 
 token_expiry = _mod.token_expiry
@@ -135,3 +136,26 @@ class TestStartupConnect:
                 token, _tags = _mod._startup_connect(None, None)
         assert token is None
         mock_login.assert_not_called()
+
+
+class TestResolveHost:
+    def test_uses_host_env_when_set(self, monkeypatch):
+        monkeypatch.setenv("HOST", "car-lemongrass-pi")
+        assert _mod._resolve_host() == "car-lemongrass-pi"
+
+    def test_falls_back_to_gethostname(self, monkeypatch):
+        monkeypatch.delenv("HOST", raising=False)
+        with patch.object(_mod.socket, "gethostname", return_value="fallback-host"):
+            assert _mod._resolve_host() == "fallback-host"
+
+
+class TestWritePointsBucket:
+    def test_writes_to_pisugar_bucket(self):
+        write_api = MagicMock()
+        _mod.write_points(write_api, [_mod.build_point("pisugar-temperature", 42.0)])
+        assert write_api.write.call_args.kwargs["bucket"] == _influx.BUCKET_PISUGAR
+
+    def test_build_point_carries_host_tag_and_no_vin(self):
+        point = _mod.build_point("pisugar-battery-level", 80, {"host": "pi-1"})
+        assert point._tags == {"host": "pi-1"}
+        assert "vin" not in point._tags
