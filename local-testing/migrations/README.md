@@ -9,8 +9,8 @@ InfluxDB after the `telem` and `pisugar` buckets exist.
 1. Edit `2026-07-05-stats252-split.flux`, replacing `CURRENT_CAR_VIN` with the
    car's VIN and `CURRENT_PI_HOSTNAME` with the Pi's hostname.
 2. Dry-run against the local stack first (see Verify).
-3. Run against the target:
-   `influx query --org <org> --token <token> --file 2026-07-05-stats252-split.flux`
+3. Run against the target (paths are relative to the repo root):
+   `influx query --org <org> --token <token> --file local-testing/migrations/2026-07-05-stats252-split.flux`
 4. Verify row counts in `telem` / `pisugar` match the source, then (later,
    once confident) delete `stats_252/autogen`. It is left intact as rollback.
 

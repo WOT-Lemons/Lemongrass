@@ -1045,7 +1045,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+        "uid": "wotl-pisugar-ql"
       },
       "description": "",
       "fieldConfig": {
@@ -1110,7 +1110,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "f3134d95-85f2-4173-9d6b-5ce95b10bbd0"
+            "uid": "wotl-pisugar-ql"
           },
           "groupBy": [
             {
@@ -3530,7 +3530,7 @@
         "name": "vin",
         "label": "Car",
         "type": "custom",
-        "query": "WP0ZZZ99ZTS39 : Test Car",
+        "query": "Test Car : WP0ZZZ99ZTS39",
         "current": {
           "text": "Test Car",
           "value": "WP0ZZZ99ZTS39"
