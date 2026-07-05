@@ -1133,6 +1133,16 @@ def stored_race_completeness(ctx):
     return None
 
 
+def stored_end_in_past(stored):
+    """True only when the race's stored end time is known (nonzero) and in the past.
+
+    The live-race guard for the Influx-only skip: any race whose stored end is 0
+    (unknown) or in the future is treated as possibly-live and must fall through
+    to the real is_live check rather than being skipped from Influx alone.
+    """
+    return bool(stored.end_time_epoc) and stored.end_time_epoc < time.time()
+
+
 def _build_class_index(session_details):
     """Precompute per-session class-position data shared by every competitor.
 

@@ -3812,3 +3812,22 @@ class TestStoredRaceCompleteness:
         assert result.schema_version is None
         assert result.expected_lap_count is None
         assert result.end_time_epoc == 123
+
+
+class TestStoredEndInPast:
+    def _stored(self, end_epoc):
+        return _mod.StoredRace(schema_version=4, expected_lap_count=1, end_time_epoc=end_epoc)
+
+    def test_zero_epoch_is_not_past(self):
+        assert _mod.stored_end_in_past(self._stored(0)) is False
+
+    def test_none_epoch_is_not_past(self):
+        assert _mod.stored_end_in_past(self._stored(None)) is False
+
+    def test_future_epoch_is_not_past(self):
+        with patch.object(_mod.time, 'time', return_value=1000):
+            assert _mod.stored_end_in_past(self._stored(5000)) is False
+
+    def test_past_epoch_is_past(self):
+        with patch.object(_mod.time, 'time', return_value=1000):
+            assert _mod.stored_end_in_past(self._stored(500)) is True
