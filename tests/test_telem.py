@@ -1,7 +1,10 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+from influxdb_client import Point
+
 import lemongrass.telem as _mod
+from lemongrass._spool import Spool
 
 
 class _Cmd:
@@ -471,21 +474,33 @@ class TestFlushPoints:
         assert write_api.write.call_count == 3
         assert len(_mod.pending_points) == 0
 
-    def test_failed_write_spills_batch_and_clears_ram(self):
-        _mod.pending_points.append("p1")
+    def test_failed_write_spills_batch_to_disk_and_clears_ram(self, tmp_path):
+        # Real Spool on tmp_path: assert the batch actually lands on disk, not
+        # merely that append() was called on a mock.
+        _mod._spool = Spool(tmp_path / "spool")
+        _mod.pending_points.append(Point("RPM").field("value", 3500))
         write_api = MagicMock()
         write_api.write.side_effect = Exception("network error")
         assert _mod.flush_points(write_api) is False
         assert _mod.pending_points == []
-        _mod._spool.append.assert_called_once_with(["p1"])
+        spooled = list((tmp_path / "spool").glob("*.lp"))
+        assert len(spooled) == 1
+        assert "RPM value=3500i" in spooled[0].read_text()
 
-    def test_spills_only_unwritten_on_midbatch_failure(self):
-        _mod.pending_points.extend(["p1", "p2", "p3", "p4", "p5"])
+    def test_spills_only_unwritten_on_midbatch_failure(self, tmp_path):
+        _mod._spool = Spool(tmp_path / "spool")
+        _mod.pending_points.extend(
+            Point("RPM").field("value", i) for i in range(1, 6)
+        )
         write_api = MagicMock()
         write_api.write.side_effect = [None, Exception("boom")]
         assert _mod.flush_points(write_api, batch_size=2) is False
         assert _mod.pending_points == []
-        _mod._spool.append.assert_called_once_with(["p3", "p4", "p5"])
+        # First batch (values 1,2) reached Influx; only the unwritten remainder
+        # (3,4,5) is spilled to disk.
+        text = next((tmp_path / "spool").glob("*.lp")).read_text()
+        assert "value=3i" in text and "value=4i" in text and "value=5i" in text
+        assert "value=1i" not in text and "value=2i" not in text
 
     def test_failed_write_with_no_spool_does_not_crash(self):
         _mod._spool = None
@@ -494,11 +509,13 @@ class TestFlushPoints:
         write_api.write.side_effect = Exception("boom")
         assert _mod.flush_points(write_api) is False
 
-    def test_failed_write_falls_back_to_ram_when_spool_cannot_accept(self):
-        """If the spool is unusable (disabled dir, disk error), the unwritten
-        batch must be re-queued in RAM rather than silently dropped."""
-        _mod._spool = MagicMock()
-        _mod._spool.append.return_value = False
+    def test_failed_write_falls_back_to_ram_when_spool_unusable(self, tmp_path):
+        """A genuinely disabled spool (unusable dir) must not silently drop
+        telemetry — the unwritten batch is re-queued in the bounded backlog."""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x")  # a file where the dir should be -> mkdir fails
+        _mod._spool = Spool(blocker / "spool")
+        assert _mod._spool.enabled is False
         _mod.pending_points.extend(["p1", "p2"])
         write_api = MagicMock()
         write_api.write.side_effect = Exception("network error")
@@ -533,9 +550,6 @@ class TestPump:
         """When Influx is down, the flush inside a pump cycle must leave the
         backlog spilled to disk (durable across the watchdog sys.exit), never in
         RAM. This is the load-bearing ordering the watchdog relies on."""
-        from influxdb_client import Point
-
-        from lemongrass._spool import Spool
         _mod._spool = Spool(tmp_path / "spool")
         _mod.pending_points.append(Point("RPM").field("value", 3500))
         write_api = MagicMock()
