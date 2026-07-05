@@ -18,6 +18,7 @@ def _reset():
     _mod._last_dtc_count = 0
     _mod._dtc_fetch_failures = 0
     _mod._connection = None
+    _mod._spool = None
 
 
 class TestConnect:
@@ -492,6 +493,45 @@ class TestFlushPoints:
         write_api = MagicMock()
         write_api.write.side_effect = Exception("boom")
         assert _mod.flush_points(write_api) is False
+
+
+class TestPump:
+    def setup_method(self):
+        _reset()
+
+    def test_replays_spool_when_flush_succeeds(self):
+        _mod._spool = MagicMock()
+        write_api = MagicMock()
+        with patch.object(_mod, "flush_points", return_value=True):
+            _mod._pump(write_api)
+        _mod._spool.replay_oldest.assert_called_once_with(write_api, _mod.WRITE_BUCKET)
+
+    def test_skips_replay_when_flush_fails(self):
+        _mod._spool = MagicMock()
+        write_api = MagicMock()
+        with patch.object(_mod, "flush_points", return_value=False):
+            _mod._pump(write_api)
+        _mod._spool.replay_oldest.assert_not_called()
+
+    def test_no_spool_does_not_crash(self):
+        _mod._spool = None
+        with patch.object(_mod, "flush_points", return_value=True):
+            _mod._pump(MagicMock())  # must not raise
+
+    def test_crash_invariant_backlog_is_on_disk_not_ram(self, tmp_path):
+        """When Influx is down, the flush inside a pump cycle must leave the
+        backlog spilled to disk (durable across the watchdog sys.exit), never in
+        RAM. This is the load-bearing ordering the watchdog relies on."""
+        from influxdb_client import Point
+
+        from lemongrass._spool import Spool
+        _mod._spool = Spool(tmp_path / "spool")
+        _mod.pending_points.append(Point("RPM").field("value", 3500))
+        write_api = MagicMock()
+        write_api.write.side_effect = ConnectionError("influx down")
+        _mod._pump(write_api)
+        assert _mod.pending_points == []                       # nothing left in RAM
+        assert len(list((tmp_path / "spool").glob("*.lp"))) == 1  # durable on disk
 
 
 class TestRouteCommand:

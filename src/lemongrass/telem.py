@@ -349,9 +349,21 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
         return False
 
 
+def _pump(write_api):
+    """One service cycle: flush fresh points, then replay one spooled file.
+
+    Replay runs only when the live flush succeeded — while Influx is down the
+    flush already failed (and spilled), so we skip a second blocking write.
+    """
+    if flush_points(write_api) and _spool is not None:
+        _spool.replay_oldest(write_api, WRITE_BUCKET)
+
+
 def main():
     """Main loop of OBD-II scraping"""
-    global _connection, _last_append_monotonic
+    global _connection, _last_append_monotonic, _spool
+
+    _spool = Spool.from_env()
 
     with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
@@ -386,11 +398,11 @@ def main():
 
         while True:
             sleep(0.5)
-            flush_points(write_api)
+            _pump(write_api)
             if not _connection_healthy(connection):
                 # Exit nonzero so the container/systemd restart policy re-runs
-                # the well-tested startup connect sequence; the flush at the top
-                # of this iteration already covers pending points.
+                # the well-tested startup connect sequence; _pump at the top of
+                # this iteration already flushed or spilled pending points.
                 logger.error("Exiting for supervisor restart")
                 sys.exit(1)
 
