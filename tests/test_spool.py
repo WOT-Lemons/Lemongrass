@@ -152,3 +152,30 @@ class TestReplay:
         assert result is True
         # Warning should be logged about the unlink failure
         assert any("Could not remove replayed spool file" in r.message for r in caplog.records)
+
+
+class TestRoundTrip:
+    def test_outage_then_recovery_delivers_exact_points(self, tmp_path):
+        spool = Spool(tmp_path / "spool")
+
+        # --- outage: three batches fail to write and are spilled ---
+        spool.append([_pt("RPM", 1000), _pt("SPEED", 10)])
+        spool.append([_pt("RPM", 2000)])
+        spool.append([_pt("RPM", 3000)])
+        assert len(list((tmp_path / "spool").glob("*.lp"))) >= 1
+
+        # --- recovery: write_api works; drain until empty ---
+        write_api = MagicMock()
+        for _ in range(10):
+            if spool.replay_oldest(write_api, BUCKET) and not list(
+                (tmp_path / "spool").glob("*.lp")
+            ):
+                break
+
+        assert list((tmp_path / "spool").glob("*.lp")) == []  # fully drained
+        delivered = "".join(
+            c.kwargs["record"] for c in write_api.write.call_args_list
+        )
+        for token in ("RPM value=1000i", "SPEED value=10i",
+                      "RPM value=2000i", "RPM value=3000i"):
+            assert token in delivered
