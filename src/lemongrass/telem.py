@@ -32,6 +32,14 @@ STATUS_COMMANDS = {"STATUS", "STATUS_DRIVE_CYCLE"}
 # ignores DBRP so the target bucket must carry this literal name.
 WRITE_BUCKET = 'stats_252/autogen'
 
+# Influx client tuning for the 0.5s pump loop. A short per-request timeout and a
+# single retry keep a downed/hung Influx from blocking the hot path — the durable
+# spool (replayed each cycle) is the real retry path, so we fail fast to it
+# rather than the library-default 10s x 3 attempts. Batch commands keep the
+# default (longer timeout, 3 retries) via the unparameterized _influx.connect().
+WRITE_TIMEOUT_MS = 3000
+WRITE_RETRIES = _influx.build_retries(1)
+
 FUEL_STATUS_MAP = {
     "Open loop due to insufficient engine temperature": 0,
     "Closed loop, using oxygen sensor feedback to determine fuel mix": 1,
@@ -378,7 +386,7 @@ def main():
 
     _spool = Spool.from_env()
 
-    with _influx.connect() as influx_client:
+    with _influx.connect(timeout=WRITE_TIMEOUT_MS, retries=WRITE_RETRIES) as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
         _configure_obd_logging()

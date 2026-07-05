@@ -1,6 +1,7 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
 from influxdb_client import Point
 
 import lemongrass.telem as _mod
@@ -521,6 +522,23 @@ class TestFlushPoints:
         write_api.write.side_effect = Exception("network error")
         assert _mod.flush_points(write_api) is False
         assert _mod.pending_points == ["p1", "p2"]
+
+
+class TestInfluxConnectTuning:
+    def setup_method(self):
+        _reset()
+
+    def test_main_connects_with_short_timeout_and_trimmed_retries(self):
+        """The hot loop must build its Influx client with a short timeout and a
+        trimmed retry budget so a downed Influx fails fast to the spool."""
+        with patch.object(_mod._influx, "connect") as influx_connect, \
+                patch.object(_mod.Spool, "from_env"), \
+                patch.object(_mod, "_configure_obd_logging"), \
+                patch.object(_mod, "connect", side_effect=RuntimeError("stop")):
+            with pytest.raises(RuntimeError, match="stop"):
+                _mod.main()
+        influx_connect.assert_called_once_with(
+            timeout=_mod.WRITE_TIMEOUT_MS, retries=_mod.WRITE_RETRIES)
 
 
 class TestPump:
