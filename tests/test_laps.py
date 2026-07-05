@@ -3814,23 +3814,37 @@ class TestStoredRaceCompleteness:
         assert result.end_time_epoc == 123
 
 
-class TestStoredEndInPast:
+class TestStoredEndSettled:
+    _NOW: ClassVar[int] = 1_000_000_000
+
     def _stored(self, end_epoc):
         return _mod.StoredRace(schema_version=4, expected_lap_count=1, end_time_epoc=end_epoc)
 
-    def test_zero_epoch_is_not_past(self):
-        assert _mod.stored_end_in_past(self._stored(0)) is False
+    def test_zero_epoch_is_not_settled(self):
+        assert _mod.stored_end_settled(self._stored(0)) is False
 
-    def test_none_epoch_is_not_past(self):
-        assert _mod.stored_end_in_past(self._stored(None)) is False
+    def test_none_epoch_is_not_settled(self):
+        assert _mod.stored_end_settled(self._stored(None)) is False
 
-    def test_future_epoch_is_not_past(self):
-        with patch.object(_mod.time, 'time', return_value=1000):
-            assert _mod.stored_end_in_past(self._stored(5000)) is False
+    def test_future_epoch_is_not_settled(self):
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            assert _mod.stored_end_settled(self._stored(self._NOW + 5000)) is False
 
-    def test_past_epoch_is_past(self):
-        with patch.object(_mod.time, 'time', return_value=1000):
-            assert _mod.stored_end_in_past(self._stored(500)) is True
+    def test_recent_past_within_buffer_is_not_settled(self):
+        # Ended an hour ago — a later session under the same race_id could still be
+        # live, so this must fall through to the authoritative is_live check.
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            assert _mod.stored_end_settled(self._stored(self._NOW - 3600)) is False
+
+    def test_end_just_inside_buffer_is_not_settled(self):
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            end = self._NOW - _mod._SETTLED_BUFFER_S + 1
+            assert _mod.stored_end_settled(self._stored(end)) is False
+
+    def test_end_beyond_buffer_is_settled(self):
+        with patch.object(_mod.time, 'time', return_value=self._NOW):
+            end = self._NOW - _mod._SETTLED_BUFFER_S - 1
+            assert _mod.stored_end_settled(self._stored(end)) is True
 
 
 class TestRaceCompleteInInflux:
@@ -3903,7 +3917,7 @@ class TestInfluxOnlySkip:
         try:
             complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000)
             with patch.object(_mod, 'stored_race_completeness', return_value=complete):
-                with patch.object(_mod, 'stored_end_in_past', return_value=True):
+                with patch.object(_mod, 'stored_end_settled', return_value=True):
                     with patch.object(_mod, 'race_complete_in_influx', return_value=True):
                         assert _mod._influx_only_skip('999') is True
         finally:
@@ -3922,7 +3936,7 @@ class TestInfluxOnlySkip:
         try:
             complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 0)
             with patch.object(_mod, 'stored_race_completeness', return_value=complete):
-                with patch.object(_mod, 'stored_end_in_past', return_value=False):
+                with patch.object(_mod, 'stored_end_settled', return_value=False):
                     assert _mod._influx_only_skip('999') is False
         finally:
             cm.stop()

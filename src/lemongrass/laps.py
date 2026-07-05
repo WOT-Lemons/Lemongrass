@@ -19,7 +19,7 @@ import os
 import sys
 import threading
 import time
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -54,7 +54,24 @@ SCHEMA_VERSION = 4
 _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5
 
-StoredRace = namedtuple('StoredRace', ['schema_version', 'expected_lap_count', 'end_time_epoc'])
+# How far in the past a race's stored end time must be before the Influx-only skip
+# will trust it as fully over. Sessions can share one race_id across a multi-day
+# event, so a stored end that is only recently past may still have a later session
+# going live; only skip once the whole event is settled well behind us. Anything
+# more recent falls through to the authoritative is_live RaceMonitor check.
+_SETTLED_BUFFER_S = 4 * 86400  # 4 days
+
+
+@dataclass(frozen=True)
+class StoredRace:
+    """Race-completeness fields read back from a stored race point.
+
+    schema_version and expected_lap_count are None when the point predates the
+    fields they name — callers must guard against None before comparing them.
+    """
+    schema_version: int | None
+    expected_lap_count: int | None
+    end_time_epoc: int
 
 
 def _describe_bad_value(value: object, field: str) -> str:
@@ -201,8 +218,11 @@ def main():
     # Fast path: for the historical backfill (--skip-if-complete), decide whether
     # to skip entirely from Influx before making any RaceMonitor call. Gated on
     # skip_if_complete (set only by race-backfill), so interactive and monitor
-    # runs never enter here; stored_end_in_past keeps any possibly-live race on
-    # the normal is_live path.
+    # runs never enter here; stored_end_settled keeps any possibly-live race on
+    # the normal is_live path. To force a re-backfill past this skip (e.g. a race
+    # whose lap count was revised after it was stored), use
+    # `race-backfill --upgrade-stored [--force]`, which re-runs laps without
+    # --skip-if-complete and so never enters this branch.
     if opts.network_mode and opts.skip_if_complete and not opts.dry_run \
             and _influx_only_skip(race_id):
         logging.info(
@@ -1145,14 +1165,17 @@ def stored_race_completeness(ctx):
     return None
 
 
-def stored_end_in_past(stored):
-    """True only when the race's stored end time is known (nonzero) and in the past.
+def stored_end_settled(stored):
+    """True only when the race's stored end time is known and settled in the past.
 
-    The live-race guard for the Influx-only skip: any race whose stored end is 0
-    (unknown) or in the future is treated as possibly-live and must fall through
-    to the real is_live check rather than being skipped from Influx alone.
+    The live-race guard for the Influx-only skip. Sessions can share one race_id
+    across a multi-day event, so a race whose stored end is 0 (unknown), in the
+    future, or only recently past (within _SETTLED_BUFFER_S) may still have a
+    later session going live. Only a race whose end is settled well behind us is
+    safe to skip from Influx alone; anything more recent must fall through to the
+    real is_live check rather than being skipped from Influx alone.
     """
-    return bool(stored.end_time_epoc) and stored.end_time_epoc < time.time()
+    return bool(stored.end_time_epoc) and stored.end_time_epoc < time.time() - _SETTLED_BUFFER_S
 
 
 def race_complete_in_influx(ctx, stored):
@@ -1181,7 +1204,7 @@ def _influx_only_skip(race_id):
 
     Opens a short-lived read-only Influx connection and answers the backfill skip
     decision without any RaceMonitor call. Any race that is not definitively
-    ended (see stored_end_in_past) returns False so it falls through to the normal
+    ended (see stored_end_settled) returns False so it falls through to the normal
     flow's is_live check.
     """
     with _influx.connect() as influx_client:
@@ -1189,7 +1212,7 @@ def _influx_only_skip(race_id):
                           query_api=influx_client.query_api())
         stored = stored_race_completeness(ctx)
         return (stored is not None
-                and stored_end_in_past(stored)
+                and stored_end_settled(stored)
                 and race_complete_in_influx(ctx, stored))
 
 
