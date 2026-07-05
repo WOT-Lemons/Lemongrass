@@ -59,12 +59,35 @@ class Spool:
             return []
         return sorted(self.dir.glob(f'*{_SUFFIX}'))
 
+    def _next_seq(self):
+        # Derive the next sequence from BOTH live (.lp) and quarantined (.bad)
+        # files: once every .lp drains, a lingering .bad must not let the
+        # counter reset to 1 and collide with (rename would clobber) or
+        # mis-order against the quarantined file.
+        seqs = [
+            int(p.stem)
+            for p in (*self.dir.glob(f'*{_SUFFIX}'), *self.dir.glob(f'*{_BAD_SUFFIX}'))
+        ]
+        return (max(seqs) + 1) if seqs else 1
+
     def _append_path(self):
         files = self._files()
         if files and files[-1].stat().st_size < self.rotate_bytes:
             return files[-1]
-        next_seq = (int(files[-1].stem) + 1) if files else 1
-        return self.dir / f'{next_seq:012d}{_SUFFIX}'
+        return self.dir / f'{self._next_seq():012d}{_SUFFIX}'
+
+    def _fsync_dir(self):
+        """fsync the spool directory so a newly-created file's directory entry
+        is durable across a hard fault (the per-file data fsync alone does not
+        persist the parent-dir metadata that makes the new file discoverable)."""
+        try:
+            dir_fd = os.open(self.dir, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError as e:
+            logger.warning("Could not fsync spool dir %s: %s", self.dir, e)
 
     def append(self, points):
         """Serialize points to line protocol and fsync-append to the newest file.
@@ -79,11 +102,14 @@ class Spool:
             return True
         blob = ''.join(p.to_line_protocol() + '\n' for p in points).encode()
         path = self._append_path()
+        is_new = not path.exists()
         try:
             with open(path, 'ab') as f:
                 f.write(blob)
                 f.flush()
                 os.fsync(f.fileno())
+            if is_new:
+                self._fsync_dir()
         except OSError as e:
             logger.error("Spool append to %s failed: %s", path, e)
             return False

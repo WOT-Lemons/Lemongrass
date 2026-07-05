@@ -80,6 +80,47 @@ class TestAppend:
         assert not bad.exists()                         # .bad counted + evicted
         assert (s.dir / "000000000002.lp").exists()     # newest .lp preserved
 
+    def test_append_preserves_explicit_ns_timestamp(self, tmp_path):
+        # Replay idempotency depends on each spooled point carrying its capture
+        # time in the line protocol (Influx upserts by measurement+tags+time).
+        # Guard that append serializes an explicit ns timestamp rather than
+        # dropping it, which would let Influx assign a replay-time timestamp.
+        from influxdb_client import WritePrecision
+        s = Spool(tmp_path / "spool")
+        ts = 1_700_000_000_000_000_000  # fixed ns
+        s.append([Point("RPM").field("value", 1).time(ts, WritePrecision.NS)])
+        text = next((tmp_path / "spool").glob("*.lp")).read_text()
+        assert text.strip().endswith(str(ts))
+
+    def test_new_file_seq_does_not_reset_below_lingering_bad(self, tmp_path):
+        # After every .lp drains, a lingering .bad must not let the sequence
+        # reset to 1 and collide with / mis-order against the quarantined file.
+        s = Spool(tmp_path / "spool", rotate_bytes=1)
+        s.append([_pt("RPM", 1)])                        # 000000000001.lp
+        # simulate: that file was quarantined high, then all live .lp drained
+        (s.dir / "000000000001.lp").rename(s.dir / "000000000005.bad")
+        s.append([_pt("RPM", 2)])                        # must be seq > 5
+        names = sorted(p.name for p in s.dir.glob("*.lp"))
+        assert names == ["000000000006.lp"]
+
+    def test_new_file_triggers_dir_fsync(self, tmp_path, monkeypatch):
+        # A newly-created (rotated) spool file needs its directory entry fsync'd
+        # so the file survives a hard fault before dir metadata is flushed.
+        s = Spool(tmp_path / "spool", rotate_bytes=1)  # every append rotates
+        calls = []
+        monkeypatch.setattr(s, "_fsync_dir", lambda: calls.append(1), raising=False)
+        s.append([_pt("RPM", 1)])                        # new file -> dir fsync
+        s.append([_pt("RPM", 2)])                        # new file -> dir fsync
+        assert len(calls) == 2
+
+    def test_append_to_existing_file_skips_dir_fsync(self, tmp_path, monkeypatch):
+        s = Spool(tmp_path / "spool", rotate_bytes=10_000)  # reuse one file
+        calls = []
+        monkeypatch.setattr(s, "_fsync_dir", lambda: calls.append(1), raising=False)
+        s.append([_pt("RPM", 1)])                        # new file -> 1 dir fsync
+        s.append([_pt("RPM", 2)])                        # reuse -> no dir fsync
+        assert len(calls) == 1
+
 
 class TestDegradation:
     def test_unusable_dir_disables_without_crashing(self, tmp_path):
