@@ -69,6 +69,17 @@ class TestAppend:
         assert remaining == ["000000000003.lp"]
         assert any("dropped" in r.message.lower() for r in caplog.records)
 
+    def test_enforce_cap_counts_and_evicts_bad_files(self, tmp_path):
+        # Quarantined .bad files must count toward the cap and be evicted
+        # oldest-first alongside .lp, so poison can't grow the spool past it.
+        s = Spool(tmp_path / "spool", max_bytes=1, rotate_bytes=1)
+        s.append([_pt("RPM", 1)])                       # 000000000001.lp
+        bad = s.dir / "000000000000.bad"                # older-ordering quarantine
+        bad.write_text("old poison\n")
+        s.append([_pt("RPM", 2)])                       # 000000000002.lp -> enforce
+        assert not bad.exists()                         # .bad counted + evicted
+        assert (s.dir / "000000000002.lp").exists()     # newest .lp preserved
+
 
 class TestDegradation:
     def test_unusable_dir_disables_without_crashing(self, tmp_path):
@@ -136,6 +147,45 @@ class TestReplay:
         write_api = MagicMock()
         write_api.write.side_effect = ApiException(status=400, reason="bad")
         assert s.replay_oldest(write_api, BUCKET) is True  # progress: file removed from queue
+        assert list((tmp_path / "spool").glob("*.lp")) == []
+        assert len(list((tmp_path / "spool").glob("*.bad"))) == 1
+
+    def test_salvage_retryable_5xx_keeps_file_not_quarantined(self, tmp_path):
+        # Full-file write 400s (corrupt); the salvage retry hits a transient 5xx.
+        # The good lines must be kept for a later retry, NOT quarantined.
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1), _pt("RPM", 2)])
+        write_api = MagicMock()
+        write_api.write.side_effect = [
+            ApiException(status=400, reason="bad"),
+            ApiException(status=503, reason="unavailable"),
+        ]
+        assert s.replay_oldest(write_api, BUCKET) is False
+        assert len(list((tmp_path / "spool").glob("*.lp"))) == 1
+        assert list((tmp_path / "spool").glob("*.bad")) == []
+
+    def test_salvage_connectivity_failure_keeps_file(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1), _pt("RPM", 2)])
+        write_api = MagicMock()
+        write_api.write.side_effect = [
+            ApiException(status=400, reason="bad"),
+            ConnectionError("influx down"),
+        ]
+        assert s.replay_oldest(write_api, BUCKET) is False
+        assert len(list((tmp_path / "spool").glob("*.lp"))) == 1
+        assert list((tmp_path / "spool").glob("*.bad")) == []
+
+    def test_salvage_second_4xx_quarantines(self, tmp_path):
+        # A genuine 4xx on the salvaged data too means it really is corrupt.
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1), _pt("RPM", 2)])
+        write_api = MagicMock()
+        write_api.write.side_effect = [
+            ApiException(status=400, reason="bad"),
+            ApiException(status=400, reason="still bad"),
+        ]
+        assert s.replay_oldest(write_api, BUCKET) is True
         assert list((tmp_path / "spool").glob("*.lp")) == []
         assert len(list((tmp_path / "spool").glob("*.bad"))) == 1
 

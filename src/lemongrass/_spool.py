@@ -18,7 +18,8 @@ logger = logging.getLogger('telem')
 DEFAULT_SPOOL_DIR = '/data/telem-spool'
 DEFAULT_MAX_BYTES = 1024 ** 3        # 1 GiB
 ROTATE_BYTES = 8 * 1024 * 1024       # 8 MiB per file
-_SUFFIX = '.lp'
+_SUFFIX = '.lp'                      # live, replayable spool files
+_BAD_SUFFIX = '.bad'                 # quarantined files (unwritable / unreadable)
 
 
 class Spool:
@@ -90,7 +91,14 @@ class Spool:
         return True
 
     def _enforce_cap(self):
-        files = self._files()
+        # Count both live (.lp) and quarantined (.bad) files toward the cap: a
+        # recurring stream of poison/unreadable files must not accumulate .bad
+        # files past TELEM_SPOOL_MAX_BYTES on a constrained device. Both suffixes
+        # are zero-padded-sequence names, so a plain name sort is oldest-first.
+        files = sorted(
+            [*self.dir.glob(f'*{_SUFFIX}'), *self.dir.glob(f'*{_BAD_SUFFIX}')],
+            key=lambda p: p.name,
+        )
         total = sum(f.stat().st_size for f in files)
         dropped = 0
         while total > self.max_bytes and len(files) > 1:
@@ -126,7 +134,7 @@ class Spool:
             text = path.read_text()
         except OSError as e:
             logger.error("Cannot read spool file %s: %s; quarantining", path, e)
-            quarantine = path.with_suffix('.bad')
+            quarantine = path.with_suffix(_BAD_SUFFIX)
             try:
                 path.rename(quarantine)
             except OSError as e2:
@@ -150,23 +158,35 @@ class Spool:
 
     def _handle_corrupt(self, write_api, bucket, path, text):
         """Salvage a 4xx-rejected file by dropping its (possibly torn) last line;
-        quarantine to <name>.bad if it still will not write."""
+        quarantine to <name>.bad if it still will not write.
+
+        A *retryable* failure of the salvage write (5xx / 429 / unknown status /
+        connectivity) keeps the file and returns False, so its good lines are not
+        thrown away over a transient hiccup between the two writes; only a genuine
+        4xx rejection (or an unsalvageable single-line file) is quarantined.
+        """
         lines = text.splitlines()
         if len(lines) > 1:
             salvaged = '\n'.join(lines[:-1]) + '\n'
             try:
                 write_api.write(bucket=bucket, record=salvaged)
+            except ApiException as e:
+                if not (e.status and 400 <= e.status < 500 and e.status != 429):
+                    return False  # retryable — keep the file, try again later
+                # genuine 4xx on the salvaged data too — fall through to quarantine
+            except Exception:
+                return False  # connectivity failure — keep the file
+            else:
                 try:
                     path.unlink(missing_ok=True)
                 except OSError as e:
-                    logger.warning("Could not remove salvaged spool file %s: %s", path.name, e)
+                    logger.warning(
+                        "Could not remove salvaged spool file %s: %s", path.name, e)
                 logger.warning(
                     "Dropped 1 unwritable line from spool file %s", path.name
                 )
                 return True
-            except Exception:
-                pass
-        quarantine = path.with_suffix('.bad')
+        quarantine = path.with_suffix(_BAD_SUFFIX)
         try:
             path.rename(quarantine)
         except OSError as e:
