@@ -84,7 +84,7 @@ telem writes emulated OBD data to the `telem` bucket (tagged with the car VIN);
 PiSugar host metrics go to the `pisugar` bucket (tagged with `host`). Both are
 created by the InfluxDB init scripts. The legacy `stats_252/autogen` bucket is
 still created so the one-time migration in `local-testing/migrations/` can be
-exercised locally. That bucket and its DBRP are created only on a **fresh** InfluxDB volume, so if you
+exercised locally. The `stats_252/autogen` bucket and its DBRP are created only on a **fresh** InfluxDB volume, so if you
 had a stack running before these were added, recreate the volume:
 
 ```bash

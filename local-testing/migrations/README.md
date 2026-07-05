@@ -32,7 +32,15 @@ InfluxDB after the `telem` and `pisugar` buckets exist.
     # confirm the point landed vin-tagged in telem:
     docker compose exec influxdb influx query --org lemongrass --token local-dev-token \
       'from(bucket: "telem") |> range(start: 0) |> filter(fn: (r) => r._measurement == "rpm")'
+    # run the pisugar half of the split:
+    docker compose exec influxdb sh -c \
+      "influx query --org lemongrass --token local-dev-token '
+        from(bucket: \"stats_252/autogen\") |> range(start: 0)
+          |> filter(fn: (r) => r._measurement =~ /^pisugar-/)
+          |> set(key: \"host\", value: \"TESTHOST\") |> to(bucket: \"pisugar\")'"
+    # confirm the point landed host-tagged in pisugar:
+    docker compose exec influxdb influx query --org lemongrass --token local-dev-token \
+      'from(bucket: "pisugar") |> range(start: 0) |> filter(fn: (r) => r._measurement == "pisugar-battery-level")'
 
-Expected: the `rpm` point appears in `telem` carrying `vin=TESTVIN`; the
-`pisugar-battery-level` point routes to `pisugar` with `host` when the second
-query is run analogously.
+Expected: the `rpm` point appears in `telem` carrying `vin=TESTVIN`, and the
+`pisugar-battery-level` point appears in `pisugar` carrying `host=TESTHOST`.
