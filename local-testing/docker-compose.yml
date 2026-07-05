@@ -64,6 +64,12 @@ services:
       INFLUX_URL: http://influxdb:8086
       INFLUX_ORG: lemongrass
       INFLUX_TELEMETRY_TOKEN: local-dev-token
+    volumes:
+      # Persist /data (the spool lives at /data/telem-spool) so buffered points
+      # survive a telem restart — lets the outage->restart->recovery path be
+      # exercised locally: stop influxdb, let points spool, restart telem, then
+      # start influxdb and watch the spool drain.
+      - telem-data:/data
     depends_on:
       influxdb:
         condition: service_healthy
@@ -73,3 +79,4 @@ services:
 volumes:
   influxdb-data:
   grafana-data:
+  telem-data:

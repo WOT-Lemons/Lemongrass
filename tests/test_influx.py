@@ -62,6 +62,40 @@ def test_connect_builds_client_with_shared_settings(monkeypatch):
     )
 
 
+def test_connect_omits_timeout_by_default(monkeypatch):
+    """Batch callers keep the library default timeout; connect() must not pass a
+    timeout kwarg unless one is explicitly requested."""
+    monkeypatch.setenv('INFLUX_TELEMETRY_TOKEN', 'secret-token')
+    with mock.patch('influxdb_client.InfluxDBClient') as client_cls:
+        influx_mod.connect()
+    assert 'timeout' not in client_cls.call_args.kwargs
+
+
+def test_connect_forwards_timeout_and_retries(monkeypatch):
+    monkeypatch.setenv('INFLUX_TELEMETRY_TOKEN', 'secret-token')
+    retries = influx_mod.build_retries(1)
+    with mock.patch('influxdb_client.InfluxDBClient') as client_cls:
+        influx_mod.connect(timeout=3000, retries=retries)
+    client_cls.assert_called_once_with(
+        url=influx_mod.INFLUX_URL,
+        token='secret-token',
+        org=influx_mod.INFLUX_ORG,
+        retries=retries,
+        timeout=3000,
+    )
+
+
+def test_build_retries_shares_transient_policy_with_fewer_attempts():
+    trimmed = influx_mod.build_retries(1)
+    assert isinstance(trimmed, Retry)
+    assert trimmed.total == 1
+    # Same transient-error semantics as the shared default, only fewer attempts.
+    assert trimmed.status_forcelist == influx_mod.INFLUX_RETRIES.status_forcelist
+    assert trimmed.respect_retry_after_header is False
+    assert trimmed.allowed_methods is None
+    assert trimmed.backoff_max == 10
+
+
 class TestInvalidFluxIds:
     def test_clean_ids_pass(self):
         from lemongrass import _influx

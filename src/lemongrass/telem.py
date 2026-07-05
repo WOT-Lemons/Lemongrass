@@ -13,9 +13,25 @@ from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from lemongrass import _influx
+from lemongrass._spool import Spool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
+
+
+def _quiet_retry_logging():
+    """Silence urllib3's per-retry WARNING chatter.
+
+    urllib3 logs a WARNING on every retry attempt. During an Influx outage the
+    pump retries on each 0.5s cycle, which would bury flush_points' own
+    edge-triggered onset/recovery lines under a wall of identical retry
+    warnings. Our logging already reports outage state, so drop urllib3's
+    connection-retry logger to ERROR (genuine errors still surface).
+    """
+    logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
+
+
+_quiet_retry_logging()
 
 EXCLUDED_PATTERNS = ["MIDS", "PIDS", "O2_SENSORS", "ELM", "OBD"]
 SKIP_NAMES = {"FREEZE_DTC", "GET_DTC", "GET_CURRENT_DTC", "CLEAR_DTC", "FUEL_TYPE"}
@@ -26,6 +42,18 @@ MAX_DTC_FETCH_FAILURES = 3
 MAX_PENDING_POINTS = 50_000
 FLUSH_BATCH_SIZE = 5_000
 STATUS_COMMANDS = {"STATUS", "STATUS_DRIVE_CYCLE"}
+
+# Write bucket for both the live flush and spool replay; the v2 write path
+# ignores DBRP so the target bucket must carry this literal name.
+WRITE_BUCKET = 'stats_252/autogen'
+
+# Influx client tuning for the 0.5s pump loop. A short per-request timeout and a
+# single retry keep a downed/hung Influx from blocking the hot path — the durable
+# spool (replayed each cycle) is the real retry path, so we fail fast to it
+# rather than the library-default 10s x 3 attempts. Batch commands keep the
+# default (longer timeout, 3 retries) via the unparameterized _influx.connect().
+WRITE_TIMEOUT_MS = 3000
+WRITE_RETRIES = _influx.build_retries(1)
 
 FUEL_STATUS_MAP = {
     "Open loop due to insufficient engine temperature": 0,
@@ -46,6 +74,11 @@ pending_points = []
 pending_lock = threading.Lock()
 
 _connection = None  # set by main(); lets new_status trigger on-demand DTC lookups
+_spool: Spool | None = None  # set by main()
+# Outage state, edge-triggered so a sustained outage logs once (WARN) at onset
+# and once (INFO) on recovery instead of one line per 0.5s pump cycle. Only
+# touched from the main pump thread (flush_points), so no lock is needed.
+_spooling = False
 # Both only ever written from the Async callback thread; no lock needed.
 _last_dtc_count = 0
 _dtc_fetch_failures = 0
@@ -68,8 +101,8 @@ def _queue_point(point):
         pending_points.append(point)
         overflow = len(pending_points) - MAX_PENDING_POINTS
         if overflow > 0:
-            # Producers can outpace a hung or delayed flush; cap here too so
-            # callbacks can't grow memory unbounded before flush_points requeues.
+            # Producers can outpace a hung or blocked flush; cap here too so
+            # callbacks can't grow memory unbounded while a flush is stuck.
             del pending_points[:overflow]
             _dropped_since_warn += overflow
             now = monotonic()
@@ -316,42 +349,77 @@ def _connection_healthy(connection):
 
 
 def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
-    """Write all pending points to InfluxDB in batches of batch_size.
+    """Write pending points to InfluxDB in batches; spill unwritten on failure.
 
-    On a failed write the unwritten remainder is re-queued, capped at
-    MAX_PENDING_POINTS with the oldest dropped, so an extended outage cannot
-    grow the backlog without bound — and recovery after the outage goes out in
-    bounded requests instead of one giant write.
+    Returns True when everything pending was written (or nothing was pending),
+    False when a write failed. On failure the unwritten remainder is serialized
+    to the on-disk spool (durable across the watchdog restart); if the spool
+    can't durably accept it (disabled or a disk error), it falls back to the
+    in-memory backlog, bounded by MAX_PENDING_POINTS, so a misconfigured spool
+    dir doesn't silently drop telemetry.
     """
+    global _spooling
     with pending_lock:
         if not pending_points:
-            return
+            return True
         batch = pending_points.copy()
         pending_points.clear()
     written = 0
     try:
         for i in range(0, len(batch), batch_size):
-            write_api.write(bucket='stats_252/autogen', record=batch[i:i + batch_size])
+            write_api.write(bucket=WRITE_BUCKET, record=batch[i:i + batch_size])
             written += len(batch[i:i + batch_size])
         logger.info("Flushed %d points to InfluxDB", written)
+        if _spooling:
+            logger.info(
+                "InfluxDB reachable again; flushed %d points, draining spool",
+                written)
+            _spooling = False
+        return True
     except Exception as e:
         unwritten = batch[written:]
-        logger.error('Failed to write %d points to InfluxDB: %s', len(unwritten), e)
-        with pending_lock:
-            pending_points[:0] = unwritten
-            overflow = len(pending_points) - MAX_PENDING_POINTS
-            if overflow > 0:
-                del pending_points[:overflow]
-                logger.warning(
-                    "Backlog exceeded %d points; dropped %d oldest",
-                    MAX_PENDING_POINTS, overflow)
+        if not _spooling:
+            logger.warning(
+                "InfluxDB write failed (%s); buffering telemetry to on-disk spool",
+                e)
+            _spooling = True
+        else:
+            logger.debug(
+                "InfluxDB still unreachable; spooling %d more points",
+                len(unwritten))
+        spilled = _spool.append(unwritten) if _spool is not None else False
+        if not spilled:
+            # Spool unavailable (unusable dir or disk error) — fall back to the
+            # in-memory backlog so a misconfigured /data doesn't silently drop
+            # telemetry. Bounded by MAX_PENDING_POINTS, dropping oldest.
+            with pending_lock:
+                pending_points[:0] = unwritten
+                overflow = len(pending_points) - MAX_PENDING_POINTS
+                if overflow > 0:
+                    del pending_points[:overflow]
+                    logger.warning(
+                        "Backlog exceeded %d points; dropped %d oldest",
+                        MAX_PENDING_POINTS, overflow)
+        return False
+
+
+def _pump(write_api):
+    """One service cycle: flush fresh points, then replay one spooled file.
+
+    Replay runs only when the live flush succeeded — while Influx is down the
+    flush already failed (and spilled), so we skip a second blocking write.
+    """
+    if flush_points(write_api) and _spool is not None:
+        _spool.replay_oldest(write_api, WRITE_BUCKET)
 
 
 def main():
     """Main loop of OBD-II scraping"""
-    global _connection, _last_append_monotonic
+    global _connection, _last_append_monotonic, _spool
 
-    with _influx.connect() as influx_client:
+    _spool = Spool.from_env()
+
+    with _influx.connect(timeout=WRITE_TIMEOUT_MS, retries=WRITE_RETRIES) as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
         _configure_obd_logging()
@@ -384,11 +452,11 @@ def main():
 
         while True:
             sleep(0.5)
-            flush_points(write_api)
+            _pump(write_api)
             if not _connection_healthy(connection):
                 # Exit nonzero so the container/systemd restart policy re-runs
-                # the well-tested startup connect sequence; the flush at the top
-                # of this iteration already covers pending points.
+                # the well-tested startup connect sequence; _pump at the top of
+                # this iteration already flushed or spilled pending points.
                 logger.error("Exiting for supervisor restart")
                 sys.exit(1)
 
