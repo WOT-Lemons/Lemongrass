@@ -94,7 +94,7 @@ _last_drop_warn_monotonic = float('-inf')
 
 
 def _queue_point(point):
-    """Append a point to the pending batch and mark data as flowing."""
+    """Append a point to the pending batch, tag it with vin, and mark data as flowing."""
     global _last_append_monotonic, _dropped_since_warn, _last_drop_warn_monotonic
     point.tag("vin", _vin)
     with pending_lock:
@@ -464,9 +464,9 @@ def main():
         logger.debug(connection.status())
 
         _connection = connection
-        _query_fuel_type_once(connection)
         _vin = _resolve_vin(connection)
         logger.info("Tagging telemetry with vin=%s", _vin)
+        _query_fuel_type_once(connection)
 
         for command in connection.supported_commands:
             callback = _route_command(command)
