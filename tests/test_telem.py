@@ -451,32 +451,17 @@ class TestNewStatusDtcTrigger:
 class TestFlushPoints:
     def setup_method(self):
         _reset()
+        _mod._spool = MagicMock()
 
-    def test_writes_and_clears_pending_points(self):
-        _mod.pending_points.append("p1")
-        write_api = MagicMock()
-        _mod.flush_points(write_api)
-        write_api.write.assert_called_once()
-        assert len(_mod.pending_points) == 0
-
-    def test_does_nothing_when_empty(self):
-        write_api = MagicMock()
-        _mod.flush_points(write_api)
-        write_api.write.assert_not_called()
-
-    def test_restores_points_on_write_failure(self):
-        _mod.pending_points.append("p1")
-        write_api = MagicMock()
-        write_api.write.side_effect = Exception("network error")
-        _mod.flush_points(write_api)
-        assert len(_mod.pending_points) == 1
-
-    def test_writes_all_pending_points(self):
+    def test_returns_true_and_writes_all_pending(self):
         _mod.pending_points.extend(["p1", "p2", "p3"])
         write_api = MagicMock()
-        _mod.flush_points(write_api)
+        assert _mod.flush_points(write_api) is True
         write_api.write.assert_called_once()
         assert len(_mod.pending_points) == 0
+
+    def test_returns_true_when_nothing_pending(self):
+        assert _mod.flush_points(MagicMock()) is True
 
     def test_flushes_in_batches(self):
         _mod.pending_points.extend(f"p{i}" for i in range(5))
@@ -485,21 +470,28 @@ class TestFlushPoints:
         assert write_api.write.call_count == 3
         assert len(_mod.pending_points) == 0
 
-    def test_requeues_only_unwritten_on_midbatch_failure(self):
+    def test_failed_write_spills_batch_and_clears_ram(self):
+        _mod.pending_points.append("p1")
+        write_api = MagicMock()
+        write_api.write.side_effect = Exception("network error")
+        assert _mod.flush_points(write_api) is False
+        assert _mod.pending_points == []
+        _mod._spool.append.assert_called_once_with(["p1"])
+
+    def test_spills_only_unwritten_on_midbatch_failure(self):
         _mod.pending_points.extend(["p1", "p2", "p3", "p4", "p5"])
         write_api = MagicMock()
         write_api.write.side_effect = [None, Exception("boom")]
-        _mod.flush_points(write_api, batch_size=2)
-        assert _mod.pending_points == ["p3", "p4", "p5"]
+        assert _mod.flush_points(write_api, batch_size=2) is False
+        assert _mod.pending_points == []
+        _mod._spool.append.assert_called_once_with(["p3", "p4", "p5"])
 
-    def test_backlog_capped_dropping_oldest(self):
-        """A multi-hour outage must not grow the backlog until the Pi OOMs."""
+    def test_failed_write_with_no_spool_does_not_crash(self):
+        _mod._spool = None
+        _mod.pending_points.append("p1")
         write_api = MagicMock()
         write_api.write.side_effect = Exception("boom")
-        with patch.object(_mod, "MAX_PENDING_POINTS", 3):
-            _mod.pending_points.extend(["p1", "p2", "p3", "p4"])
-            _mod.flush_points(write_api)
-        assert _mod.pending_points == ["p2", "p3", "p4"]
+        assert _mod.flush_points(write_api) is False
 
 
 class TestRouteCommand:

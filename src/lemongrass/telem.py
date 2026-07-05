@@ -13,6 +13,7 @@ from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from lemongrass import _influx
+from lemongrass._spool import Spool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
@@ -26,6 +27,10 @@ MAX_DTC_FETCH_FAILURES = 3
 MAX_PENDING_POINTS = 50_000
 FLUSH_BATCH_SIZE = 5_000
 STATUS_COMMANDS = {"STATUS", "STATUS_DRIVE_CYCLE"}
+
+# Write bucket for both the live flush and spool replay; the v2 write path
+# ignores DBRP so the target bucket must carry this literal name.
+WRITE_BUCKET = 'stats_252/autogen'
 
 FUEL_STATUS_MAP = {
     "Open loop due to insufficient engine temperature": 0,
@@ -46,6 +51,7 @@ pending_points = []
 pending_lock = threading.Lock()
 
 _connection = None  # set by main(); lets new_status trigger on-demand DTC lookups
+_spool: Spool | None = None  # set by main()
 # Both only ever written from the Async callback thread; no lock needed.
 _last_dtc_count = 0
 _dtc_fetch_failures = 0
@@ -316,35 +322,31 @@ def _connection_healthy(connection):
 
 
 def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
-    """Write all pending points to InfluxDB in batches of batch_size.
+    """Write pending points to InfluxDB in batches; spill unwritten on failure.
 
-    On a failed write the unwritten remainder is re-queued, capped at
-    MAX_PENDING_POINTS with the oldest dropped, so an extended outage cannot
-    grow the backlog without bound — and recovery after the outage goes out in
-    bounded requests instead of one giant write.
+    Returns True when everything pending was written (or nothing was pending),
+    False when a write failed. On failure the unwritten remainder is serialized
+    to the on-disk spool (durable across the watchdog restart) instead of being
+    re-queued in RAM, so an outage cannot grow the in-memory backlog.
     """
     with pending_lock:
         if not pending_points:
-            return
+            return True
         batch = pending_points.copy()
         pending_points.clear()
     written = 0
     try:
         for i in range(0, len(batch), batch_size):
-            write_api.write(bucket='stats_252/autogen', record=batch[i:i + batch_size])
+            write_api.write(bucket=WRITE_BUCKET, record=batch[i:i + batch_size])
             written += len(batch[i:i + batch_size])
         logger.info("Flushed %d points to InfluxDB", written)
+        return True
     except Exception as e:
         unwritten = batch[written:]
         logger.error('Failed to write %d points to InfluxDB: %s', len(unwritten), e)
-        with pending_lock:
-            pending_points[:0] = unwritten
-            overflow = len(pending_points) - MAX_PENDING_POINTS
-            if overflow > 0:
-                del pending_points[:overflow]
-                logger.warning(
-                    "Backlog exceeded %d points; dropped %d oldest",
-                    MAX_PENDING_POINTS, overflow)
+        if _spool is not None:
+            _spool.append(unwritten)
+        return False
 
 
 def main():
