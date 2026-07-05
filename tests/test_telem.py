@@ -306,6 +306,16 @@ class TestResolveVin:
         )
         assert vin == "1FATESTVIN0000001"
 
+    def test_strips_null_padding_from_obd_vin(self, monkeypatch):
+        # A real Mode 09 response can be NUL-padded; the tag must not carry NULs.
+        monkeypatch.delenv("CAR_VIN", raising=False)
+        connection = MagicMock()
+        r = MagicMock()
+        r.value = bytearray(b"1FATESTVIN0000001\x00\x00\x00")
+        with patch.object(_mod.obd.OBD, "query", return_value=r):
+            vin = _mod._resolve_vin(connection)
+        assert vin == "1FATESTVIN0000001"
+
     def test_force_queries_vin_even_when_supports_false(self, monkeypatch):
         monkeypatch.delenv("CAR_VIN", raising=False)
         connection = MagicMock()

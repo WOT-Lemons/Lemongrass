@@ -226,7 +226,8 @@ def _resolve_vin(connection):
             val = r.value
             if isinstance(val, (bytes, bytearray)):
                 val = val.decode("ascii", errors="ignore")
-            obd_vin = str(val).strip()
+            # Mode 09 VINs can arrive null-padded; strip whitespace and NULs.
+            obd_vin = str(val).strip().strip("\x00").strip()
     except Exception:
         logger.exception("VIN query failed; falling back to CAR_VIN")
 
