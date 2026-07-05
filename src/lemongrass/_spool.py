@@ -11,6 +11,8 @@ import logging
 import os
 from pathlib import Path
 
+from influxdb_client.rest import ApiException
+
 logger = logging.getLogger('telem')
 
 DEFAULT_SPOOL_DIR = '/data/telem-spool'
@@ -97,3 +99,58 @@ class Spool:
                 self.max_bytes,
                 dropped,
             )
+
+    def replay_oldest(self, write_api, bucket):
+        """Replay the oldest spool file through write_api; delete it on success.
+
+        Returns True if the spool is empty or one file was drained (or a corrupt
+        file was quarantined — progress either way). Returns False if the write
+        failed for a retryable/connectivity reason (Influx still down): the file
+        is kept for the next attempt.
+        """
+        if not self.enabled:
+            return True
+        files = self._files()
+        if not files:
+            return True
+        path = files[0]
+        try:
+            text = path.read_text()
+        except OSError as e:
+            logger.error("Cannot read spool file %s: %s", path, e)
+            return False
+        try:
+            write_api.write(bucket=bucket, record=text)
+        except ApiException as e:
+            if e.status and 400 <= e.status < 500 and e.status != 429:
+                return self._handle_corrupt(write_api, bucket, path, text)
+            return False  # 5xx / 429: retryable, keep the file
+        except Exception:
+            return False  # connectivity failure, keep the file
+        path.unlink(missing_ok=True)
+        logger.info("Replayed spool file %s", path.name)
+        return True
+
+    def _handle_corrupt(self, write_api, bucket, path, text):
+        """Salvage a 4xx-rejected file by dropping its (possibly torn) last line;
+        quarantine to <name>.bad if it still will not write."""
+        lines = text.splitlines()
+        if len(lines) > 1:
+            salvaged = '\n'.join(lines[:-1]) + '\n'
+            try:
+                write_api.write(bucket=bucket, record=salvaged)
+                path.unlink(missing_ok=True)
+                logger.warning(
+                    "Dropped 1 unwritable line from spool file %s", path.name
+                )
+                return True
+            except Exception:
+                pass
+        quarantine = path.with_suffix('.bad')
+        path.rename(quarantine)
+        logger.error(
+            "Quarantined unwritable spool file %s -> %s",
+            path.name,
+            quarantine.name,
+        )
+        return True
