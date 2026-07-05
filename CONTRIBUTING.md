@@ -26,8 +26,9 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
 
    `--build` builds the `elm327` and `telem` images on first start (and after
    changes). First start creates org `lemongrass`, a pinned operator token
-   (`local-dev-token`), and the `laps`, `races`, `race_sessions`, and
-   `stats_252/autogen` buckets. These are non-secret, local-only values.
+   (`local-dev-token`), and the `laps`, `races`, `race_sessions`, `telem`,
+   `pisugar`, and legacy `stats_252/autogen` buckets. These are non-secret,
+   local-only values.
 
 2. Point the CLI at the local stack by sourcing the committed app env:
 
@@ -79,9 +80,11 @@ the `elm327` service and telem connects to it over TCP (`socket://elm327:35000`)
 start as part of the default stack (step 1), so telem streams emulated OBD data with no
 extra flags.
 
-telem writes emulated data to the `stats_252/autogen` bucket (seeded by the InfluxDB init
-scripts), so the **telegraf** dashboard and the OBD panels in **race-control** show live
-data. That bucket and its DBRP are created only on a **fresh** InfluxDB volume, so if you
+telem writes emulated OBD data to the `telem` bucket (tagged with the car VIN);
+PiSugar host metrics go to the `pisugar` bucket (tagged with `host`). Both are
+created by the InfluxDB init scripts. The legacy `stats_252/autogen` bucket is
+still created so the one-time migration in `local-testing/migrations/` can be
+exercised locally. That bucket and its DBRP are created only on a **fresh** InfluxDB volume, so if you
 had a stack running before these were added, recreate the volume:
 
 ```bash
