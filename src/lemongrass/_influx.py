@@ -1,7 +1,7 @@
 """Shared InfluxDB connection settings for lemongrass commands.
 
-Centralizes the URL/org (env-overridable, defaulting to prod), the retry policy,
-and the token-reading client factory so every command constructs its
+Centralizes the URL/org (from the config layer, defaulting to prod), the retry
+policy, and the token-reading client factory so every command constructs its
 InfluxDBClient the same way.
 """
 import logging
@@ -58,17 +58,19 @@ INFLUX_RETRIES = build_retries(3)
 def connect(timeout=None, retries=INFLUX_RETRIES):
     """Return an InfluxDBClient wired with the shared URL/org/retries.
 
-    Reads the token from INFLUX_TELEMETRY_TOKEN; logs an error and exits with
-    status 1 if it is unset. The InfluxDBClient import is deferred so importing
-    this module (which every command does) stays cheap.
+    Reads the token from the env var named by `influx.token_env` (default
+    INFLUX_TELEMETRY_TOKEN); logs an error and exits with status 1 if it is
+    unset. The InfluxDBClient import is deferred so importing this module
+    (which every command does) stays cheap.
 
     `timeout` (ms) and `retries` let the telemetry hot loop fail fast to its
     spool; when timeout is None the influxdb-client library default (10s) applies
     so batch callers are unaffected.
     """
-    token = os.environ.get(_config.load_config().influx.token_env)
+    token_env = _config.load_config().influx.token_env
+    token = os.environ.get(token_env)
     if not token:
-        logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+        logging.error("%s environment variable not set", token_env)
         sys.exit(1)
     from influxdb_client import InfluxDBClient
     kwargs = {'url': INFLUX_URL, 'token': token, 'org': INFLUX_ORG,

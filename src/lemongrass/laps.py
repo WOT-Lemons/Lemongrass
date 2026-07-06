@@ -28,7 +28,7 @@ from influxdb_client import Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from race_monitor import RaceMonitorClient, get_streaming_command
 
-from lemongrass import _influx
+from lemongrass import _config, _influx
 from lemongrass._env import resolve_tokens
 
 UNDERLINE = "-" * 80
@@ -202,9 +202,9 @@ def main():
 
     # Validate the influx token up front so we fail fast before the RaceMonitor
     # setup work below; _influx.connect() reads it again at construction time.
-    if (args.network_mode and not args.dry_run
-            and not os.environ.get('INFLUX_TELEMETRY_TOKEN')):
-        logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+    influx_token_env = _config.load_config().influx.token_env
+    if args.network_mode and not args.dry_run and not os.environ.get(influx_token_env):
+        logging.error("%s environment variable not set", influx_token_env)
         sys.exit(1)
 
     opts = RaceOptions(
