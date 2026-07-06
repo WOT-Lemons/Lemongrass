@@ -13,20 +13,17 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Non-secret env vars read by pre-config releases and dropped in the
+# Non-secret env vars read by released versions (<= v4.0.0) and dropped in the
 # secrets-only model; a deployment still setting one silently runs on defaults.
-# HOST was also read (pisugar host tag) but is excluded here: zsh exports HOST
-# in every interactive shell, so warning on it would be permanent noise — its
-# migration to pisugar.host is covered in docs/CONFIGURATION.md instead.
+# Vars introduced after v4.0.0 and replaced by config before ever shipping in a
+# release (CAR_VIN, HOST, TELEM_SPOOL_DIR, TELEM_SPOOL_MAX_BYTES) are excluded:
+# they were never a public interface, so there is nothing to migrate.
 _DROPPED_ENV_VARS = {
     'INFLUX_URL': 'influx.url',
     'INFLUX_ORG': 'influx.org',
     'OBD_PORT': 'telem.obd.port',
     'OBD_BAUDRATE': 'telem.obd.baudrate',
     'OBD_DEBUG': 'telem.obd.debug',
-    'CAR_VIN': 'telem.vin',
-    'TELEM_SPOOL_DIR': 'telem.spool.dir',
-    'TELEM_SPOOL_MAX_BYTES': 'telem.spool.max_size',
 }
 
 

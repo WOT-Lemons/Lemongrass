@@ -201,11 +201,11 @@ class TestDroppedEnvVarWarning:
     def test_warns_for_each_dropped_var_set(self, monkeypatch, capsys):
         self._clear_all(monkeypatch)
         monkeypatch.setenv("OBD_PORT", "/dev/ttyUSB0")
-        monkeypatch.setenv("CAR_VIN", "VIN123")
+        monkeypatch.setenv("INFLUX_URL", "http://old:8086")
         _config.warn_dropped_env_vars()
         err = capsys.readouterr().err
         assert "OBD_PORT" in err and "telem.obd.port" in err
-        assert "CAR_VIN" in err and "telem.vin" in err
+        assert "INFLUX_URL" in err and "influx.url" in err
         assert "no longer read" in err
 
     def test_silent_when_no_dropped_vars_set(self, monkeypatch, capsys):
@@ -213,11 +213,13 @@ class TestDroppedEnvVarWarning:
         _config.warn_dropped_env_vars()
         assert capsys.readouterr().err == ""
 
-    def test_host_is_not_warned_about(self, monkeypatch, capsys):
-        # HOST was read pre-pivot but zsh exports it in every interactive shell,
-        # so warning on it would be permanent noise; docs cover its migration.
+    def test_never_released_vars_are_not_warned_about(self, monkeypatch, capsys):
+        # CAR_VIN, HOST, and the spool vars were added after v4.0.0 and never
+        # shipped in a release, so no deployment can have configured them via
+        # env — they don't belong in a migration warning.
         self._clear_all(monkeypatch)
-        monkeypatch.setenv("HOST", "some-host")
+        for var in ("CAR_VIN", "HOST", "TELEM_SPOOL_DIR", "TELEM_SPOOL_MAX_BYTES"):
+            monkeypatch.setenv(var, "x")
         _config.warn_dropped_env_vars()
         assert capsys.readouterr().err == ""
 
