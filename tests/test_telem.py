@@ -29,31 +29,33 @@ def _reset():
 
 class TestConnect:
     def test_defaults_to_obd_symlink(self, monkeypatch):
-        monkeypatch.delenv("OBD_PORT", raising=False)
-        monkeypatch.delenv("OBD_BAUDRATE", raising=False)
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         with patch.object(_mod.obd, "Async") as mock_async:
             _mod.connect()
         mock_async.assert_called_once_with(portstr="/dev/obd")
 
-    def test_uses_obd_port_env_override(self, monkeypatch):
-        monkeypatch.setenv("OBD_PORT", "/dev/ttyUSB0")
-        monkeypatch.delenv("OBD_BAUDRATE", raising=False)
+    def test_uses_configured_port(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[telem.obd]\nport = "/dev/ttyUSB0"\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
         with patch.object(_mod.obd, "Async") as mock_async:
             _mod.connect()
         mock_async.assert_called_once_with(portstr="/dev/ttyUSB0")
 
-    def test_passes_baudrate_when_set(self, monkeypatch):
-        monkeypatch.setenv("OBD_PORT", "socket://elm327:35000")
-        monkeypatch.setenv("OBD_BAUDRATE", "38400")
+    def test_passes_baudrate_when_set(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[telem.obd]\nport = "socket://elm327:35000"\nbaudrate = 38400\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
         with patch.object(_mod.obd, "Async") as mock_async:
             _mod.connect()
         mock_async.assert_called_once_with(
             portstr="socket://elm327:35000", baudrate=38400
         )
 
-    def test_omits_baudrate_when_unset(self, monkeypatch):
-        monkeypatch.setenv("OBD_PORT", "/dev/obd")
-        monkeypatch.delenv("OBD_BAUDRATE", raising=False)
+    def test_omits_baudrate_when_zero(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[telem.obd]\nport = "/dev/obd"\nbaudrate = 0\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
         with patch.object(_mod.obd, "Async") as mock_async:
             _mod.connect()
         _, kwargs = mock_async.call_args
@@ -171,13 +173,15 @@ class TestNewFuelStatus:
 
 class TestConfigureObdLogging:
     def test_no_debug_by_default(self, monkeypatch):
-        monkeypatch.delenv("OBD_DEBUG", raising=False)
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         with patch.object(_mod.obd.logger, "setLevel") as mock_set_level:
             _mod._configure_obd_logging()
         mock_set_level.assert_not_called()
 
-    def test_debug_enabled_via_env(self, monkeypatch):
-        monkeypatch.setenv("OBD_DEBUG", "1")
+    def test_debug_enabled_via_config(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[telem.obd]\ndebug = true\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
         with patch.object(_mod.obd.logger, "setLevel") as mock_set_level:
             _mod._configure_obd_logging()
         mock_set_level.assert_called_once_with(logging.DEBUG)
@@ -295,7 +299,7 @@ class TestResolveVin:
     def test_uses_obd_vin_when_available(self, monkeypatch):
         # python-obd returns Mode 09 VIN as a bytearray; it must be decoded, not
         # stringified (str(bytearray(...)) yields the literal "bytearray(b'...')").
-        monkeypatch.delenv("CAR_VIN", raising=False)
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         connection = MagicMock()
         r = MagicMock()
         r.value = bytearray(b"1FATESTVIN0000001")
@@ -308,7 +312,7 @@ class TestResolveVin:
 
     def test_strips_null_padding_from_obd_vin(self, monkeypatch):
         # A real Mode 09 response can be NUL-padded; the tag must not carry NULs.
-        monkeypatch.delenv("CAR_VIN", raising=False)
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         connection = MagicMock()
         r = MagicMock()
         r.value = bytearray(b"1FATESTVIN0000001\x00\x00\x00")
@@ -317,7 +321,7 @@ class TestResolveVin:
         assert vin == "1FATESTVIN0000001"
 
     def test_force_queries_vin_even_when_supports_false(self, monkeypatch):
-        monkeypatch.delenv("CAR_VIN", raising=False)
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         connection = MagicMock()
         connection.supports.return_value = False
         r = MagicMock()
@@ -329,24 +333,28 @@ class TestResolveVin:
         )
         assert vin == "1FATESTVIN0000004"
 
-    def test_falls_back_to_env_when_obd_returns_no_value(self, monkeypatch):
-        monkeypatch.setenv("CAR_VIN", "ENVVIN00000000001")
+    def test_falls_back_to_config_vin_when_obd_returns_no_value(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[telem]\nvin = "CFGVIN00000000001"\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
         connection = MagicMock()
         r = MagicMock()
         r.value = None
         with patch.object(_mod.obd.OBD, "query", return_value=r):
             vin = _mod._resolve_vin(connection)
-        assert vin == "ENVVIN00000000001"
+        assert vin == "CFGVIN00000000001"
 
-    def test_falls_back_to_env_when_obd_query_raises(self, monkeypatch):
-        monkeypatch.setenv("CAR_VIN", "ENVVIN00000000002")
+    def test_falls_back_to_config_vin_when_obd_query_raises(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[telem]\nvin = "CFGVIN00000000002"\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
         connection = MagicMock()
         with patch.object(_mod.obd.OBD, "query", side_effect=Exception("boom")):
             vin = _mod._resolve_vin(connection)
-        assert vin == "ENVVIN00000000002"
+        assert vin == "CFGVIN00000000002"
 
     def test_unknown_when_nothing_resolves(self, monkeypatch):
-        monkeypatch.delenv("CAR_VIN", raising=False)
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         connection = MagicMock()
         r = MagicMock()
         r.value = None
@@ -354,8 +362,10 @@ class TestResolveVin:
             vin = _mod._resolve_vin(connection)
         assert vin == "unknown"
 
-    def test_warns_and_prefers_obd_on_mismatch(self, monkeypatch, caplog):
-        monkeypatch.setenv("CAR_VIN", "ENVVIN00000000003")
+    def test_warns_and_prefers_obd_on_mismatch(self, monkeypatch, tmp_path, caplog):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[telem]\nvin = "CFGVIN00000000003"\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
         connection = MagicMock()
         r = MagicMock()
         r.value = "OBDVIN00000000003"
@@ -363,7 +373,7 @@ class TestResolveVin:
                 caplog.at_level(logging.WARNING):
             vin = _mod._resolve_vin(connection)
         assert vin == "OBDVIN00000000003"
-        assert any("differs from CAR_VIN" in m for m in caplog.messages)
+        assert any("differs from configured VIN" in m for m in caplog.messages)
 
 
 class TestNewStatus:

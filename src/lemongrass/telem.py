@@ -2,7 +2,6 @@
 """Sends OBD-II measurements to InfluxDB."""
 
 import logging
-import os
 import sys
 import threading
 from datetime import UTC, datetime
@@ -12,7 +11,7 @@ import obd
 from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
-from lemongrass import _influx
+from lemongrass import _config, _influx
 from lemongrass._spool import Spool
 
 logging.basicConfig(level=logging.INFO)
@@ -207,12 +206,13 @@ def _query_fuel_type_once(connection):
 
 
 def _resolve_vin(connection):
-    """Resolve the car VIN for tagging: OBD Mode 09, then CAR_VIN env, then 'unknown'.
+    """Resolve the car VIN for tagging: OBD Mode 09, then the configured VIN, then 'unknown'.
 
     VIN is static per session, so main() calls this once and caches the result in
-    the module-level _vin. OBD is the source of truth; CAR_VIN is a fallback (and
-    the only source when the adapter returns no VIN). A telemetry point is never
-    dropped for want of a VIN -- an unresolved VIN tags 'unknown' and logs.
+    the module-level _vin. OBD is the source of truth; the configured VIN
+    (telem.vin) is a fallback (and the only source when the adapter returns no
+    VIN). A telemetry point is never dropped for want of a VIN -- an unresolved
+    VIN tags 'unknown' and logs.
 
     The VIN is force-queried rather than gated on connection.supports(VIN): many
     adapters (and the local emulator) under-report Mode 09 in the 0900 supported-
@@ -229,17 +229,17 @@ def _resolve_vin(connection):
             # Mode 09 VINs can arrive null-padded; strip whitespace and NULs.
             obd_vin = str(val).strip().strip("\x00").strip()
     except Exception:
-        logger.exception("VIN query failed; falling back to CAR_VIN")
+        logger.exception("VIN query failed; falling back to configured VIN")
 
-    env_vin = os.environ.get("CAR_VIN")
+    cfg_vin = _config.load_config().telem.vin or None
     if obd_vin:
-        if env_vin and env_vin != obd_vin:
+        if cfg_vin and cfg_vin != obd_vin:
             logger.warning(
-                "OBD VIN %s differs from CAR_VIN %s; using OBD VIN", obd_vin, env_vin)
+                "OBD VIN %s differs from configured VIN %s; using OBD VIN", obd_vin, cfg_vin)
         return obd_vin
-    if env_vin:
-        return env_vin
-    logger.warning("VIN unresolved from OBD and CAR_VIN; tagging vin=unknown")
+    if cfg_vin:
+        return cfg_vin
+    logger.warning("VIN unresolved from OBD and config; tagging vin=unknown")
     return "unknown"
 
 
@@ -340,31 +340,28 @@ def new_status(r):
 def connect():
     """Open an OBD-II connection on the configured serial port.
 
-    Defaults to the ``/dev/obd`` udev symlink (passed into the container via a
-    device mapping). ``OBD_PORT`` overrides it for host-based testing.
+    The port comes from ``telem.obd.port``, defaulting to the ``/dev/obd`` udev
+    symlink (passed into the container via a device mapping).
 
-    ``OBD_BAUDRATE`` optionally pins the baud rate. Real USB adapters leave it
-    unset so python-obd auto-detects; the emulator's ``socket://`` transport
-    needs it set (e.g. 38400) because python-obd only skips auto-baud for
-    ``/dev/pts`` pseudo-terminals, not TCP sockets.
+    ``telem.obd.baudrate`` (0 = auto-detect) optionally pins the baud rate. Real
+    USB adapters leave it unset so python-obd auto-detects; the emulator's
+    ``socket://`` transport needs it set (e.g. 38400) because python-obd only
+    skips auto-baud for ``/dev/pts`` pseudo-terminals, not TCP sockets.
     """
-    kwargs = {'portstr': os.environ.get('OBD_PORT', '/dev/obd')}
-    baud = os.environ.get('OBD_BAUDRATE')
-    if baud:
-        try:
-            kwargs['baudrate'] = int(baud)
-        except ValueError:
-            raise ValueError(f"OBD_BAUDRATE must be an integer, got {baud!r}") from None
+    obd_cfg = _config.load_config().telem.obd
+    kwargs = {'portstr': obd_cfg.port}
+    if obd_cfg.baudrate:
+        kwargs['baudrate'] = obd_cfg.baudrate
     return obd.Async(**kwargs)
 
 
 def _configure_obd_logging():
-    """Enable python-obd DEBUG logging only when OBD_DEBUG is set.
+    """Enable python-obd DEBUG logging only when telem.obd.debug is set.
 
     DEBUG logs every serial send/receive; with dozens of watched PIDs cycling
     continuously that is sustained journald I/O and SD-card wear on the Pi.
     """
-    if os.environ.get('OBD_DEBUG'):
+    if _config.load_config().telem.obd.debug:
         obd.logger.setLevel(obd.logging.DEBUG)
 
 
