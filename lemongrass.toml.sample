@@ -1,0 +1,42 @@
+# lemongrass configuration — every key shown at its default value.
+# Copy this file, edit what you need, and point LEMONGRASS_CONFIG at it.
+# Precedence (highest wins): this file > built-in default.
+# Environment variables are used ONLY for secrets, named by the *_env keys below;
+# they do NOT override the non-secret settings in this file.
+
+[influx]
+url = "https://influxdb.focism.com"
+org = "focism"
+token_env = "INFLUX_TELEMETRY_TOKEN"       # name of the env var holding the Influx token
+
+[influx.buckets]
+laps = "laps"
+races = "races"
+sessions = "race_sessions"
+telem = "telem"
+pisugar = "pisugar"
+
+[races.backfill]
+search_terms = ["Real Hoopties", "GP du Lac", "Halloween Hoop"]
+default_car_number = "252"                 # overridable per-invocation via --car
+default_start_year = 2017                  # overridable per-invocation via --start-year
+
+[racemonitor]
+tokens_env = "RACEMONITOR_TOKENS"          # env var holding the comma-separated token pool
+
+[telem]
+vin = ""                                   # "" = resolve VIN from OBD
+
+[telem.obd]
+port = "/dev/obd"
+baudrate = 0                               # 0 = auto-detect
+debug = false
+
+[telem.spool]
+dir = "/data/telem-spool"
+max_size = "1GiB"                          # accepts 1GiB/1GB/bytes int
+
+[pisugar]
+host = ""                                  # "" = system hostname
+api_url = "http://localhost:8421"
+config_path = "/etc/pisugar-server/config.json"

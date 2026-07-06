@@ -1,4 +1,5 @@
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -163,3 +164,9 @@ class TestSecretsOnlyEnv:
         monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         monkeypatch.setenv("BUCKETS_LAPS", "ignored")
         assert _config.load_config().influx.buckets.laps == "laps"
+
+
+def test_sample_file_reproduces_defaults(monkeypatch):
+    sample = Path(__file__).resolve().parents[1] / "lemongrass.toml.sample"
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(sample))
+    assert _config.load_config() == _config.Config()

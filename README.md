@@ -332,6 +332,15 @@ The `backfill` subcommand delegates to `lemongrass race-backfill` and supports t
 
 All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata is stored in the `race_sessions` bucket.
 
+## Configuration
+
+lemongrass is configured by an optional TOML file named by the `LEMONGRASS_CONFIG` environment
+variable, falling back to built-in defaults. Secrets (`INFLUX_TELEMETRY_TOKEN`,
+`RACEMONITOR_TOKENS`) are supplied via the environment and referenced by `*_env` keys in the
+file — environment variables are not used for any non-secret setting. Copy
+`lemongrass.toml.sample` to get started. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for
+the full key reference.
+
 ## Contributing
 
 For development setup, running the test suite, and testing against a local
