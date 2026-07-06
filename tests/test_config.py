@@ -29,10 +29,6 @@ class TestParseSize:
 class TestDefaults:
     def test_defaults_match_todays_literals(self, monkeypatch):
         monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
-        for var in ("INFLUX_URL", "INFLUX_ORG", "OBD_PORT", "OBD_BAUDRATE",
-                    "OBD_DEBUG", "CAR_VIN", "TELEM_SPOOL_DIR",
-                    "TELEM_SPOOL_MAX_SIZE", "PISUGAR_HOST"):
-            monkeypatch.delenv(var, raising=False)
         c = _config.load_config()
         assert c.influx.url == "https://influxdb.focism.com"
         assert c.influx.org == "focism"
@@ -133,22 +129,35 @@ class TestValidation:
             _config.load_config()
 
 
-class TestEnvPrecedence:
-    def test_env_overrides_file(self, tmp_path, monkeypatch):
+class TestSecretsOnlyEnv:
+    def test_non_secret_env_vars_are_ignored(self, tmp_path, monkeypatch):
         _write_cfg(tmp_path, monkeypatch, """
             [influx]
             url = "http://from-file:8086"
         """)
-        monkeypatch.setenv("INFLUX_URL", "http://from-env:9999")
-        assert _config.load_config().influx.url == "http://from-env:9999"
-
-    def test_env_size_and_int_coercion(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
-        monkeypatch.setenv("TELEM_SPOOL_MAX_SIZE", "512MiB")
-        monkeypatch.setenv("OBD_BAUDRATE", "38400")
+        # Legacy non-secret env vars no longer affect the loaded config.
+        for var, val in [
+            ("INFLUX_URL", "http://from-env:9999"),
+            ("INFLUX_ORG", "env-org"),
+            ("OBD_PORT", "/dev/env-obd"),
+            ("OBD_BAUDRATE", "38400"),
+            ("OBD_DEBUG", "1"),
+            ("CAR_VIN", "ENVVIN"),
+            ("TELEM_SPOOL_DIR", "/env/spool"),
+            ("TELEM_SPOOL_MAX_SIZE", "512MiB"),
+            ("PISUGAR_HOST", "env-host"),
+        ]:
+            monkeypatch.setenv(var, val)
         c = _config.load_config()
-        assert c.telem.spool.max_size == 512 * 1024 ** 2
-        assert c.telem.obd.baudrate == 38400
+        assert c.influx.url == "http://from-file:8086"   # file wins
+        assert c.influx.org == "focism"                  # default kept; env ignored
+        assert c.telem.obd.port == "/dev/obd"
+        assert c.telem.obd.baudrate == 0
+        assert c.telem.obd.debug is False
+        assert c.telem.vin == ""
+        assert c.telem.spool.dir == "/data/telem-spool"
+        assert c.telem.spool.max_size == 1073741824
+        assert c.pisugar.host == ""
 
     def test_buckets_have_no_env_override(self, monkeypatch):
         monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)

@@ -1,5 +1,7 @@
-"""Layered configuration for lemongrass: dataclass defaults, an optional TOML
-file (via LEMONGRASS_CONFIG), and environment-variable overrides.
+"""Layered configuration for lemongrass: dataclass defaults overlaid by an
+optional TOML file (via LEMONGRASS_CONFIG). Environment variables are read only
+for secrets, and only indirectly — a config value such as influx.token_env names
+the env var that holds the secret; the secret itself is never read in this module.
 
 This module is a leaf — it imports nothing else from lemongrass — so any command
 module can source its settings here without an import cycle.
@@ -7,7 +9,7 @@ module can source its settings here without an import cycle.
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _SIZE_RE = re.compile(r'^\s*([0-9]*\.?[0-9]+)\s*([KMGTP]I?B|B)?\s*$', re.IGNORECASE)
@@ -116,13 +118,15 @@ class Config:
 
 
 def load_config():
-    """Build the config: dataclass defaults, overlaid by the TOML file named in
-    LEMONGRASS_CONFIG (if set), overlaid by environment-variable overrides.
+    """Build the config: dataclass defaults overlaid by the TOML file named in
+    LEMONGRASS_CONFIG (if set). There is no environment-override layer — env is
+    used only for secrets, which are referenced indirectly by the *_env config
+    values and read at their point of use, never here.
 
-    Not memoized — called at import/startup only, so reading env fresh each call
-    keeps behavior predictable under test monkeypatching.
+    Not memoized — called at import/startup only, so reading the file fresh each
+    call keeps behavior predictable under test monkeypatching.
     """
-    return _apply_env(_build_config(_read_file()))
+    return _build_config(_read_file())
 
 
 def _read_file():
@@ -252,48 +256,3 @@ def _build_pisugar(d):
         api_url=_typed(d, 'api_url', dflt.api_url, str, 'pisugar'),
         config_path=_typed(d, 'config_path', dflt.config_path, str, 'pisugar'),
     )
-
-
-def _env_int(name, default):
-    raw = os.environ.get(name)
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        raise ConfigError(f"{name} must be an integer, got {raw!r}") from None
-
-
-def _apply_env(cfg):
-    influx = replace(
-        cfg.influx,
-        url=os.environ.get('INFLUX_URL', cfg.influx.url),
-        org=os.environ.get('INFLUX_ORG', cfg.influx.org),
-    )
-    obd = replace(
-        cfg.telem.obd,
-        port=os.environ.get('OBD_PORT', cfg.telem.obd.port),
-        baudrate=_env_int('OBD_BAUDRATE', cfg.telem.obd.baudrate),
-        debug=cfg.telem.obd.debug or bool(os.environ.get('OBD_DEBUG')),
-    )
-    max_size = cfg.telem.spool.max_size
-    raw_max = os.environ.get('TELEM_SPOOL_MAX_SIZE')
-    if raw_max:
-        try:
-            max_size = parse_size(raw_max)
-        except ValueError as e:
-            raise ConfigError(f"TELEM_SPOOL_MAX_SIZE: {e}") from e
-    spool = replace(
-        cfg.telem.spool,
-        dir=os.environ.get('TELEM_SPOOL_DIR', cfg.telem.spool.dir),
-        max_size=max_size,
-    )
-    telem = replace(
-        cfg.telem,
-        vin=os.environ.get('CAR_VIN', cfg.telem.vin),
-        obd=obd,
-        spool=spool,
-    )
-    pisugar = replace(cfg.pisugar,
-                      host=os.environ.get('PISUGAR_HOST', cfg.pisugar.host))
-    return replace(cfg, influx=influx, telem=telem, pisugar=pisugar)

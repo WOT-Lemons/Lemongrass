@@ -15,12 +15,13 @@ def test_defaults_match_prod(monkeypatch):
     assert reloaded.INFLUX_ORG == 'focism'
 
 
-def test_env_overrides(monkeypatch):
+def test_env_does_not_override_influx_constants(monkeypatch):
+    monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
     monkeypatch.setenv('INFLUX_URL', 'http://localhost:8086')
     monkeypatch.setenv('INFLUX_ORG', 'lemongrass')
     reloaded = importlib.reload(influx_mod)
-    assert reloaded.INFLUX_URL == 'http://localhost:8086'
-    assert reloaded.INFLUX_ORG == 'lemongrass'
+    assert reloaded.INFLUX_URL == 'https://influxdb.focism.com'
+    assert reloaded.INFLUX_ORG == 'focism'
     monkeypatch.delenv('INFLUX_URL', raising=False)
     monkeypatch.delenv('INFLUX_ORG', raising=False)
     importlib.reload(influx_mod)  # restore default module state for later tests
