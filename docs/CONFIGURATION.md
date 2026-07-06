@@ -20,6 +20,32 @@ variable that holds each secret (`*_env` directives):
 | InfluxDB token | `influx.token_env` = `"INFLUX_TELEMETRY_TOKEN"` | value of that var |
 | RaceMonitor token pool | `racemonitor.tokens_env` = `"RACEMONITOR_TOKENS"` | comma-separated; legacy singular `RACEMONITOR_TOKEN` also honored |
 
+## Migrating from environment variables
+
+Earlier releases configured non-secret settings via environment variables. Those
+variables are **no longer read** — after upgrading, any setting still supplied that way
+silently falls back to its built-in default (no error). Move each one into the TOML
+file and point `LEMONGRASS_CONFIG` at it:
+
+| Old env var | TOML key |
+|---|---|
+| `INFLUX_URL` | `influx.url` |
+| `INFLUX_ORG` | `influx.org` |
+| `OBD_PORT` | `telem.obd.port` |
+| `OBD_BAUDRATE` | `telem.obd.baudrate` |
+| `OBD_DEBUG` | `telem.obd.debug` |
+| `CAR_VIN` | `telem.vin` |
+| `TELEM_SPOOL_DIR` | `telem.spool.dir` |
+| `TELEM_SPOOL_MAX_BYTES` | `telem.spool.max_size` |
+| `HOST` | `pisugar.host` |
+
+Only the secrets stay in the environment: `INFLUX_TELEMETRY_TOKEN` and
+`RACEMONITOR_TOKENS` / legacy `RACEMONITOR_TOKEN` (variable names configurable via the
+`*_env` directives above).
+
+The CLI prints a startup warning for each dropped variable it finds still set, except
+`HOST`, which shells commonly export on their own.
+
 ## Validation
 
 Config is validated on load and fails loud rather than silently misbehaving:

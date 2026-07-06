@@ -1,3 +1,5 @@
+import os
+import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -6,7 +8,39 @@ import pytest
 import lemongrass.cli as cli
 
 
+class TestConfigErrorHandling:
+    """A broken LEMONGRASS_CONFIG must surface as a one-line error, not a
+    traceback — and must not take down `--help`, which needs no config. Runs in
+    a subprocess because the failure happens at module import time."""
+
+    def _run(self, args, tmp_path):
+        env = dict(os.environ, LEMONGRASS_CONFIG=str(tmp_path / "nope.toml"))
+        return subprocess.run(
+            [sys.executable, "-c", "from lemongrass.cli import main; main()", *args],
+            capture_output=True, text=True, env=env, timeout=60)
+
+    def test_help_works_with_broken_config(self, tmp_path):
+        res = self._run(["--help"], tmp_path)
+        assert res.returncode == 0
+        assert "Usage:" in res.stdout
+        assert "Traceback" not in res.stderr
+
+    def test_command_reports_config_error_without_traceback(self, tmp_path):
+        res = self._run(["race-diagnose", "1", "2"], tmp_path)
+        assert res.returncode == 1
+        assert "Error:" in res.stderr
+        assert "nope.toml" in res.stderr
+        assert "Traceback" not in res.stderr
+
+
 class TestDispatcher:
+    def test_warns_about_dropped_env_vars_at_startup(self, monkeypatch, capsys):
+        monkeypatch.setenv("OBD_PORT", "/dev/ttyUSB0")
+        with patch.object(sys, 'argv', ['lemongrass']):
+            with pytest.raises(SystemExit):
+                cli.main()
+        assert "OBD_PORT" in capsys.readouterr().err
+
     def test_no_args_exits_nonzero(self):
         with patch.object(sys, 'argv', ['lemongrass']):
             with pytest.raises(SystemExit) as exc:

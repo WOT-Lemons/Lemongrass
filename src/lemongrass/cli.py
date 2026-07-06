@@ -7,7 +7,10 @@ from influxdb_client.rest import ApiException
 from race_monitor import RaceMonitorError, RaceMonitorHTTPError
 from urllib3.exceptions import HTTPError
 
-from lemongrass import _influx
+# _influx is imported lazily inside main(): importing it loads the config file,
+# and a malformed LEMONGRASS_CONFIG must not crash the dispatcher (or --help)
+# with a traceback before it can report the error cleanly.
+from lemongrass._config import ConfigError, warn_dropped_env_vars
 
 _COMMANDS = {
     "laps": "lemongrass.laps",
@@ -75,6 +78,8 @@ def _report_race_monitor_error(exc):
 
 def main():
     """Dispatch to the subcommand named by the first CLI argument."""
+    warn_dropped_env_vars()
+
     if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help"):
         print("Usage: lemongrass <command> [args]")
         print(f"Commands: {', '.join(_COMMANDS)}")
@@ -93,7 +98,11 @@ def main():
     # request.
     try:
         result = importlib.import_module(_COMMANDS[cmd]).main()
+    except ConfigError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     except (ApiException, HTTPError) as exc:
+        from lemongrass import _influx
         if _influx_unreachable(exc):
             print(f"Error: cannot reach InfluxDB at {_influx.INFLUX_URL}", file=sys.stderr)
         else:

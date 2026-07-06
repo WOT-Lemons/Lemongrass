@@ -189,7 +189,61 @@ class TestSecretsOnlyEnv:
         assert _config.load_config().influx.buckets.laps == "laps"
 
 
+class TestDroppedEnvVarWarning:
+    """The secrets-only pivot stopped reading the old non-secret env vars; a
+    deployment that still sets them silently falls back to defaults, so startup
+    must call that out."""
+
+    def _clear_all(self, monkeypatch):
+        for var in _config._DROPPED_ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    def test_warns_for_each_dropped_var_set(self, monkeypatch, capsys):
+        self._clear_all(monkeypatch)
+        monkeypatch.setenv("OBD_PORT", "/dev/ttyUSB0")
+        monkeypatch.setenv("CAR_VIN", "VIN123")
+        _config.warn_dropped_env_vars()
+        err = capsys.readouterr().err
+        assert "OBD_PORT" in err and "telem.obd.port" in err
+        assert "CAR_VIN" in err and "telem.vin" in err
+        assert "no longer read" in err
+
+    def test_silent_when_no_dropped_vars_set(self, monkeypatch, capsys):
+        self._clear_all(monkeypatch)
+        _config.warn_dropped_env_vars()
+        assert capsys.readouterr().err == ""
+
+    def test_host_is_not_warned_about(self, monkeypatch, capsys):
+        # HOST was read pre-pivot but zsh exports it in every interactive shell,
+        # so warning on it would be permanent noise; docs cover its migration.
+        self._clear_all(monkeypatch)
+        monkeypatch.setenv("HOST", "some-host")
+        _config.warn_dropped_env_vars()
+        assert capsys.readouterr().err == ""
+
+
 def test_sample_file_reproduces_defaults(monkeypatch):
     sample = Path(__file__).resolve().parents[1] / "lemongrass.toml.sample"
     monkeypatch.setenv("LEMONGRASS_CONFIG", str(sample))
     assert _config.load_config() == _config.Config()
+
+
+def test_sample_file_lists_every_key():
+    """Equality with Config() can't catch a newly added field that's simply
+    absent from the sample (both sides get the default); require the sample to
+    spell out every key explicitly."""
+    import dataclasses
+    import tomllib
+
+    sample = Path(__file__).resolve().parents[1] / "lemongrass.toml.sample"
+    data = tomllib.loads(sample.read_text())
+
+    def assert_covered(dc_value, section, where):
+        for f in dataclasses.fields(dc_value):
+            key = f"{where}{f.name}"
+            assert f.name in section, f"lemongrass.toml.sample is missing {key}"
+            child = getattr(dc_value, f.name)
+            if dataclasses.is_dataclass(child):
+                assert_covered(child, section[f.name], f"{key}.")
+
+    assert_covered(_config.Config(), data, "")

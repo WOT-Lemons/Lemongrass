@@ -8,9 +8,35 @@ module can source its settings here without an import cycle.
 """
 import os
 import re
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Non-secret env vars read by pre-config releases and dropped in the
+# secrets-only model; a deployment still setting one silently runs on defaults.
+# HOST was also read (pisugar host tag) but is excluded here: zsh exports HOST
+# in every interactive shell, so warning on it would be permanent noise — its
+# migration to pisugar.host is covered in docs/CONFIGURATION.md instead.
+_DROPPED_ENV_VARS = {
+    'INFLUX_URL': 'influx.url',
+    'INFLUX_ORG': 'influx.org',
+    'OBD_PORT': 'telem.obd.port',
+    'OBD_BAUDRATE': 'telem.obd.baudrate',
+    'OBD_DEBUG': 'telem.obd.debug',
+    'CAR_VIN': 'telem.vin',
+    'TELEM_SPOOL_DIR': 'telem.spool.dir',
+    'TELEM_SPOOL_MAX_BYTES': 'telem.spool.max_size',
+}
+
+
+def warn_dropped_env_vars():
+    """Print a stderr warning for each legacy non-secret env var still set."""
+    for var, key in sorted(_DROPPED_ENV_VARS.items()):
+        if var in os.environ:
+            print(f"Warning: {var} is set but no longer read; set {key} in the "
+                  "TOML file named by LEMONGRASS_CONFIG instead "
+                  "(see docs/CONFIGURATION.md)", file=sys.stderr)
 
 _SIZE_RE = re.compile(r'^\s*([0-9]*\.?[0-9]+)\s*([KMGTP]I?B|B)?\s*$', re.IGNORECASE)
 _SIZE_UNITS = {

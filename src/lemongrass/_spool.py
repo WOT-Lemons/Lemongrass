@@ -116,7 +116,7 @@ class Spool:
     def _enforce_cap(self):
         # Count both live (.lp) and quarantined (.bad) files toward the cap: a
         # recurring stream of poison/unreadable files must not accumulate .bad
-        # files past TELEM_SPOOL_MAX_BYTES on a constrained device. Both suffixes
+        # files past telem.spool.max_size on a constrained device. Both suffixes
         # are zero-padded-sequence names, so a plain name sort is oldest-first.
         files = sorted(
             [*self.dir.glob(f'*{_SUFFIX}'), *self.dir.glob(f'*{_BAD_SUFFIX}')],
