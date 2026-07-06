@@ -1,3 +1,4 @@
+import importlib
 import os
 import sys
 from datetime import UTC, datetime
@@ -632,4 +633,22 @@ class TestValidateWindowPadding:
         lap_flux = query_api.query.call_args_list[1].args[0]
         assert 'start: 2020-01-01T00:00:00Z' in lap_flux
         assert 'stop: 2020-01-05T00:00:00Z' in lap_flux
+
+
+def test_backfill_defaults_come_from_config(monkeypatch, tmp_path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text(
+        '[races.backfill]\n'
+        'search_terms = ["Enduro X"]\n'
+        'default_car_number = "77"\n'
+        'default_start_year = 2019\n'
+    )
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    from lemongrass import race_backfill
+    reloaded = importlib.reload(race_backfill)
+    assert reloaded.LEMONS_SEARCH_TERMS == ("Enduro X",)
+    assert reloaded.DEFAULT_CAR_NUMBER == "77"
+    assert reloaded.DEFAULT_START_YEAR == 2019
+    monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
+    importlib.reload(race_backfill)  # restore default module state
 

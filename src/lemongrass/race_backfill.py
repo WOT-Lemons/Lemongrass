@@ -48,12 +48,13 @@ from datetime import UTC, datetime, timedelta
 
 from race_monitor import RaceMonitorClient
 
-from lemongrass import _influx
+from lemongrass import _config, _influx
 from lemongrass._env import resolve_tokens
 
-LEMONS_SEARCH_TERMS = ['Real Hoopties', 'GP du Lac', 'Halloween Hoop']
-DEFAULT_CAR_NUMBER = '252'
-DEFAULT_START_YEAR = 2017
+_backfill_cfg = _config.load_config().races.backfill
+LEMONS_SEARCH_TERMS = _backfill_cfg.search_terms
+DEFAULT_CAR_NUMBER = _backfill_cfg.default_car_number
+DEFAULT_START_YEAR = _backfill_cfg.default_start_year
 EPOCH_START = '1970-01-01T00:00:00Z'
 
 WINDOW_PAD_S = _influx.WINDOW_PAD_S
