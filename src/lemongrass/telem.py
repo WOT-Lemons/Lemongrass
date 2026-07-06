@@ -454,7 +454,7 @@ def main():
     """Main loop of OBD-II scraping"""
     global _connection, _last_append_monotonic, _spool, _vin
 
-    _spool = Spool.from_env()
+    _spool = Spool.from_config()
 
     with _influx.connect(timeout=WRITE_TIMEOUT_MS, retries=WRITE_RETRIES) as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)

@@ -34,13 +34,10 @@ class Spool:
         self.enabled = self._ensure_dir()
 
     @classmethod
-    def from_env(cls):
-        return cls(
-            os.environ.get('TELEM_SPOOL_DIR', DEFAULT_SPOOL_DIR),
-            max_bytes=int(
-                os.environ.get('TELEM_SPOOL_MAX_BYTES', DEFAULT_MAX_BYTES)
-            ),
-        )
+    def from_config(cls):
+        from lemongrass import _config
+        spool = _config.load_config().telem.spool
+        return cls(spool.dir, max_bytes=spool.max_size)
 
     def _ensure_dir(self):
         try:

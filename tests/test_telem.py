@@ -626,7 +626,7 @@ class TestInfluxConnectTuning:
         """The hot loop must build its Influx client with a short timeout and a
         trimmed retry budget so a downed Influx fails fast to the spool."""
         with patch.object(_mod._influx, "connect") as influx_connect, \
-                patch.object(_mod.Spool, "from_env"), \
+                patch.object(_mod.Spool, "from_config"), \
                 patch.object(_mod, "_configure_obd_logging"), \
                 patch.object(_mod, "connect", side_effect=RuntimeError("stop")):
             with pytest.raises(RuntimeError, match="stop"):
