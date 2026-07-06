@@ -93,6 +93,20 @@ class TestMain:
         assert exc.value.code == 1
         login.assert_not_called()
 
+    def test_honors_configured_token_env_var(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[influx]\ntoken_env = "MY_INFLUX_TOKEN"\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+        monkeypatch.delenv("INFLUX_TELEMETRY_TOKEN", raising=False)
+        monkeypatch.delenv("MY_INFLUX_TOKEN", raising=False)
+        login = MagicMock()
+        with patch.object(_mod, 'login', login), \
+                patch.object(_mod, 'read_credentials', return_value=('admin', 'secret')):
+            with pytest.raises(SystemExit) as exc:
+                _mod.main()
+        assert exc.value.code == 1
+        login.assert_not_called()
+
 
 class TestExecCommandCoercion:
     def test_raw_mode_preserves_version_strings(self):
@@ -139,12 +153,14 @@ class TestStartupConnect:
 
 
 class TestResolveHost:
-    def test_uses_host_env_when_set(self, monkeypatch):
-        monkeypatch.setenv("HOST", "car-lemongrass-pi")
+    def test_uses_configured_host_when_set(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[pisugar]\nhost = "car-lemongrass-pi"\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
         assert _mod._resolve_host() == "car-lemongrass-pi"
 
     def test_falls_back_to_gethostname(self, monkeypatch):
-        monkeypatch.delenv("HOST", raising=False)
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         with patch.object(_mod.socket, "gethostname", return_value="fallback-host"):
             assert _mod._resolve_host() == "fallback-host"
 
