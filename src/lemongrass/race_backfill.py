@@ -48,7 +48,7 @@ from datetime import UTC, datetime, timedelta
 
 from race_monitor import RaceMonitorClient
 
-from lemongrass import _config, _influx
+from lemongrass import _config, _env, _influx
 from lemongrass._env import resolve_tokens
 
 _backfill_cfg = _config.load_config().races.backfill
@@ -355,7 +355,7 @@ def main():
 
     tokens = resolve_tokens()
     if not tokens:
-        logging.error("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN environment variable not set")
+        logging.error("%s environment variable not set", _env.tokens_env_hint())
         sys.exit(1)
 
     start_year_epoc = int(datetime(args.start_year, 1, 1, tzinfo=UTC).timestamp())

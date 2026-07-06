@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 
 from race_monitor import RaceMonitorClient
 
-from lemongrass import _config, _influx
+from lemongrass import _config, _env, _influx
 from lemongrass._env import resolve_tokens
 
 EPOCH_START = '1970-01-01T00:00:00Z'
@@ -137,7 +137,7 @@ def main():
     influx_token = os.environ.get(influx_token_env)
 
     if not rm_token:
-        print("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN not set")
+        print(f"{_env.tokens_env_hint()} not set")
         sys.exit(1)
     if not influx_token:
         print(f"{influx_token_env} not set")

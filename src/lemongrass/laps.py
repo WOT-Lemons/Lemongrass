@@ -28,7 +28,7 @@ from influxdb_client import Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from race_monitor import RaceMonitorClient, get_streaming_command
 
-from lemongrass import _config, _influx
+from lemongrass import _config, _env, _influx
 from lemongrass._env import resolve_tokens
 
 UNDERLINE = "-" * 80
@@ -197,7 +197,7 @@ def main():
 
     tokens = resolve_tokens()
     if not tokens:
-        logging.error("RACEMONITOR_TOKENS or RACEMONITOR_TOKEN environment variable not set")
+        logging.error("%s environment variable not set", _env.tokens_env_hint())
         sys.exit(1)
 
     # Validate the influx token up front so we fail fast before the RaceMonitor

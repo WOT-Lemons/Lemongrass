@@ -3512,6 +3512,18 @@ class TestMainMissingToken:
         assert any('RACEMONITOR_TOKENS' in r.message and 'RACEMONITOR_TOKEN' in r.message
                    for r in caplog.records)
 
+    def test_no_token_error_honors_configured_pool_var(self, caplog, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[racemonitor]\ntokens_env = "MY_POOL"\n')
+        env = {'RACEMONITOR_TOKEN': 'stale-legacy', 'LEMONGRASS_CONFIG': str(cfg)}
+        with patch.dict(os.environ, env, clear=True):
+            with patch.object(_mod.sys, 'argv', ['laps', '12345', '42']):
+                with caplog.at_level(logging.ERROR):
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        assert any('MY_POOL' in r.message for r in caplog.records)
+
 
 class TestMainInfluxTokenPreflight:
     _ARGV: ClassVar[list] = ['lemongrass-laps', '-n', '12345', '42']

@@ -594,6 +594,19 @@ class TestMainTokenResolution:
                     _mod.main()
         assert exc_info.value.code == 1
 
+    def test_no_token_error_honors_configured_pool_var(self, caplog, tmp_path):
+        import logging
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[racemonitor]\ntokens_env = "MY_POOL"\n')
+        env = {'RACEMONITOR_TOKEN': 'stale-legacy', 'LEMONGRASS_CONFIG': str(cfg)}
+        with patch.dict(os.environ, env, clear=True):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                with caplog.at_level(logging.ERROR):
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        assert any('MY_POOL' in r.message for r in caplog.records)
+
 
 class TestInputValidation:
     def test_car_number_with_quote_exits_1(self):
