@@ -11,20 +11,25 @@ import sys
 
 from urllib3 import Retry
 
-INFLUX_URL = os.environ.get('INFLUX_URL', 'https://influxdb.focism.com')
-INFLUX_ORG = os.environ.get('INFLUX_ORG', 'focism')
+from lemongrass import _config
+
+_cfg = _config.load_config()
+
+INFLUX_URL = _cfg.influx.url
+INFLUX_ORG = _cfg.influx.org
 
 # Bucket names, shared across the write paths and Flux queries (and created by
-# local-testing/influx-init). Single source of truth so a rename touches one place.
-BUCKET_LAPS = 'laps'
-BUCKET_RACES = 'races'
-BUCKET_SESSIONS = 'race_sessions'
+# local-testing/influx-init). Sourced from the config layer; defaults are the
+# historical literals so a no-config deployment is unchanged.
+BUCKET_LAPS = _cfg.influx.buckets.laps
+BUCKET_RACES = _cfg.influx.buckets.races
+BUCKET_SESSIONS = _cfg.influx.buckets.sessions
 
 # OBD car telemetry (vin-tagged) and PiSugar host telemetry (host-tagged),
 # born native v2 with bare names. The v2 write API matches the literal bucket
 # name and ignores DBRP, so these must be the exact write targets.
-BUCKET_TELEM = 'telem'
-BUCKET_PISUGAR = 'pisugar'
+BUCKET_TELEM = _cfg.influx.buckets.telem
+BUCKET_PISUGAR = _cfg.influx.buckets.pisugar
 
 # Bounded retry for transient failures (connection blips, retryable 5xx). We do
 # NOT honor Retry-After: a downed Cloudflare tunnel returns 530 with
@@ -61,7 +66,7 @@ def connect(timeout=None, retries=INFLUX_RETRIES):
     spool; when timeout is None the influxdb-client library default (10s) applies
     so batch callers are unaffected.
     """
-    token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
+    token = os.environ.get(_config.load_config().influx.token_env)
     if not token:
         logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
         sys.exit(1)

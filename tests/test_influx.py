@@ -96,6 +96,20 @@ def test_build_retries_shares_transient_policy_with_fewer_attempts():
     assert trimmed.backoff_max == 10
 
 
+def test_connect_reads_token_from_configured_env_var(monkeypatch, tmp_path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[influx]\ntoken_env = "MY_TOKEN"\n')
+    monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+    monkeypatch.delenv('INFLUX_TELEMETRY_TOKEN', raising=False)
+    monkeypatch.setenv('MY_TOKEN', 'via-directive')
+    reloaded = importlib.reload(influx_mod)
+    with mock.patch('influxdb_client.InfluxDBClient') as client_cls:
+        reloaded.connect()
+    assert client_cls.call_args.kwargs['token'] == 'via-directive'
+    monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
+    importlib.reload(influx_mod)  # restore default module state for later tests
+
+
 class TestInvalidFluxIds:
     def test_clean_ids_pass(self):
         from lemongrass import _influx
