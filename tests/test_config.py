@@ -21,8 +21,11 @@ class TestParseSize:
     def test_parses_valid(self, value, expected):
         assert _config.parse_size(value) == expected
 
-    @pytest.mark.parametrize("value", ["1XB", "-1GiB", "GiB", "", 0, -5, "0GiB", True])
+    @pytest.mark.parametrize("value", ["1XB", "-1GiB", "GiB", "", 0, -5, "0GiB", True,
+                                       1.5, 0.5])
     def test_rejects_invalid(self, value):
+        # Non-integer floats are rejected rather than truncated: a TOML
+        # `max_size = 1.5` (user meant "1.5GiB") must not become a 1-byte cap.
         with pytest.raises(ValueError):
             _config.parse_size(value)
 
@@ -121,10 +124,30 @@ class TestValidation:
         with pytest.raises(_config.ConfigError, match="must be an integer"):
             _config.load_config()
 
+    @pytest.mark.parametrize("body,section", [
+        ("[telem]\nobd = 5", "telem.obd"),                     # scalar where table expected
+        ("[[influx.buckets]]\nlaps = 'x'", "influx.buckets"),  # array-of-tables mistake
+        ("[influx]\nbuckets = 'laps'", "influx.buckets"),      # string where table expected
+        ("influx = 5", "influx"),                              # scalar top-level section
+    ])
+    def test_non_table_section_raises_config_error(self, tmp_path, monkeypatch,
+                                                   body, section):
+        _write_cfg(tmp_path, monkeypatch, body)
+        with pytest.raises(_config.ConfigError, match=f"{section}.*must be a table"):
+            _config.load_config()
+
     def test_bad_max_size_raises(self, tmp_path, monkeypatch):
         _write_cfg(tmp_path, monkeypatch, """
             [telem.spool]
             max_size = "1XB"
+        """)
+        with pytest.raises(_config.ConfigError, match="max_size"):
+            _config.load_config()
+
+    def test_fractional_max_size_raises(self, tmp_path, monkeypatch):
+        _write_cfg(tmp_path, monkeypatch, """
+            [telem.spool]
+            max_size = 1.5
         """)
         with pytest.raises(_config.ConfigError, match="max_size"):
             _config.load_config()

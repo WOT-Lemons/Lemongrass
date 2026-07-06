@@ -30,6 +30,10 @@ def parse_size(value):
     if isinstance(value, bool):
         raise ValueError(f"invalid size: {value!r}")
     if isinstance(value, (int, float)):
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError(
+                f"size must be a whole number of bytes: {value!r}"
+                " (for fractional units use a string like \"1.5GiB\")")
         n = int(value)
     elif isinstance(value, str):
         m = _SIZE_RE.match(value)
@@ -145,6 +149,8 @@ def _read_file():
 
 
 def _reject_unknown(d, allowed, where):
+    if not isinstance(d, dict):
+        raise ConfigError(f"[{where}] must be a table, not {type(d).__name__}")
     extra = set(d) - allowed
     if extra:
         raise ConfigError(f"unknown key(s) in [{where}]: {', '.join(sorted(extra))}")
