@@ -94,8 +94,7 @@ class InfluxConfig:
 @dataclass(frozen=True)
 class BackfillConfig:
     search_terms: tuple = ('Real Hoopties', 'GP du Lac', 'Halloween Hoop')
-    default_car_number: str = '252'
-    default_start_year: int = 2017
+    default_start_date: str = '2017-01-01'
 
 
 @dataclass(frozen=True)
@@ -231,16 +230,13 @@ def _build_influx(d):
 def _build_races(d):
     _reject_unknown(d, {'backfill'}, 'races')
     bf = d.get('backfill', {})
-    _reject_unknown(bf, {'search_terms', 'default_car_number', 'default_start_year'},
-                    'races.backfill')
+    _reject_unknown(bf, {'search_terms', 'default_start_date'}, 'races.backfill')
     dflt = BackfillConfig()
     return RacesConfig(backfill=BackfillConfig(
         search_terms=_typed(bf, 'search_terms', dflt.search_terms, tuple,
                             'races.backfill'),
-        default_car_number=_typed(bf, 'default_car_number', dflt.default_car_number,
+        default_start_date=_typed(bf, 'default_start_date', dflt.default_start_date,
                                   str, 'races.backfill'),
-        default_start_year=_typed(bf, 'default_start_year', dflt.default_start_year,
-                                  int, 'races.backfill'),
     ))
 
 

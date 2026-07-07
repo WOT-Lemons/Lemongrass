@@ -44,8 +44,7 @@ class TestDefaults:
         assert c.influx.buckets.pisugar == "pisugar"
         assert c.races.backfill.search_terms == (
             "Real Hoopties", "GP du Lac", "Halloween Hoop")
-        assert c.races.backfill.default_car_number == "252"
-        assert c.races.backfill.default_start_year == 2017
+        assert c.races.backfill.default_start_date == "2017-01-01"
         assert c.racemonitor.tokens_env == "RACEMONITOR_TOKENS"
         assert c.telem.vin == ""
         assert c.telem.obd.port == "/dev/obd"
@@ -83,8 +82,7 @@ class TestFileOverlay:
             org = "team"
             [races.backfill]
             search_terms = ["Foo", "Bar"]
-            default_car_number = "99"
-            default_start_year = 2020
+            default_start_date = "2020-05-01"
             [telem.spool]
             max_size = "2GiB"
         """)
@@ -92,8 +90,7 @@ class TestFileOverlay:
         assert c.influx.url == "http://localhost:8086"
         assert c.influx.org == "team"
         assert c.races.backfill.search_terms == ("Foo", "Bar")
-        assert c.races.backfill.default_car_number == "99"
-        assert c.races.backfill.default_start_year == 2020
+        assert c.races.backfill.default_start_date == "2020-05-01"
         assert c.telem.spool.max_size == 2 * 1024 ** 3
 
 
@@ -119,9 +116,9 @@ class TestValidation:
     def test_wrong_type_raises(self, tmp_path, monkeypatch):
         _write_cfg(tmp_path, monkeypatch, """
             [races.backfill]
-            default_start_year = "2017"
+            default_start_date = 2017
         """)
-        with pytest.raises(_config.ConfigError, match="must be an integer"):
+        with pytest.raises(_config.ConfigError, match="must be a string"):
             _config.load_config()
 
     @pytest.mark.parametrize("body,section", [
