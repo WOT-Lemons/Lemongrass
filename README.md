@@ -324,7 +324,7 @@ The `backfill` subcommand delegates to `lemongrass race-backfill` and supports t
 | `--validate` | Check that every expected race has metadata and at least one lap in InfluxDB |
 | `--start-date YYYY-MM-DD` | Only include races starting on/after this date (default: 2017-01-01) |
 
-> **Note:** `--upgrade-stored` is mutually exclusive with `--force`, `--start-date`, and `--validate`.
+> **Note:** `--upgrade-stored` is mutually exclusive with `--start-date` and `--validate`; combine it with `--force` to also re-fetch races already at the current schema.
 
 ### Session Tracking
 
