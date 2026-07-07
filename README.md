@@ -321,12 +321,10 @@ The `backfill` subcommand delegates to `lemongrass race-backfill` and supports t
 | `--dry-run` | Print what would be backfilled without writing anything |
 | `--force` | Re-backfill every race, even those already complete and current |
 | `--upgrade-stored` | Re-process laps already in InfluxDB whose `schema_version` is older than current — faster than `--force` because it skips re-fetching from RaceMonitor |
-| `--override RACE_ID:CAR_NUMBER` | Override the default car number for a specific race (repeatable) |
-| `--validate` | Check that every expected race and car has data in InfluxDB |
-| `--start-year YEAR` | Only include races starting in this year or later (default: 2017) |
-| `--car NUMBER` | Default car number for all races (default: 252) |
+| `--validate` | Check that every expected race has metadata and at least one lap in InfluxDB |
+| `--start-date YYYY-MM-DD` | Only include races starting on/after this date (default: 2017-01-01) |
 
-> **Note:** `--upgrade-stored` is mutually exclusive with `--force`, `--override`, `--start-year`, `--car`, and `--validate`.
+> **Note:** `--upgrade-stored` is mutually exclusive with `--force`, `--start-date`, and `--validate`.
 
 ### Session Tracking
 

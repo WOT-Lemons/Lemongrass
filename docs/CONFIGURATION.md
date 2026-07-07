@@ -48,7 +48,7 @@ Config is validated on load and fails loud rather than silently misbehaving:
 - `LEMONGRASS_CONFIG` set but the file is missing/unreadable → error.
 - Malformed TOML → error naming the file.
 - Unknown keys or sections (e.g. `bucket` vs `buckets`) → error.
-- Wrong value types (e.g. a quoted `default_start_year`) → error.
+- Wrong value types (e.g. a numeric `default_start_date`) → error.
 - An unparseable or non-positive `telem.spool.max_size` → error.
 
 ## Key reference
@@ -64,8 +64,7 @@ Config is validated on load and fails loud rather than silently misbehaving:
 | `influx.buckets.telem` | string | `telem` | OBD telemetry bucket |
 | `influx.buckets.pisugar` | string | `pisugar` | PiSugar telemetry bucket |
 | `races.backfill.search_terms` | list of strings | `["Real Hoopties", "GP du Lac", "Halloween Hoop"]` | RaceMonitor search terms |
-| `races.backfill.default_car_number` | string | `252` | default car number (`--car` overrides) |
-| `races.backfill.default_start_year` | int | `2017` | earliest year (`--start-year` overrides) |
+| `races.backfill.default_start_date` | string | `2017-01-01` | earliest race date, `YYYY-MM-DD` (`--start-date` overrides) |
 | `racemonitor.tokens_env` | string | `RACEMONITOR_TOKENS` | env var holding the token pool |
 | `telem.vin` | string | `""` | VIN fallback when OBD does not report one |
 | `telem.obd.port` | string | `/dev/obd` | OBD serial/socket port |
@@ -101,6 +100,5 @@ token_env = "INFLUX_TOKEN"
 
 [races.backfill]
 search_terms = ["Team2 Endurance", "Winter Grand Prix"]
-default_car_number = "42"
-default_start_year = 2021
+default_start_date = "2021-03-01"
 ```

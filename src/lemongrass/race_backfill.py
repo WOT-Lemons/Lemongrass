@@ -2,8 +2,8 @@
 """Discover and backfill historical 24 Hours of Lemons lap data.
 
 Searches the RaceMonitor API for past Real Hoopties, GP du Lac, and Halloween
-Hoop races and writes lap data for a given car number to the laps/races InfluxDB
-buckets by invoking `lemongrass laps -n` for each race found.
+Hoop races and writes fieldwide lap data to the laps/races InfluxDB buckets by
+invoking `lemongrass laps -n` for each race found.
 
 Assumes `lemongrass` is installed as a CLI tool. If running from the repo, prefix
 commands with `uv run` (e.g. `uv run lemongrass race-backfill`).
@@ -12,7 +12,7 @@ Usage:
     # Preview what would be backfilled (no writes)
     lemongrass race-backfill --dry-run
 
-    # Run the backfill (default car 252, from 2017 onwards). Races whose laps are
+    # Run the backfill (fieldwide, from 2017-01-01 onwards). Races whose laps are
     # already complete and written under the current schema version are skipped.
     lemongrass race-backfill
 
@@ -20,14 +20,11 @@ Usage:
     # (e.g. after bumping SCHEMA_VERSION in laps to migrate historical data)
     lemongrass race-backfill --force
 
-    # Override car number for a specific race (e.g. 2022 Hoopties used car 253)
-    lemongrass race-backfill --override 120037:253
-
     # Validate that backfilled races have data in InfluxDB
-    lemongrass race-backfill --validate --override 120037:253
+    lemongrass race-backfill --validate
 
-    # Backfill from a different year or for a different default car
-    lemongrass race-backfill --start-year 2023 --car 82
+    # Backfill from a different start date
+    lemongrass race-backfill --start-date 2023-06-01
 
     # Re-write laps stored under an older schema version without re-fetching from
     # RaceMonitor (faster than --force when only the schema tag changed)
