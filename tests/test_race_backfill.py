@@ -592,9 +592,11 @@ def test_backfill_defaults_come_from_config(monkeypatch, tmp_path):
     )
     monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
     from lemongrass import race_backfill
-    reloaded = importlib.reload(race_backfill)
-    assert reloaded.LEMONS_SEARCH_TERMS == ("Enduro X",)
-    assert reloaded.DEFAULT_START_DATE == "2019-03-15"
-    monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
-    importlib.reload(race_backfill)  # restore default module state
+    try:
+        reloaded = importlib.reload(race_backfill)
+        assert reloaded.LEMONS_SEARCH_TERMS == ("Enduro X",)
+        assert reloaded.DEFAULT_START_DATE == "2019-03-15"
+    finally:
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
+        importlib.reload(race_backfill)  # restore default module state
 
