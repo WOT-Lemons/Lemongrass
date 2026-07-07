@@ -321,16 +321,23 @@ The `backfill` subcommand delegates to `lemongrass race-backfill` and supports t
 | `--dry-run` | Print what would be backfilled without writing anything |
 | `--force` | Re-backfill every race, even those already complete and current |
 | `--upgrade-stored` | Re-process laps already in InfluxDB whose `schema_version` is older than current — faster than `--force` because it skips re-fetching from RaceMonitor |
-| `--override RACE_ID:CAR_NUMBER` | Override the default car number for a specific race (repeatable) |
-| `--validate` | Check that every expected race and car has data in InfluxDB |
-| `--start-year YEAR` | Only include races starting in this year or later (default: 2017) |
-| `--car NUMBER` | Default car number for all races (default: 252) |
+| `--validate` | Check that every expected race has metadata and at least one lap in InfluxDB |
+| `--start-date YYYY-MM-DD` | Only include races starting on/after this date (default: 2017-01-01) |
 
-> **Note:** `--upgrade-stored` is mutually exclusive with `--force`, `--override`, `--start-year`, `--car`, and `--validate`.
+> **Note:** `--upgrade-stored` is mutually exclusive with `--start-date` and `--validate`; combine it with `--force` to also re-fetch races already at the current schema.
 
 ### Session Tracking
 
 All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata is stored in the `race_sessions` bucket.
+
+## Configuration
+
+lemongrass is configured by an optional TOML file named by the `LEMONGRASS_CONFIG` environment
+variable, falling back to built-in defaults. Secrets (`INFLUX_TELEMETRY_TOKEN`,
+`RACEMONITOR_TOKENS`) are supplied via the environment and referenced by `*_env` keys in the
+file — environment variables are not used for any non-secret setting. Copy
+`lemongrass.toml.sample` to get started. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for
+the full key reference.
 
 ## Contributing
 

@@ -34,13 +34,10 @@ class Spool:
         self.enabled = self._ensure_dir()
 
     @classmethod
-    def from_env(cls):
-        return cls(
-            os.environ.get('TELEM_SPOOL_DIR', DEFAULT_SPOOL_DIR),
-            max_bytes=int(
-                os.environ.get('TELEM_SPOOL_MAX_BYTES', DEFAULT_MAX_BYTES)
-            ),
-        )
+    def from_config(cls):
+        from lemongrass import _config
+        spool = _config.load_config().telem.spool
+        return cls(spool.dir, max_bytes=spool.max_size)
 
     def _ensure_dir(self):
         try:
@@ -119,7 +116,7 @@ class Spool:
     def _enforce_cap(self):
         # Count both live (.lp) and quarantined (.bad) files toward the cap: a
         # recurring stream of poison/unreadable files must not accumulate .bad
-        # files past TELEM_SPOOL_MAX_BYTES on a constrained device. Both suffixes
+        # files past telem.spool.max_size on a constrained device. Both suffixes
         # are zero-padded-sequence names, so a plain name sort is oldest-first.
         files = sorted(
             [*self.dir.glob(f'*{_SUFFIX}'), *self.dir.glob(f'*{_BAD_SUFFIX}')],

@@ -61,6 +61,37 @@ class TestMainTokenResolution:
         assert 'RACEMONITOR_TOKENS' in out
         assert 'RACEMONITOR_TOKEN' in out
 
+    def test_no_token_message_honors_configured_pool_var(self, capsys, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[racemonitor]\ntokens_env = "MY_POOL"\n')
+        env = {
+            'INFLUX_TELEMETRY_TOKEN': 'ITOKEN',
+            'RACEMONITOR_TOKEN': 'stale-legacy',
+            'LEMONGRASS_CONFIG': str(cfg),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with patch.object(sys, 'argv', ['race-diagnose', '12345', '42']):
+                with pytest.raises(SystemExit) as exc_info:
+                    _mod.main()
+        assert exc_info.value.code == 1
+        out = capsys.readouterr().out
+        assert 'MY_POOL not set' in out
+
+    def test_honors_configured_token_env_var(self, capsys, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[influx]\ntoken_env = "MY_INFLUX_TOKEN"\n')
+        env = {
+            'RACEMONITOR_TOKENS': 'TOKEN1',
+            'LEMONGRASS_CONFIG': str(cfg),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with patch.object(sys, 'argv', ['race-diagnose', '12345', '42']):
+                with pytest.raises(SystemExit) as exc_info:
+                    _mod.main()
+        assert exc_info.value.code == 1
+        out = capsys.readouterr().out
+        assert 'MY_INFLUX_TOKEN not set' in out
+
 
 class TestInputValidation:
     def test_race_id_with_quote_exits_before_any_query(self):

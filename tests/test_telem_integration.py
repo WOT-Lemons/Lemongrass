@@ -73,9 +73,14 @@ def emulator():
 
 
 @pytest.fixture
-def connection(emulator, monkeypatch):
-    monkeypatch.setenv("OBD_PORT", emulator.url)
-    monkeypatch.setenv("OBD_BAUDRATE", "38400")
+def connection(emulator, monkeypatch, tmp_path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text(
+        '[telem.obd]\n'
+        f'port = "{emulator.url}"\n'
+        'baudrate = 38400\n'
+    )
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
     conn = telem.connect()
     yield conn
     conn.close()

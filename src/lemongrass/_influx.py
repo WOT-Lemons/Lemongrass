@@ -1,7 +1,7 @@
 """Shared InfluxDB connection settings for lemongrass commands.
 
-Centralizes the URL/org (env-overridable, defaulting to prod), the retry policy,
-and the token-reading client factory so every command constructs its
+Centralizes the URL/org (from the config layer, defaulting to prod), the retry
+policy, and the token-reading client factory so every command constructs its
 InfluxDBClient the same way.
 """
 import logging
@@ -11,20 +11,25 @@ import sys
 
 from urllib3 import Retry
 
-INFLUX_URL = os.environ.get('INFLUX_URL', 'https://influxdb.focism.com')
-INFLUX_ORG = os.environ.get('INFLUX_ORG', 'focism')
+from lemongrass import _config
+
+_cfg = _config.load_config()
+
+INFLUX_URL = _cfg.influx.url
+INFLUX_ORG = _cfg.influx.org
 
 # Bucket names, shared across the write paths and Flux queries (and created by
-# local-testing/influx-init). Single source of truth so a rename touches one place.
-BUCKET_LAPS = 'laps'
-BUCKET_RACES = 'races'
-BUCKET_SESSIONS = 'race_sessions'
+# local-testing/influx-init). Sourced from the config layer; defaults are the
+# historical literals so a no-config deployment is unchanged.
+BUCKET_LAPS = _cfg.influx.buckets.laps
+BUCKET_RACES = _cfg.influx.buckets.races
+BUCKET_SESSIONS = _cfg.influx.buckets.sessions
 
 # OBD car telemetry (vin-tagged) and PiSugar host telemetry (host-tagged),
 # born native v2 with bare names. The v2 write API matches the literal bucket
 # name and ignores DBRP, so these must be the exact write targets.
-BUCKET_TELEM = 'telem'
-BUCKET_PISUGAR = 'pisugar'
+BUCKET_TELEM = _cfg.influx.buckets.telem
+BUCKET_PISUGAR = _cfg.influx.buckets.pisugar
 
 # Bounded retry for transient failures (connection blips, retryable 5xx). We do
 # NOT honor Retry-After: a downed Cloudflare tunnel returns 530 with
@@ -53,17 +58,19 @@ INFLUX_RETRIES = build_retries(3)
 def connect(timeout=None, retries=INFLUX_RETRIES):
     """Return an InfluxDBClient wired with the shared URL/org/retries.
 
-    Reads the token from INFLUX_TELEMETRY_TOKEN; logs an error and exits with
-    status 1 if it is unset. The InfluxDBClient import is deferred so importing
-    this module (which every command does) stays cheap.
+    Reads the token from the env var named by `influx.token_env` (default
+    INFLUX_TELEMETRY_TOKEN); logs an error and exits with status 1 if it is
+    unset. The InfluxDBClient import is deferred so importing this module
+    (which every command does) stays cheap.
 
     `timeout` (ms) and `retries` let the telemetry hot loop fail fast to its
     spool; when timeout is None the influxdb-client library default (10s) applies
     so batch callers are unaffected.
     """
-    token = os.environ.get('INFLUX_TELEMETRY_TOKEN')
+    token_env = _config.load_config().influx.token_env
+    token = os.environ.get(token_env)
     if not token:
-        logging.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+        logging.error("%s environment variable not set", token_env)
         sys.exit(1)
     from influxdb_client import InfluxDBClient
     kwargs = {'url': INFLUX_URL, 'token': token, 'org': INFLUX_ORG,

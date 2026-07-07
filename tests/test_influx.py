@@ -15,12 +15,13 @@ def test_defaults_match_prod(monkeypatch):
     assert reloaded.INFLUX_ORG == 'focism'
 
 
-def test_env_overrides(monkeypatch):
+def test_env_does_not_override_influx_constants(monkeypatch):
+    monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
     monkeypatch.setenv('INFLUX_URL', 'http://localhost:8086')
     monkeypatch.setenv('INFLUX_ORG', 'lemongrass')
     reloaded = importlib.reload(influx_mod)
-    assert reloaded.INFLUX_URL == 'http://localhost:8086'
-    assert reloaded.INFLUX_ORG == 'lemongrass'
+    assert reloaded.INFLUX_URL == 'https://influxdb.focism.com'
+    assert reloaded.INFLUX_ORG == 'focism'
     monkeypatch.delenv('INFLUX_URL', raising=False)
     monkeypatch.delenv('INFLUX_ORG', raising=False)
     importlib.reload(influx_mod)  # restore default module state for later tests
@@ -94,6 +95,20 @@ def test_build_retries_shares_transient_policy_with_fewer_attempts():
     assert trimmed.respect_retry_after_header is False
     assert trimmed.allowed_methods is None
     assert trimmed.backoff_max == 10
+
+
+def test_connect_reads_token_from_configured_env_var(monkeypatch, tmp_path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[influx]\ntoken_env = "MY_TOKEN"\n')
+    monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+    monkeypatch.delenv('INFLUX_TELEMETRY_TOKEN', raising=False)
+    monkeypatch.setenv('MY_TOKEN', 'via-directive')
+    reloaded = importlib.reload(influx_mod)
+    with mock.patch('influxdb_client.InfluxDBClient') as client_cls:
+        reloaded.connect()
+    assert client_cls.call_args.kwargs['token'] == 'via-directive'
+    monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
+    importlib.reload(influx_mod)  # restore default module state for later tests
 
 
 class TestInvalidFluxIds:

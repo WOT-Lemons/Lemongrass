@@ -16,13 +16,14 @@ from time import sleep, time
 from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
-from lemongrass import _influx
+from lemongrass import _config, _influx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('pisugar-monitor')
 
-PISUGAR_API = "http://localhost:8421"
-PISUGAR_CONFIG = "/etc/pisugar-server/config.json"
+_pisugar_cfg = _config.load_config().pisugar
+PISUGAR_API = _pisugar_cfg.api_url
+PISUGAR_CONFIG = _pisugar_cfg.config_path
 TOKEN_REFRESH_MARGIN = 300  # seconds before expiry to proactively refresh
 HTTP_TIMEOUT_S = 5  # a wedged pisugar-server must not hang the monitor forever
 STARTUP_RETRY_DELAY_S = 5
@@ -42,11 +43,11 @@ def _resolve_host():
     """Host identity for tagging PiSugar (Pi) telemetry.
 
     PiSugar data describes the Pi, not the car, so it is tagged by host rather
-    than VIN. HOST is wired to the Pi's real hostname in the deploy compose so
-    it matches telegraf's host tag; socket.gethostname() (the container ID under
-    Docker) is only a last-resort fallback.
+    than VIN. pisugar.host is set to the Pi's real hostname in the deploy config
+    so it matches telegraf's host tag; socket.gethostname() (the container ID
+    under Docker) is only a last-resort fallback.
     """
-    return os.environ.get("HOST") or socket.gethostname()
+    return _config.load_config().pisugar.host or socket.gethostname()
 
 
 def login(username, password):
@@ -159,8 +160,9 @@ def main():
     """Main loop: read PiSugar metrics and push to InfluxDB."""
     # Validate the influx token up front so we fail fast before the pisugar login
     # below; _influx.connect() reads it again at construction time.
-    if not os.environ.get('INFLUX_TELEMETRY_TOKEN'):
-        logger.error("INFLUX_TELEMETRY_TOKEN environment variable not set")
+    token_env = _config.load_config().influx.token_env
+    if not os.environ.get(token_env):
+        logger.error("%s environment variable not set", token_env)
         sys.exit(1)
 
     username, password = read_credentials()

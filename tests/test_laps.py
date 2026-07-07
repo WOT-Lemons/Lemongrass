@@ -3512,6 +3512,46 @@ class TestMainMissingToken:
         assert any('RACEMONITOR_TOKENS' in r.message and 'RACEMONITOR_TOKEN' in r.message
                    for r in caplog.records)
 
+    def test_no_token_error_honors_configured_pool_var(self, caplog, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[racemonitor]\ntokens_env = "MY_POOL"\n')
+        env = {'RACEMONITOR_TOKEN': 'stale-legacy', 'LEMONGRASS_CONFIG': str(cfg)}
+        with patch.dict(os.environ, env, clear=True):
+            with patch.object(_mod.sys, 'argv', ['laps', '12345', '42']):
+                with caplog.at_level(logging.ERROR):
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        assert any('MY_POOL' in r.message for r in caplog.records)
+
+
+class TestMainInfluxTokenPreflight:
+    _ARGV: ClassVar[list] = ['lemongrass-laps', '-n', '12345', '42']
+
+    def test_logs_error_and_exits_when_influx_token_not_set(self, caplog):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN'}, clear=True):
+            with patch.object(_mod.sys, 'argv', self._ARGV):
+                with caplog.at_level(logging.ERROR):
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        assert any('INFLUX_TELEMETRY_TOKEN' in r.message for r in caplog.records)
+
+    def test_honors_configured_token_env_var(self, caplog, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[influx]\ntoken_env = "MY_INFLUX_TOKEN"\n')
+        env = {
+            'RACEMONITOR_TOKENS': 'TOKEN',
+            'LEMONGRASS_CONFIG': str(cfg),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with patch.object(_mod.sys, 'argv', self._ARGV):
+                with caplog.at_level(logging.ERROR):
+                    with pytest.raises(SystemExit) as exc_info:
+                        _mod.main()
+        assert exc_info.value.code == 1
+        assert any('MY_INFLUX_TOKEN' in r.message for r in caplog.records)
+
 
 class TestMainFluxIdValidation:
     """laps.main() interpolates race_id/car_number into Flux delete predicates and

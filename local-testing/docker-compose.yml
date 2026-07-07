@@ -57,12 +57,25 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    command: ["lemongrass", "telem"]
+    # Non-secret settings come from a generated TOML config (secrets-only env model).
+    # Generated at startup so the emulator port stays sourced from OBD_EMULATOR_PORT
+    # (compose interpolates ${OBD_EMULATOR_PORT} into the command, same as elm327).
+    command:
+      - /bin/sh
+      - -c
+      - |
+        cat > /tmp/lemongrass.toml <<'TOML'
+        [influx]
+        url = "http://influxdb:8086"
+        org = "lemongrass"
+
+        [telem.obd]
+        port = "socket://elm327:${OBD_EMULATOR_PORT}"
+        baudrate = 38400
+        TOML
+        exec lemongrass telem
     environment:
-      OBD_PORT: socket://elm327:${OBD_EMULATOR_PORT}
-      OBD_BAUDRATE: "38400"
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_ORG: lemongrass
+      LEMONGRASS_CONFIG: /tmp/lemongrass.toml
       INFLUX_TELEMETRY_TOKEN: local-dev-token
     volumes:
       # Persist /data (the spool lives at /data/telem-spool) so buffered points

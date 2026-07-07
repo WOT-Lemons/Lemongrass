@@ -36,9 +36,10 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
    set -a && source local-testing/.env.local && set +a
    ```
 
-   This sets `INFLUX_URL=http://localhost:8086`, `INFLUX_ORG=lemongrass`, and
-   `INFLUX_TELEMETRY_TOKEN=local-dev-token`. (In prod these are unset and the CLI
-   falls back to `https://influxdb.focism.com` / `focism`.)
+   This sets `LEMONGRASS_CONFIG` to `local-testing/lemongrass.toml` — which points the CLI at
+   the local InfluxDB (`url = http://localhost:8086`, `org = lemongrass`) — and the secret
+   `INFLUX_TELEMETRY_TOKEN=local-dev-token`. (Without a config file the CLI uses its built-in
+   defaults, `https://influxdb.focism.com` / `focism`.)
 
 3. Seed data by running a one-shot pull from RaceMonitor. This calls the RaceMonitor API, so it
    needs your own RaceMonitor API token — this requires a Race Monitor account

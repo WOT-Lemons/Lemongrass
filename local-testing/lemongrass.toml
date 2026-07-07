@@ -1,0 +1,5 @@
+# Local dev config for running the lemongrass CLI (on the host) against the local stack.
+# Pointed to by LEMONGRASS_CONFIG in local-testing/.env.local. Non-secret, committed on purpose.
+[influx]
+url = "http://localhost:8086"
+org = "lemongrass"

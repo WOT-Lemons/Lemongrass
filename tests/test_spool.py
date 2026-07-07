@@ -13,20 +13,25 @@ def _pt(measurement, value):
 
 
 class TestConfig:
-    def test_from_env_defaults(self, monkeypatch):
-        monkeypatch.delenv("TELEM_SPOOL_DIR", raising=False)
-        monkeypatch.delenv("TELEM_SPOOL_MAX_BYTES", raising=False)
+    def test_from_config_defaults(self, monkeypatch):
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         monkeypatch.setattr(Spool, "_ensure_dir", lambda self: True)
-        s = Spool.from_env()
+        s = Spool.from_config()
         assert str(s.dir) == DEFAULT_SPOOL_DIR
         assert s.max_bytes == DEFAULT_MAX_BYTES
 
-    def test_from_env_overrides(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("TELEM_SPOOL_DIR", str(tmp_path / "spool"))
-        monkeypatch.setenv("TELEM_SPOOL_MAX_BYTES", "12345")
-        s = Spool.from_env()
+    def test_from_config_reads_file(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "c.toml"
+        cfg.write_text(
+            '[telem.spool]\n'
+            f'dir = "{tmp_path / "spool"}"\n'
+            'max_size = "2GiB"\n'
+        )
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+        monkeypatch.setattr(Spool, "_ensure_dir", lambda self: True)
+        s = Spool.from_config()
         assert str(s.dir) == str(tmp_path / "spool")
-        assert s.max_bytes == 12345
+        assert s.max_bytes == 2 * 1024 ** 3
 
 
 class TestAppend:
