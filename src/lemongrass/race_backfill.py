@@ -104,7 +104,7 @@ def find_matching_races(client, start_epoc):
 
 
 def validate_backfill(race_ids, query_api):
-    """Check every race has metadata and at least one lap in the field; show counts."""
+    """Check every race has metadata and at least one lap in the field; log lap counts."""
     all_ok = True
     for race_id in sorted(set(race_ids)):
         race_tables = query_api.query(
