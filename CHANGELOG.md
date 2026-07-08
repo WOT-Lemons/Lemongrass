@@ -1,5 +1,19 @@
 # Changelog
 
+## [5.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v4.0.0...v5.0.0) (2026-07-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** layered TOML configuration with secrets-only env ([#193](https://github.com/WOT-Lemons/Lemongrass/issues/193))
+
+### Features
+
+* **config:** layered TOML configuration with secrets-only env ([#193](https://github.com/WOT-Lemons/Lemongrass/issues/193)) ([ffa77bd](https://github.com/WOT-Lemons/Lemongrass/commit/ffa77bd1a575aaa8212c03433af11aefc17e6001))
+* **laps:** answer backfill --skip-if-complete from Influx without RaceMonitor fetches ([#188](https://github.com/WOT-Lemons/Lemongrass/issues/188)) ([473f7e9](https://github.com/WOT-Lemons/Lemongrass/commit/473f7e962a96212d06954ffe3ba47668e61b6a16))
+* **telem:** durable disk spool for InfluxDB writes during outages ([#189](https://github.com/WOT-Lemons/Lemongrass/issues/189)) ([cfd7c9c](https://github.com/WOT-Lemons/Lemongrass/commit/cfd7c9cfdb41b03cd4b35e41ef533dfb997145bf))
+* **telem:** per-car VIN identity and dedicated pisugar bucket ([#191](https://github.com/WOT-Lemons/Lemongrass/issues/191)) ([a2ce4e9](https://github.com/WOT-Lemons/Lemongrass/commit/a2ce4e93bce1930e42d90e1dcc03e065c806e88d))
+
 ## [4.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v3.1.0...v4.0.0) (2026-07-04)
 
 
