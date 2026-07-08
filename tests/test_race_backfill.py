@@ -1,6 +1,7 @@
 import importlib
 import os
 import sys
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -79,22 +80,21 @@ class TestRunBackfill:
         ]
 
     def test_calls_laps_for_each_race(self):
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
             _mod.run_backfill(self._races())
-        assert mock_run.call_count == 2
+        assert mk_backfill.call_count == 2
 
-    def test_command_has_no_car_argument(self):
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            _mod.run_backfill(self._races()[:1])
-        cmd = mock_run.call_args.args[0]
-        assert cmd == ['lemongrass', 'laps', '-n', '--skip-if-complete', '101']
-
-    def test_dry_run_does_not_call_subprocess(self):
-        with patch.object(_mod.subprocess, 'run') as mock_run:
+    def test_dry_run_does_not_backfill(self):
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()) as mk_client, \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
             _mod.run_backfill(self._races(), dry_run=True)
-        mock_run.assert_not_called()
+        mk_backfill.assert_not_called()
+        mk_client.assert_not_called()
 
     def test_dry_run_logs_race_name(self, caplog):
         import logging
@@ -104,43 +104,114 @@ class TestRunBackfill:
 
     def test_failure_summary_logged_when_any_race_fails(self, caplog):
         import logging
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=1)
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race', return_value=1):
             with caplog.at_level(logging.ERROR, logger='root'):
                 _mod.run_backfill(self._races())
         assert any('2 race(s) failed' in r.message for r in caplog.records)
 
     def test_no_failure_summary_when_all_succeed(self, caplog):
         import logging
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race', return_value=0):
             with caplog.at_level(logging.ERROR, logger='root'):
                 _mod.run_backfill(self._races())
         assert not any('failed' in r.message for r in caplog.records)
 
     def test_returns_failed_race_ids(self):
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.side_effect = [MagicMock(returncode=0), MagicMock(returncode=1)]
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race', side_effect=[0, 1]):
             failures = _mod.run_backfill(self._races())
         assert failures == ['202']
 
     def test_returns_empty_list_when_all_succeed(self):
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race', return_value=0):
             failures = _mod.run_backfill(self._races())
         assert failures == []
 
     def test_passes_skip_if_complete_by_default(self):
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False) as mk_skip, \
+             patch('lemongrass.laps.backfill_race', return_value=0):
             _mod.run_backfill(self._races()[:1])
-        assert '--skip-if-complete' in mock_run.call_args.args[0]
+        mk_skip.assert_called()
 
-    def test_omits_skip_if_complete_when_forced(self):
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+    # --- in-process backfill: one shared client/rate-limiter across all races ---
+
+    def test_reuses_single_client_across_races(self):
+        """One RaceMonitorClient (and its rate-limiter window) is shared across
+        every race, instead of a fresh subprocess/window per race."""
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()) as mk_client, \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
+            _mod.run_backfill(self._races())
+        assert mk_client.call_count == 1
+        assert mk_backfill.call_count == 2
+        clients = {c.args[2] for c in mk_backfill.call_args_list}
+        assert len(clients) == 1
+
+    def test_backfill_called_fieldwide_with_race_id(self):
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
+            _mod.run_backfill(self._races()[:1])
+        assert mk_backfill.call_args.args[0] == '101'  # race_id
+        assert mk_backfill.call_args.args[1] is None   # car_number (fieldwide)
+
+    def test_skip_if_complete_skips_without_client_or_racemonitor(self):
+        """A race already complete in Influx is skipped with no client created and
+        no backfill_race call — the whole point of --skip-if-complete."""
+        with patch.object(_mod, 'RaceMonitorClient') as mk_client, \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=True), \
+             patch('lemongrass.laps.backfill_race') as mk_backfill:
+            _mod.run_backfill(self._races()[:1])
+        mk_backfill.assert_not_called()
+        mk_client.assert_not_called()
+
+    def test_force_bypasses_skip_check(self):
+        """force=True disables skip_if_complete, so _influx_only_skip is never
+        consulted and every race is backfilled."""
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=True) as mk_skip, \
+             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
             _mod.run_backfill(self._races()[:1], force=True)
-        assert '--skip-if-complete' not in mock_run.call_args.args[0]
+        mk_skip.assert_not_called()
+        assert mk_backfill.call_count == 1
+
+    def test_backfill_exception_records_failure_and_continues(self):
+        from race_monitor import RaceMonitorHTTPError
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race',
+                   side_effect=[RaceMonitorHTTPError(429, 'rate'), 0]) as mk_backfill:
+            failures = _mod.run_backfill(self._races())
+        assert mk_backfill.call_count == 2
+        assert failures == ['101']
+
+    def test_keyboard_interrupt_stops_backfill(self):
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race',
+                   side_effect=[KeyboardInterrupt(), 0]) as mk_backfill:
+            failures = _mod.run_backfill(self._races())
+        assert mk_backfill.call_count == 1
+        assert failures == []
 
 
 class TestValidateBackfill:
@@ -294,6 +365,16 @@ class TestRunUpgradeStored:
         api.query.side_effect = fake_query
         return api
 
+    @contextmanager
+    def _inprocess(self, **backfill_kwargs):
+        """Patch the in-process backfill seam (shared client + resolve_tokens +
+        laps.backfill_race), yielding the backfill_race mock."""
+        backfill_kwargs.setdefault('return_value', 0)
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps.backfill_race', **backfill_kwargs) as mk_backfill:
+            yield mk_backfill
+
     def test_skips_race_already_at_current_schema(self, caplog):
         import logging
         query_api = self._query_api(
@@ -303,10 +384,10 @@ class TestRunUpgradeStored:
             std_total_by_race={'101': 8},
             std_current_by_race={'101': 8},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
+        with self._inprocess() as mk_backfill:
             with caplog.at_level(logging.INFO):
                 _mod.run_upgrade_stored(query_api)
-        mock_run.assert_not_called()
+        mk_backfill.assert_not_called()
         assert any('skipping' in r.message and '101' in r.message for r in caplog.records)
 
     def test_rebackfills_when_laps_current_but_standings_stale(self):
@@ -317,11 +398,11 @@ class TestRunUpgradeStored:
             std_total_by_race={'101': 8},
             std_current_by_race={'101': 3},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api)
-        assert mock_run.call_count == 1
-        assert mock_run.call_args.args[0] == ['lemongrass', 'laps', '-n', '101']
+        assert mk_backfill.call_count == 1
+        assert mk_backfill.call_args.args[0] == '101'
+        assert mk_backfill.call_args.args[1] is None
 
     def test_rebackfills_when_laps_current_but_standings_missing(self):
         query_api = self._query_api(
@@ -331,10 +412,9 @@ class TestRunUpgradeStored:
             std_total_by_race={'101': 0},
             std_current_by_race={'101': 0},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api)
-        assert mock_run.call_count == 1
+        assert mk_backfill.call_count == 1
 
     def test_rebackfills_stale_race(self):
         query_api = self._query_api(
@@ -342,22 +422,21 @@ class TestRunUpgradeStored:
             total_by_race={'101': 10},
             current_by_race={'101': 5},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api)
-        assert mock_run.call_count == 1
-        cmd = mock_run.call_args.args[0]
-        assert cmd == ['lemongrass', 'laps', '-n', '101']
+        assert mk_backfill.call_count == 1
+        assert mk_backfill.call_args.args[0] == '101'
+        assert mk_backfill.call_args.args[1] is None
 
-    def test_dry_run_does_not_call_subprocess(self):
+    def test_dry_run_does_not_backfill(self):
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},
             total_by_race={'101': 10},
             current_by_race={'101': 5},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
+        with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api, dry_run=True)
-        mock_run.assert_not_called()
+        mk_backfill.assert_not_called()
 
     def test_skips_race_with_no_stored_laps(self, caplog):
         import logging
@@ -366,10 +445,10 @@ class TestRunUpgradeStored:
             total_by_race={'101': 0},
             current_by_race={},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
+        with self._inprocess() as mk_backfill:
             with caplog.at_level(logging.INFO):
                 _mod.run_upgrade_stored(query_api)
-        mock_run.assert_not_called()
+        mk_backfill.assert_not_called()
 
     def test_returns_failed_race_ids(self):
         query_api = self._query_api(
@@ -377,8 +456,7 @@ class TestRunUpgradeStored:
             total_by_race={'101': 10},
             current_by_race={'101': 5},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=1)
+        with self._inprocess(return_value=1):
             failures = _mod.run_upgrade_stored(query_api)
         assert failures == ['101']
 
@@ -388,8 +466,7 @@ class TestRunUpgradeStored:
             total_by_race={'101': 10},
             current_by_race={'101': 5},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with self._inprocess(return_value=0):
             failures = _mod.run_upgrade_stored(query_api)
         assert failures == []
 
@@ -399,10 +476,9 @@ class TestRunUpgradeStored:
             total_by_race={'101': 5, '202': 5},
             current_by_race={'101': 0, '202': 0},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=130)
+        with self._inprocess(side_effect=[SystemExit(130), 0]) as mk_backfill:
             _mod.run_upgrade_stored(query_api)
-        assert mock_run.call_count == 1
+        assert mk_backfill.call_count == 1
 
     def test_force_rebackfills_race_already_at_current_schema(self):
         query_api = self._query_api(
@@ -410,12 +486,11 @@ class TestRunUpgradeStored:
             total_by_race={'101': 10},
             current_by_race={'101': 10},  # already fully current
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api, force=True)
-        assert mock_run.call_count == 1
-        cmd = mock_run.call_args.args[0]
-        assert cmd == ['lemongrass', 'laps', '-n', '101']
+        assert mk_backfill.call_count == 1
+        assert mk_backfill.call_args.args[0] == '101'
+        assert mk_backfill.call_args.args[1] is None
 
     def test_force_logs_already_current_message(self, caplog):
         import logging
@@ -424,24 +499,23 @@ class TestRunUpgradeStored:
             total_by_race={'101': 10},
             current_by_race={'101': 10},  # already fully current
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with self._inprocess(return_value=0):
             with caplog.at_level(logging.INFO):
                 _mod.run_upgrade_stored(query_api, force=True)
         assert any('already current' in r.message and 'force re-backfilling' in r.message
                    for r in caplog.records)
 
-    def test_dry_run_force_does_not_call_subprocess(self, caplog):
+    def test_dry_run_force_does_not_backfill(self, caplog):
         import logging
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},
             total_by_race={'101': 10},
             current_by_race={'101': 10},  # already current; only --force would touch it
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
+        with self._inprocess() as mk_backfill:
             with caplog.at_level(logging.INFO):
                 _mod.run_upgrade_stored(query_api, dry_run=True, force=True)
-        mock_run.assert_not_called()
+        mk_backfill.assert_not_called()
         assert any('would force re-backfill' in r.message for r in caplog.records)
 
     def test_force_still_skips_race_with_no_stored_laps(self):
@@ -450,9 +524,78 @@ class TestRunUpgradeStored:
             total_by_race={'101': 0},
             current_by_race={},
         )
-        with patch.object(_mod.subprocess, 'run') as mock_run:
+        with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api, force=True)
-        mock_run.assert_not_called()
+        mk_backfill.assert_not_called()
+
+
+    # --- in-process backfill: one shared client/rate-limiter across all races ---
+
+    def test_reuses_single_client_across_races(self):
+        """One RaceMonitorClient (and its rate-limiter window) is shared across
+        every race, instead of a fresh subprocess/window per race."""
+        query_api = self._query_api(
+            stored_races={'101': 'Race 1', '202': 'Race 2'},
+            total_by_race={'101': 10, '202': 10},
+            current_by_race={'101': 5, '202': 5},
+        )
+        fake_client = MagicMock()
+        with patch.object(_mod, 'RaceMonitorClient', return_value=fake_client) as mk_client, \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
+            _mod.run_upgrade_stored(query_api)
+        assert mk_client.call_count == 1
+        assert mk_backfill.call_count == 2
+        clients = {c.args[2] for c in mk_backfill.call_args_list}
+        assert clients == {fake_client}
+
+    def test_backfill_called_fieldwide_with_race_id(self):
+        """Each race is backfilled fieldwide: race_id passed, car_number None."""
+        query_api = self._query_api(
+            stored_races={'101': 'Race 1'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 5},
+        )
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
+            _mod.run_upgrade_stored(query_api)
+        assert mk_backfill.call_count == 1
+        args = mk_backfill.call_args.args
+        assert args[0] == '101'   # race_id
+        assert args[1] is None    # car_number (fieldwide)
+
+    def test_backfill_exception_records_failure_and_continues(self):
+        """A per-race error (e.g. 429 exhaustion) is recorded and the run
+        continues to the next race, matching the old continue-on-failure model."""
+        from race_monitor import RaceMonitorHTTPError
+        query_api = self._query_api(
+            stored_races={'101': 'Race 1', '202': 'Race 2'},
+            total_by_race={'101': 10, '202': 10},
+            current_by_race={'101': 5, '202': 5},
+        )
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps.backfill_race',
+                   side_effect=[RaceMonitorHTTPError(429, 'rate'), 0]) as mk_backfill:
+            failures = _mod.run_upgrade_stored(query_api)
+        assert mk_backfill.call_count == 2
+        assert failures == ['101']
+
+    def test_keyboard_interrupt_stops_upgrade(self):
+        """Ctrl-C during a race stops the whole upgrade (no further races)."""
+        query_api = self._query_api(
+            stored_races={'101': 'Race 1', '202': 'Race 2'},
+            total_by_race={'101': 10, '202': 10},
+            current_by_race={'101': 5, '202': 5},
+        )
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps.backfill_race',
+                   side_effect=[KeyboardInterrupt(), 0]) as mk_backfill:
+            failures = _mod.run_upgrade_stored(query_api)
+        assert mk_backfill.call_count == 1
+        assert failures == []
 
 
 class TestUpgradeStoredArgParsing:
