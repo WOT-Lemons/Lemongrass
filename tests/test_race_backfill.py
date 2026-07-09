@@ -213,6 +213,19 @@ class TestRunBackfill:
         assert mk_backfill.call_count == 1
         assert failures == []
 
+    def test_programming_bug_propagates_not_swallowed(self):
+        # A non-RaceMonitorError (e.g. a bug or systematic outage) must crash the
+        # run rather than be recorded per-race — otherwise a fault that breaks
+        # every race looks like a data problem instead of a bug.
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps._influx_only_skip', return_value=False), \
+             patch('lemongrass.laps.backfill_race',
+                   side_effect=[AttributeError('boom'), 0]) as mk_backfill:
+            with pytest.raises(AttributeError):
+                _mod.run_backfill(self._races())
+        assert mk_backfill.call_count == 1
+
 
 class TestValidateBackfill:
     def _make_query_api(self, race_name='My Race', lap_count=0,
@@ -596,6 +609,22 @@ class TestRunUpgradeStored:
             failures = _mod.run_upgrade_stored(query_api)
         assert mk_backfill.call_count == 1
         assert failures == []
+
+    def test_programming_bug_propagates_not_swallowed(self):
+        """A non-RaceMonitorError crashes the upgrade rather than being recorded
+        per-race, so a systematic fault surfaces as a bug instead of hiding."""
+        query_api = self._query_api(
+            stored_races={'101': 'Race 1', '202': 'Race 2'},
+            total_by_race={'101': 10, '202': 10},
+            current_by_race={'101': 5, '202': 5},
+        )
+        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch('lemongrass.laps.backfill_race',
+                   side_effect=[AttributeError('boom'), 0]) as mk_backfill:
+            with pytest.raises(AttributeError):
+                _mod.run_upgrade_stored(query_api)
+        assert mk_backfill.call_count == 1
 
 
 class TestUpgradeStoredArgParsing:

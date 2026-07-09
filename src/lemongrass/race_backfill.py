@@ -2,11 +2,13 @@
 """Discover and backfill historical 24 Hours of Lemons lap data.
 
 Searches the RaceMonitor API for past Real Hoopties, GP du Lac, and Halloween
-Hoop races and writes fieldwide lap data to the laps/races InfluxDB buckets by
-invoking `lemongrass laps -n` for each race found.
+Hoop races and writes fieldwide lap data to the laps/races InfluxDB buckets. Each
+race is backfilled in-process through a single shared RaceMonitorClient, so the
+rate-limiter window carries across the whole run and requests stay paced under
+the server's per-token budget.
 
-Assumes `lemongrass` is installed as a CLI tool. If running from the repo, prefix
-commands with `uv run` (e.g. `uv run lemongrass race-backfill`).
+If running from the repo, prefix commands with `uv run`
+(e.g. `uv run lemongrass race-backfill`).
 
 Usage:
     # Preview what would be backfilled (no writes)
@@ -42,7 +44,7 @@ import logging
 import sys
 from datetime import UTC, date, datetime, timedelta
 
-from race_monitor import RaceMonitorClient
+from race_monitor import RaceMonitorClient, RaceMonitorError
 
 from lemongrass import _config, _env, _influx
 from lemongrass._env import resolve_tokens
@@ -171,9 +173,12 @@ def _open_client():
 def _backfill_one_race(client, race_id, opts, failures, fail_prefix):
     """Backfill one race in-process with the shared client, recording failures.
 
-    Returns True if the loop should stop (an interrupt propagated). Any other
-    error — including RaceMonitor rate-limit exhaustion — is logged with
-    `fail_prefix` and recorded, and the caller continues to the next race.
+    Returns True if the loop should stop (an interrupt propagated). An
+    operational RaceMonitor error — including rate-limit exhaustion (429) — is
+    logged with `fail_prefix` and recorded, and the caller continues to the next
+    race. Any other exception (a programming bug or a systematic outage) is left
+    to propagate so it surfaces as a crash rather than being silently recorded
+    once per race across the whole field.
     """
     from lemongrass.laps import backfill_race
     try:
@@ -188,7 +193,7 @@ def _backfill_one_race(client, race_id, opts, failures, fail_prefix):
         logging.error("%s failed for race %s", fail_prefix, race_id)
         failures.append(race_id)
         return False
-    except Exception as exc:
+    except RaceMonitorError as exc:
         # One-line reason (e.g. RaceMonitorHTTPError(429)) rather than a full
         # traceback per race, matching the old subprocess failure log.
         logging.error("%s failed for race %s: %s", fail_prefix, race_id, exc)
