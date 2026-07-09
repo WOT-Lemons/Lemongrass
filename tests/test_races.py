@@ -241,6 +241,21 @@ class TestHandlePrune:
         assert buckets.count('races') == 2
         assert buckets.count('race_sessions') == 2
 
+    def test_prune_partial_failure_exits_1(self, capsys):
+        # A delete that raises for a race is recorded in the failed list, and the
+        # command exits 1 so a partial prune is not mistaken for success.
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
+            fake_client = self._make_influx_client()
+            fake_client.delete_api.return_value.delete.side_effect = RuntimeError('boom')
+            with patch('lemongrass._influx.connect', return_value=fake_client):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    with pytest.raises(SystemExit) as exc:
+                        _mod._handle_prune()
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert 'failed to prune' in err
+        assert '12345' in err
+
 
 class TestHandleBackfill:
     def test_delegates_to_race_backfill_main(self):
@@ -387,6 +402,32 @@ class TestHandleList:
             with pytest.raises(SystemExit) as exc:
                 _mod._handle_list()
         assert exc.value.code != 0
+
+    def test_missing_race_date_shows_question_mark(self, capsys):
+        # A race whose metadata record has no timestamp renders '?' in the DATE
+        # column rather than crashing on None.strftime.
+        def fake_query(flux):
+            if 'bucket: "races"' in flux:
+                table = MagicMock()
+                rec = MagicMock()
+                rec.values = {'race_id': 'R1', 'race_name': 'Dateless Race'}
+                rec.get_time.return_value = None
+                table.records = [rec]
+                return [table]
+            return []
+
+        client = MagicMock()
+        query_api = MagicMock()
+        query_api.query.side_effect = fake_query
+        client.query_api.return_value = query_api
+        client.__enter__ = lambda s: client
+        client.__exit__ = MagicMock(return_value=False)
+        with patch('lemongrass._influx.connect', return_value=client):
+            with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                _mod._handle_list()
+        out = capsys.readouterr().out
+        assert 'Dateless Race' in out
+        assert '?' in out
 
 
 class TestHandleDiagnose:

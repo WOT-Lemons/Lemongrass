@@ -42,24 +42,26 @@ class TestConnect:
             _mod.connect()
         mock_async.assert_called_once_with(portstr="/dev/ttyUSB0")
 
-    def test_passes_baudrate_when_set(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize(
+        "baudrate_line, expected_baudrate",
+        [
+            ("baudrate = 38400\n", 38400),  # nonzero -> pinned
+            ("baudrate = 0\n", None),        # 0 = auto-detect -> omitted
+        ],
+    )
+    def test_baudrate_passed_only_when_nonzero(
+        self, monkeypatch, tmp_path, baudrate_line, expected_baudrate
+    ):
         cfg = tmp_path / "c.toml"
-        cfg.write_text('[telem.obd]\nport = "socket://elm327:35000"\nbaudrate = 38400\n')
-        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
-        with patch.object(_mod.obd, "Async") as mock_async:
-            _mod.connect()
-        mock_async.assert_called_once_with(
-            portstr="socket://elm327:35000", baudrate=38400
-        )
-
-    def test_omits_baudrate_when_zero(self, monkeypatch, tmp_path):
-        cfg = tmp_path / "c.toml"
-        cfg.write_text('[telem.obd]\nport = "/dev/obd"\nbaudrate = 0\n')
+        cfg.write_text('[telem.obd]\nport = "/dev/obd"\n' + baudrate_line)
         monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
         with patch.object(_mod.obd, "Async") as mock_async:
             _mod.connect()
         _, kwargs = mock_async.call_args
-        assert "baudrate" not in kwargs
+        if expected_baudrate is None:
+            assert "baudrate" not in kwargs
+        else:
+            assert kwargs["baudrate"] == expected_baudrate
 
 
 class TestNewValue:
@@ -95,32 +97,46 @@ class TestNewValue:
             _mod.new_value(r)
         assert len(_mod.pending_points) == 0
 
-    def test_measurement_name_has_spaces_replaced(self):
+
+class TestMeasurementName:
+    @pytest.mark.parametrize(
+        "command_str, expected",
+        [
+            ("ENGINE RPM: rpm", "-rpm"),
+            ("b'0103': Fuel System Status", "-Fuel-System-Status"),
+            ("b'0112': Secondary Air Status", "-Secondary-Air-Status"),
+            ("b'0151': Fuel Type", "-Fuel-Type"),
+            ("b'0141': Monitor status this drive cycle",
+             "-Monitor-status-this-drive-cycle"),
+            ("no colon here", None),  # no ':' -> IndexError -> None
+        ],
+    )
+    def test_derives_name_from_command(self, command_str, expected):
         r = MagicMock()
-        r.command = _Cmd("ENGINE RPM: rpm")
-        r.value.magnitude = 3000.0
-        captured_name = []
-        original_point = _mod.Point
-
-        def capture_point(name):
-            captured_name.append(name)
-            return original_point(name)
-
-        with patch.object(_mod, 'Point', side_effect=capture_point):
-            _mod.new_value(r)
-        assert captured_name[0] == "-rpm"
+        r.command = command_str
+        assert _mod._measurement_name(r) == expected
 
 
 class TestNewFuelStatus:
     def setup_method(self):
         _reset()
 
-    def test_appends_known_status(self):
+    @pytest.mark.parametrize(
+        "status_text, expected",
+        [
+            # known status maps via FUEL_STATUS_MAP...
+            ("Closed loop, using oxygen sensor feedback to determine fuel mix", 1),
+            # ...unknown status falls back to the 255 sentinel
+            ("Unknown mode that maps to nothing", 255),
+        ],
+    )
+    def test_appends_mapped_or_unknown_status(self, status_text, expected):
         r = MagicMock()
         r.command = _Cmd("b'0103': Fuel System Status")
-        r.value = ["Closed loop, using oxygen sensor feedback to determine fuel mix"]
+        r.value = [status_text]
         _mod.new_fuel_status(r)
         assert len(_mod.pending_points) == 1
+        assert f"value={expected}i" in _mod.pending_points[0].to_line_protocol()
 
     def test_skips_falsy_first_element(self):
         r = MagicMock()
@@ -129,34 +145,12 @@ class TestNewFuelStatus:
         _mod.new_fuel_status(r)
         assert len(_mod.pending_points) == 0
 
-    def test_appends_for_unknown_status(self):
-        r = MagicMock()
-        r.command = _Cmd("b'0103': Fuel System Status")
-        r.value = ["Unknown mode that maps to nothing"]
-        _mod.new_fuel_status(r)
-        assert len(_mod.pending_points) == 1
-
     def test_returns_early_on_malformed_command(self):
         r = MagicMock()
         r.command = _Cmd("no colon here")
         r.value = ["Closed loop, using oxygen sensor feedback to determine fuel mix"]
         _mod.new_fuel_status(r)
         assert len(_mod.pending_points) == 0
-
-    def test_measurement_name_uses_description(self):
-        r = MagicMock()
-        r.command = _Cmd("b'0103': Fuel System Status")
-        r.value = ["Closed loop, using oxygen sensor feedback to determine fuel mix"]
-        captured_name = []
-        original_point = _mod.Point
-
-        def capture_point(name):
-            captured_name.append(name)
-            return original_point(name)
-
-        with patch.object(_mod, "Point", side_effect=capture_point):
-            _mod.new_fuel_status(r)
-        assert captured_name[0] == "-Fuel-System-Status"
 
     def test_uses_system_1_status_when_systems_differ(self):
         """Dual-bank ECU: system 1 in failure mode must not be masked by
@@ -168,7 +162,7 @@ class TestNewFuelStatus:
             "Closed loop, using oxygen sensor feedback to determine fuel mix",
         ]
         _mod.new_fuel_status(r)
-        assert _mod.pending_points[0]._fields == {"value": 3}
+        assert "value=3i" in _mod.pending_points[0].to_line_protocol()
 
 
 class TestConfigureObdLogging:
@@ -191,13 +185,20 @@ class TestNewAirStatus:
     def setup_method(self):
         _reset()
 
-    def test_appends_known_status(self):
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("Upstream", 0),                             # known -> AIR_STATUS_MAP
+            ("Some new status ELM327 hasn't seen", 255),  # unknown -> sentinel
+        ],
+    )
+    def test_appends_mapped_or_unknown_status(self, value, expected):
         r = MagicMock()
         r.command = _Cmd("b'0112': Secondary Air Status")
-        r.value = "Upstream"
+        r.value = value
         _mod.new_air_status(r)
         assert len(_mod.pending_points) == 1
-        assert _mod.pending_points[0]._fields == {"value": 0}
+        assert f"value={expected}i" in _mod.pending_points[0].to_line_protocol()
 
     def test_skips_falsy_value(self):
         r = MagicMock()
@@ -206,35 +207,12 @@ class TestNewAirStatus:
         _mod.new_air_status(r)
         assert len(_mod.pending_points) == 0
 
-    def test_appends_for_unknown_status(self):
-        r = MagicMock()
-        r.command = _Cmd("b'0112': Secondary Air Status")
-        r.value = "Some new status ELM327 hasn't seen"
-        _mod.new_air_status(r)
-        assert len(_mod.pending_points) == 1
-        assert _mod.pending_points[0]._fields == {"value": 255}
-
     def test_returns_early_on_malformed_command(self):
         r = MagicMock()
         r.command = _Cmd("no colon here")
         r.value = "Upstream"
         _mod.new_air_status(r)
         assert len(_mod.pending_points) == 0
-
-    def test_measurement_name_uses_description(self):
-        r = MagicMock()
-        r.command = _Cmd("b'0112': Secondary Air Status")
-        r.value = "Upstream"
-        captured_name = []
-        original_point = _mod.Point
-
-        def capture_point(name):
-            captured_name.append(name)
-            return original_point(name)
-
-        with patch.object(_mod, "Point", side_effect=capture_point):
-            _mod.new_air_status(r)
-        assert captured_name[0] == "-Secondary-Air-Status"
 
 
 class TestQueryFuelTypeOnce:
@@ -261,7 +239,7 @@ class TestQueryFuelTypeOnce:
             connection, _mod.obd.commands.FUEL_TYPE, force=True
         )
         assert len(_mod.pending_points) == 1
-        assert _mod.pending_points[0]._fields == {"value": "Gasoline"}
+        assert 'value="Gasoline"' in _mod.pending_points[0].to_line_protocol()
 
     def test_skips_on_falsy_value(self):
         connection = MagicMock()
@@ -273,23 +251,14 @@ class TestQueryFuelTypeOnce:
             _mod._query_fuel_type_once(connection)
         assert len(_mod.pending_points) == 0
 
-    def test_measurement_name_uses_description(self):
+    def test_logs_and_returns_on_query_exception(self, caplog):
         connection = MagicMock()
         connection.supports.return_value = True
-        r = MagicMock()
-        r.command = _Cmd("b'0151': Fuel Type")
-        r.value = "Gasoline"
-        captured_name = []
-        original_point = _mod.Point
-
-        def capture_point(name):
-            captured_name.append(name)
-            return original_point(name)
-
-        with patch.object(_mod.obd.OBD, "query", return_value=r), \
-                patch.object(_mod, "Point", side_effect=capture_point):
+        with patch.object(_mod.obd.OBD, "query", side_effect=Exception("boom")), \
+                caplog.at_level(logging.ERROR):
             _mod._query_fuel_type_once(connection)
-        assert captured_name[0] == "-Fuel-Type"
+        assert len(_mod.pending_points) == 0
+        assert any("Fuel-type query failed" in r.message for r in caplog.records)
 
 
 class TestResolveVin:
@@ -394,8 +363,8 @@ class TestNewStatus:
         r.value.DTC_count = 0
         _mod.new_status(r)
         assert len(_mod.pending_points) == 2
-        assert _mod.pending_points[0]._fields == {"value": 1}
-        assert _mod.pending_points[1]._fields == {"value": 0}
+        assert "value=1i" in _mod.pending_points[0].to_line_protocol()
+        assert "value=0i" in _mod.pending_points[1].to_line_protocol()
 
     def test_returns_early_on_malformed_command(self):
         r = MagicMock()
@@ -412,19 +381,11 @@ class TestNewStatus:
         )
         r.value.MIL = True
         r.value.DTC_count = 2
-        captured_names = []
-        original_point = _mod.Point
-
-        def capture_point(name):
-            captured_names.append(name)
-            return original_point(name)
-
-        with patch.object(_mod, "Point", side_effect=capture_point):
-            _mod.new_status(r)
-        assert captured_names == [
-            "-Monitor-status-this-drive-cycle-MIL",
-            "-Monitor-status-this-drive-cycle-DTC-Count",
-        ]
+        _mod.new_status(r)
+        mil_lp = _mod.pending_points[0].to_line_protocol()
+        dtc_lp = _mod.pending_points[1].to_line_protocol()
+        assert mil_lp.startswith("-Monitor-status-this-drive-cycle-MIL")
+        assert dtc_lp.startswith("-Monitor-status-this-drive-cycle-DTC-Count")
 
 
 class TestFetchAndStoreDtcs:
@@ -458,7 +419,7 @@ class TestFetchAndStoreDtcs:
             result = _mod._fetch_and_store_dtcs()
         assert result is True
         assert len(_mod.pending_points) == 1
-        assert _mod.pending_points[0]._fields == {"value": ""}
+        assert 'value=""' in _mod.pending_points[0].to_line_protocol()
 
     def test_writes_joined_codes(self):
         _mod._connection = MagicMock()
@@ -471,7 +432,16 @@ class TestFetchAndStoreDtcs:
             result = _mod._fetch_and_store_dtcs()
         assert result is True
         assert len(_mod.pending_points) == 1
-        assert _mod.pending_points[0]._fields == {"value": "P0104,B0003"}
+        assert 'value="P0104,B0003"' in _mod.pending_points[0].to_line_protocol()
+
+    def test_returns_false_on_query_exception(self, caplog):
+        _mod._connection = MagicMock()
+        with patch.object(_mod.obd.OBD, "query", side_effect=Exception("boom")), \
+                caplog.at_level(logging.ERROR):
+            result = _mod._fetch_and_store_dtcs()
+        assert result is False
+        assert len(_mod.pending_points) == 0
+        assert any("GET_DTC query failed" in r.message for r in caplog.records)
 
 
 class TestNewStatusDtcTrigger:
@@ -612,6 +582,20 @@ class TestFlushPoints:
         write_api.write.side_effect = Exception("network error")
         assert _mod.flush_points(write_api) is False
         assert _mod.pending_points == ["p1", "p2"]
+
+    def test_ram_fallback_drops_oldest_overflow_with_warning(self, caplog):
+        """The RAM fallback (no spool) re-queues the unwritten batch but stays
+        bounded: overflow past MAX_PENDING_POINTS is dropped oldest-first with a
+        warning, so a downed Influx can't OOM the Pi."""
+        _mod._spool = None
+        _mod.pending_points.extend(["p1", "p2", "p3"])
+        write_api = MagicMock()
+        write_api.write.side_effect = Exception("network error")
+        with patch.object(_mod, "MAX_PENDING_POINTS", 2), \
+                caplog.at_level(logging.WARNING):
+            assert _mod.flush_points(write_api) is False
+        assert len(_mod.pending_points) == 2
+        assert any("dropped" in r.message.lower() for r in caplog.records)
 
 
 class TestLoggingConfig:
@@ -759,18 +743,18 @@ class TestRouteCommand:
         ]:
             assert _mod._route_command(_Cmd(name)) is _mod.new_value
 
-    def test_routes_status_commands(self):
-        assert _mod._route_command(_Cmd("STATUS")) is _mod.new_status
-        assert _mod._route_command(_Cmd("STATUS_DRIVE_CYCLE")) is _mod.new_status
-
-    def test_routes_air_status(self):
-        assert _mod._route_command(_Cmd("AIR_STATUS")) is _mod.new_air_status
-
-    def test_routes_fuel_status(self):
-        assert _mod._route_command(_Cmd("FUEL_STATUS")) is _mod.new_fuel_status
-
-    def test_routes_generic_numeric_to_new_value(self):
-        assert _mod._route_command(_Cmd("RPM")) is _mod.new_value
+    @pytest.mark.parametrize(
+        "name, expected_callback",
+        [
+            ("STATUS", _mod.new_status),
+            ("STATUS_DRIVE_CYCLE", _mod.new_status),
+            ("AIR_STATUS", _mod.new_air_status),
+            ("FUEL_STATUS", _mod.new_fuel_status),
+            ("RPM", _mod.new_value),  # generic numeric PID
+        ],
+    )
+    def test_routes_to_expected_callback(self, name, expected_callback):
+        assert _mod._route_command(_Cmd(name)) is expected_callback
 
     def test_excludes_mode2_freeze_frame_twins(self):
         # python-obd adds a DTC_-prefixed mode-2 twin for every supported
@@ -838,7 +822,7 @@ class TestQueuePoint:
     def test_tags_every_point_with_vin(self):
         _mod._vin = "1FATESTVIN0000009"
         _mod._queue_point(_mod.Point("rpm").field("value", 1))
-        assert _mod.pending_points[0]._tags == {"vin": "1FATESTVIN0000009"}
+        assert "vin=1FATESTVIN0000009" in _mod.pending_points[0].to_line_protocol()
 
 
 class TestConnectionHealthy:
@@ -861,3 +845,55 @@ class TestConnectionHealthy:
         conn.is_connected.return_value = True
         _mod._last_append_monotonic = _mod.monotonic() - (_mod.STALE_DATA_TIMEOUT_S + 1)
         assert _mod._connection_healthy(conn) is False
+
+
+class TestMainLoop:
+    def setup_method(self):
+        _reset()
+
+    def test_one_iteration_registers_watches_skips_elm_and_exits(
+        self, monkeypatch, caplog
+    ):
+        """Drive a single hot-loop iteration of main(): the no-car retry loop,
+        supported-command watch registration, the ELM_VOLTAGE skip on
+        (AttributeError, KeyError), and the watchdog sys.exit(1)."""
+        cmd = _Cmd("RPM")
+        connection = MagicMock()
+        # 1st status -> no car (enter retry loop); then Car Connected for the
+        # loop re-check and the debug log after the loop.
+        connection.status.side_effect = [
+            "No car connected", "Car Connected", "Car Connected",
+        ]
+        connection.supported_commands = [cmd]
+
+        def watch(command, callback=None):
+            # Only the ELM_VOLTAGE registration fails; PID watches succeed.
+            if command is _mod.obd.commands.ELM_VOLTAGE:
+                raise KeyError("no voltage command")
+
+        connection.watch.side_effect = watch
+
+        with patch.object(_mod.Spool, "from_config", return_value=MagicMock()), \
+                patch.object(_mod._influx, "connect"), \
+                patch.object(_mod, "_configure_obd_logging"), \
+                patch.object(_mod, "connect", return_value=connection) as mock_connect, \
+                patch.object(_mod, "_resolve_vin", return_value="TESTVIN0000000001"), \
+                patch.object(_mod, "_query_fuel_type_once"), \
+                patch.object(_mod, "_pump") as mock_pump, \
+                patch.object(_mod, "_connection_healthy", return_value=False), \
+                patch.object(_mod, "sleep"), \
+                caplog.at_level(logging.WARNING, logger="telem"):
+            with pytest.raises(SystemExit) as exc:
+                _mod.main()
+
+        assert exc.value.code == 1
+        # No-car retry ran once: initial connect + one reconnect.
+        assert mock_connect.call_count == 2
+        connection.close.assert_called_once()
+        # Supported PID registered with its routed callback.
+        connection.watch.assert_any_call(cmd, callback=_mod.new_value)
+        # ELM_VOLTAGE registration raised KeyError and was skipped with a warning.
+        assert any("voltage monitoring" in r.message for r in caplog.records)
+        # One hot-loop cycle ran (pump) before the watchdog exit.
+        connection.start.assert_called_once()
+        mock_pump.assert_called_once()

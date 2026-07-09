@@ -41,14 +41,12 @@ class TestDispatcher:
                 cli.main()
         assert "OBD_PORT" in capsys.readouterr().err
 
-    def test_no_args_exits_nonzero(self):
-        with patch.object(sys, 'argv', ['lemongrass']):
-            with pytest.raises(SystemExit) as exc:
-                cli.main()
-        assert exc.value.code != 0
-
-    def test_unknown_command_exits_nonzero(self):
-        with patch.object(sys, 'argv', ['lemongrass', 'notacommand']):
+    @pytest.mark.parametrize("argv", [
+        ['lemongrass'],                    # no command
+        ['lemongrass', 'notacommand'],     # unknown command
+    ])
+    def test_missing_or_unknown_command_exits_nonzero(self, argv):
+        with patch.object(sys, 'argv', argv):
             with pytest.raises(SystemExit) as exc:
                 cli.main()
         assert exc.value.code != 0
@@ -213,11 +211,13 @@ class TestRaceMonitorErrors:
         assert 'rate limit' in err.lower()
         assert '429' in err
 
-    def test_other_http_error_exits_1_with_status(self, capsys):
+    def test_other_http_error_exits_1_with_status_and_body(self, capsys):
+        """A non-429 HTTP error prints the status line and, below it, the
+        response body so the operator sees the server's reason."""
         from race_monitor import RaceMonitorHTTPError
 
         def raise_500():
-            raise RaceMonitorHTTPError(500, "boom")
+            raise RaceMonitorHTTPError(500, "upstream database unavailable")
 
         with patch.object(sys, 'argv', ['lemongrass', 'races', 'list']):
             with patch('lemongrass.races.main', raise_500):
@@ -227,6 +227,7 @@ class TestRaceMonitorErrors:
         err = capsys.readouterr().err
         assert '500' in err
         assert 'rate limit' not in err.lower()
+        assert 'upstream database unavailable' in err
 
     def test_base_error_exits_1_without_traceback(self, capsys):
         from race_monitor import RaceMonitorError

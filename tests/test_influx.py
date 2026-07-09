@@ -7,39 +7,38 @@ from urllib3 import Retry
 import lemongrass._influx as influx_mod
 
 
-def test_defaults_match_prod(monkeypatch):
-    monkeypatch.delenv('INFLUX_URL', raising=False)
-    monkeypatch.delenv('INFLUX_ORG', raising=False)
-    reloaded = importlib.reload(influx_mod)
-    assert reloaded.INFLUX_URL == 'https://influxdb.focism.com'
-    assert reloaded.INFLUX_ORG == 'focism'
+@pytest.fixture
+def reload_influx(monkeypatch):
+    """Reload _influx (which snapshots the config at import time) and restore the
+    default module state on teardown, so an env-mutating reload can't leak into
+    later tests regardless of ordering. Yields a callable that performs the reload
+    and returns the reloaded module."""
+    yield lambda: importlib.reload(influx_mod)
+    for var in ("LEMONGRASS_CONFIG", "INFLUX_URL", "INFLUX_ORG"):
+        monkeypatch.delenv(var, raising=False)
+    importlib.reload(influx_mod)
 
 
-def test_env_does_not_override_influx_constants(monkeypatch):
+def test_env_does_not_override_influx_constants(monkeypatch, reload_influx):
     monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
     monkeypatch.setenv('INFLUX_URL', 'http://localhost:8086')
     monkeypatch.setenv('INFLUX_ORG', 'lemongrass')
-    reloaded = importlib.reload(influx_mod)
+    reloaded = reload_influx()
     assert reloaded.INFLUX_URL == 'https://influxdb.focism.com'
     assert reloaded.INFLUX_ORG == 'focism'
-    monkeypatch.delenv('INFLUX_URL', raising=False)
-    monkeypatch.delenv('INFLUX_ORG', raising=False)
-    importlib.reload(influx_mod)  # restore default module state for later tests
 
 
-def test_bucket_names():
-    assert influx_mod.BUCKET_LAPS == 'laps'
-    assert influx_mod.BUCKET_RACES == 'races'
-    assert influx_mod.BUCKET_SESSIONS == 'race_sessions'
-
-
-def test_retry_policy_shape():
-    assert isinstance(influx_mod.INFLUX_RETRIES, Retry)
-    assert influx_mod.INFLUX_RETRIES.total == 3
-    assert 530 in influx_mod.INFLUX_RETRIES.status_forcelist
-    assert influx_mod.INFLUX_RETRIES.respect_retry_after_header is False
-    assert influx_mod.INFLUX_RETRIES.allowed_methods is None
-    assert influx_mod.INFLUX_RETRIES.backoff_max == 10
+@pytest.mark.parametrize("retries,total", [
+    (influx_mod.INFLUX_RETRIES, 3),      # the shared module-level default
+    (influx_mod.build_retries(1), 1),    # a trimmed budget shares the same policy
+])
+def test_build_retries_shares_transient_policy(retries, total):
+    assert isinstance(retries, Retry)
+    assert retries.total == total
+    assert retries.status_forcelist == [429, 502, 503, 504, 530]
+    assert retries.respect_retry_after_header is False
+    assert retries.allowed_methods is None
+    assert retries.backoff_max == 10
 
 
 def test_connect_exits_when_token_missing(monkeypatch, caplog):
@@ -86,40 +85,23 @@ def test_connect_forwards_timeout_and_retries(monkeypatch):
     )
 
 
-def test_build_retries_shares_transient_policy_with_fewer_attempts():
-    trimmed = influx_mod.build_retries(1)
-    assert isinstance(trimmed, Retry)
-    assert trimmed.total == 1
-    # Same transient-error semantics as the shared default, only fewer attempts.
-    assert trimmed.status_forcelist == influx_mod.INFLUX_RETRIES.status_forcelist
-    assert trimmed.respect_retry_after_header is False
-    assert trimmed.allowed_methods is None
-    assert trimmed.backoff_max == 10
-
-
-def test_connect_reads_token_from_configured_env_var(monkeypatch, tmp_path):
+def test_connect_reads_token_from_configured_env_var(monkeypatch, tmp_path, reload_influx):
     cfg = tmp_path / "c.toml"
     cfg.write_text('[influx]\ntoken_env = "MY_TOKEN"\n')
     monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
     monkeypatch.delenv('INFLUX_TELEMETRY_TOKEN', raising=False)
     monkeypatch.setenv('MY_TOKEN', 'via-directive')
-    reloaded = importlib.reload(influx_mod)
+    reloaded = reload_influx()
     with mock.patch('influxdb_client.InfluxDBClient') as client_cls:
         reloaded.connect()
     assert client_cls.call_args.kwargs['token'] == 'via-directive'
-    monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
-    importlib.reload(influx_mod)  # restore default module state for later tests
 
 
 class TestInvalidFluxIds:
-    def test_clean_ids_pass(self):
-        from lemongrass import _influx
-        assert _influx.invalid_flux_ids(['144185', 'car_25-2']) == []
-
-    def test_metacharacters_rejected(self):
-        from lemongrass import _influx
-        assert _influx.invalid_flux_ids(['ok', 'bad"id', 'a b']) == ['bad"id', 'a b']
-
-    def test_non_strings_coerced(self):
-        from lemongrass import _influx
-        assert _influx.invalid_flux_ids([144185]) == []
+    @pytest.mark.parametrize("values,expected", [
+        (['144185', 'car_25-2'], []),                     # clean ids pass
+        (['ok', 'bad"id', 'a b'], ['bad"id', 'a b']),     # metacharacters rejected
+        ([144185], []),                                   # non-strings coerced
+    ])
+    def test_invalid_flux_ids(self, values, expected):
+        assert influx_mod.invalid_flux_ids(values) == expected

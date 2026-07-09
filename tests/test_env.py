@@ -14,6 +14,14 @@ def test_single_token_returns_str(monkeypatch):
     assert _env.resolve_tokens() == "solo"
 
 
+def test_single_item_pool_returns_str(monkeypatch):
+    """A pool var holding one token collapses to the bare string, not a
+    one-element list — distinct from the legacy-var path above."""
+    monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
+    monkeypatch.setenv("RACEMONITOR_TOKENS", "only")
+    assert _env.resolve_tokens() == "only"
+
+
 def test_pool_var_name_is_configurable(monkeypatch, tmp_path):
     cfg = tmp_path / "c.toml"
     cfg.write_text('[racemonitor]\ntokens_env = "MY_POOL"\n')

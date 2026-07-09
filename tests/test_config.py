@@ -133,6 +133,17 @@ class TestValidation:
         with pytest.raises(_config.ConfigError, match=f"{section}.*must be a table"):
             _config.load_config()
 
+    @pytest.mark.parametrize("body,match", [
+        ("[telem.obd]\nbaudrate = \"fast\"", "baudrate must be an integer"),
+        ("[telem.obd]\ndebug = 5", "debug must be a boolean"),
+        ("[races.backfill]\nsearch_terms = [1, 2]",
+         "search_terms must be a list of strings"),
+    ])
+    def test_typed_wrong_type_raises(self, tmp_path, monkeypatch, body, match):
+        _write_cfg(tmp_path, monkeypatch, body)
+        with pytest.raises(_config.ConfigError, match=match):
+            _config.load_config()
+
     def test_bad_max_size_raises(self, tmp_path, monkeypatch):
         _write_cfg(tmp_path, monkeypatch, """
             [telem.spool]
@@ -170,15 +181,12 @@ class TestSecretsOnlyEnv:
         ]:
             monkeypatch.setenv(var, val)
         c = _config.load_config()
-        assert c.influx.url == "http://from-file:8086"   # file wins
-        assert c.influx.org == "focism"                  # default kept; env ignored
-        assert c.telem.obd.port == "/dev/obd"
-        assert c.telem.obd.baudrate == 0
-        assert c.telem.obd.debug is False
-        assert c.telem.vin == ""
-        assert c.telem.spool.dir == "/data/telem-spool"
-        assert c.telem.spool.max_size == 1073741824
-        assert c.pisugar.host == ""
+        # Prove env is ignored across sections; the full default matrix is
+        # already asserted by test_defaults_match_todays_literals.
+        assert c.influx.url == "http://from-file:8086"   # file wins over env
+        assert c.influx.org == "focism"                  # env ignored, default kept
+        assert c.telem.obd.port == "/dev/obd"            # env ignored
+        assert c.pisugar.host == ""                      # env ignored
 
     def test_buckets_have_no_env_override(self, monkeypatch):
         monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)

@@ -651,7 +651,7 @@ def print_rankings(sorted_competitors, _race_live, selected_class, categories):
 
     for competitor in sorted_competitors:
         for item in competitor:
-            if (item == "FirstName" and item != '') or (item == "LastName" and item != ''):
+            if item in ("FirstName", "LastName") and competitor[item] != '':
                 list_of_names.append(competitor[item])
 
     for competitor in sorted_competitors:
