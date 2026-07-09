@@ -276,7 +276,10 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     # every race, created lazily on the first re-backfill and closed in finally.
     client = None
     try:
-        for race_id, race_name in sorted(stored_races.items()):
+        # race_id keys are Influx tag strings; sort numerically so the run is a
+        # predictable ascending sweep rather than a lexicographic one where a
+        # shorter id (e.g. "9793") lands amid the longer six-digit ids.
+        for race_id, race_name in sorted(stored_races.items(), key=lambda kv: int(kv[0])):
             total_tables = query_api.query(
                 f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
                 f'  |> range(start: {EPOCH_START})\n'

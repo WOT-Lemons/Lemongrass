@@ -463,6 +463,20 @@ class TestRunUpgradeStored:
                 _mod.run_upgrade_stored(query_api)
         mk_backfill.assert_not_called()
 
+    def test_processes_races_in_ascending_numeric_order(self):
+        # race_id keys are Influx tag strings; a plain sorted() orders them
+        # lexicographically, so a shorter id sorts into the middle of longer ones.
+        # Sort numerically so the run is a predictable ascending sweep.
+        query_api = self._query_api(
+            stored_races={'113450': 'C', '9793': 'A', '100247': 'B'},
+            total_by_race={'113450': 5, '9793': 5, '100247': 5},
+            current_by_race={'113450': 0, '9793': 0, '100247': 0},
+        )
+        with self._inprocess(return_value=0) as mk_backfill:
+            _mod.run_upgrade_stored(query_api, force=True)
+        called_ids = [c.args[0] for c in mk_backfill.call_args_list]
+        assert called_ids == ['9793', '100247', '113450']
+
     def test_returns_failed_race_ids(self):
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},
