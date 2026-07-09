@@ -4015,3 +4015,38 @@ class TestMainFastPath:
                                 result = _mod.main()
         assert result == 0
         mock_rm.assert_called_once()
+
+
+class TestBackfillRace:
+    """The in-process backfill seam reused by race-backfill --upgrade-stored."""
+
+    def _details(self):
+        return {'Successful': True, 'Race': {
+            'Name': 'Test', 'StartDateEpoc': 0, 'EndDateEpoc': 0, 'Track': 'T'}}
+
+    def test_returns_1_for_live_race_without_car_number(self):
+        """The historical batch path passes car_number=None; a race that is
+        unexpectedly live must fail just that race (return 1), not sys.exit and
+        abort an entire --upgrade-stored run."""
+        client = MagicMock()
+        client.race.details.return_value = self._details()
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_race_metadata', return_value=None):
+            assert _mod.backfill_race('101', None, client, opts) == 1
+
+    def test_uses_injected_client_for_historical_backfill(self):
+        """A completed race is dispatched through _run_race using the caller's
+        client, and the function returns _run_race's status."""
+        client = MagicMock()
+        client.race.details.return_value = self._details()
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_race_metadata', return_value=None), \
+             patch.object(_mod._influx, 'connect') as mock_connect, \
+             patch.object(_mod, '_run_race', return_value=0) as mock_run_race:
+            mock_connect.return_value.__enter__.return_value = MagicMock()
+            result = _mod.backfill_race('101', None, client, opts)
+        assert result == 0
+        ctx = mock_run_race.call_args.args[0]
+        assert ctx.client is client

@@ -234,63 +234,78 @@ def main():
 
     try:
         with RaceMonitorClient(api_token=tokens) as client:
-            race_details = client.race.details(race_id)
-
-            start_epoc = 0
-            if race_details['Successful']:
-                race_name = race_details['Race']['Name']
-                start_epoc = race_details['Race']['StartDateEpoc']
-                logging.debug("StartDateEpoc: %s", start_epoc)
-                start_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_epoc))
-                end_epoc = race_details['Race']['EndDateEpoc']
-                end_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_epoc))
-                race_track = race_details['Race']['Track']
-                print(UNDERLINE)
-                print(f"Race {race_id}")
-                print(
-                    f"{race_name}\tStarted: {start_date:>}\n"
-                    f"{race_track}\t\t\tEnds: {end_date:>}"
-                )
-                print(UNDERLINE)
-
-            metadata = _resolve_race_metadata(race_details, client) if opts.network_mode else None
-
-            if opts.selected_class:
-                logging.info("Sorting results for class %s.", opts.selected_class.upper())
-
-            response = client.race.is_live(race_id)
-
-            is_live = response.get('Successful') and response.get('IsLive')
-            if car_number is None and (args.monitor_mode or is_live):
-                logging.error("car_number is required for live/monitor mode")
-                sys.exit(1)
-            if car_number is not None and not is_live and not args.monitor_mode:
-                logging.warning("car_number provided but ignored in historical fieldwide mode")
-
-            if not response['Successful']:
-                return 1
-
-            if not opts.network_mode:
-                return _run_race(
-                    RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
-                    opts, response)
-
-            if opts.dry_run:
-                return _run_race(
-                    RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
-                    opts, response)
-
-            with _influx.connect() as influx_client:
-                write_api = influx_client.write_api(write_options=SYNCHRONOUS)
-                delete_api = influx_client.delete_api()
-                query_api = influx_client.query_api()
-                return _run_race(
-                    RaceContext(race_id, car_number, client, write_api, start_epoc,
-                                metadata=metadata, delete_api=delete_api,
-                                query_api=query_api), opts, response)
+            return backfill_race(race_id, car_number, client, opts)
     except KeyboardInterrupt:
         logging.info("Interrupted, exiting.")
         sys.exit(130)
+
+
+def backfill_race(race_id, car_number, client, opts):
+    """Fetch and process one race using an already-open RaceMonitorClient.
+
+    Extracted from main() so a batch caller (race-backfill --upgrade-stored) can
+    reuse a single client — and therefore a single process-wide rate-limiter
+    window — across many races, instead of paying a fresh rate-limit window per
+    subprocess and overrunning the server's per-token budget at each boundary.
+
+    Returns an int exit status (0 ok, non-zero failure). KeyboardInterrupt (and
+    any RaceMonitorError, e.g. 429 exhaustion) propagates to the caller so a
+    batch loop can decide whether to stop or record-and-continue.
+    """
+    race_details = client.race.details(race_id)
+
+    start_epoc = 0
+    if race_details['Successful']:
+        race_name = race_details['Race']['Name']
+        start_epoc = race_details['Race']['StartDateEpoc']
+        logging.debug("StartDateEpoc: %s", start_epoc)
+        start_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_epoc))
+        end_epoc = race_details['Race']['EndDateEpoc']
+        end_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_epoc))
+        race_track = race_details['Race']['Track']
+        print(UNDERLINE)
+        print(f"Race {race_id}")
+        print(
+            f"{race_name}\tStarted: {start_date:>}\n"
+            f"{race_track}\t\t\tEnds: {end_date:>}"
+        )
+        print(UNDERLINE)
+
+    metadata = _resolve_race_metadata(race_details, client) if opts.network_mode else None
+
+    if opts.selected_class:
+        logging.info("Sorting results for class %s.", opts.selected_class.upper())
+
+    response = client.race.is_live(race_id)
+
+    is_live = response.get('Successful') and response.get('IsLive')
+    if car_number is None and (opts.monitor_mode or is_live):
+        logging.error("car_number is required for live/monitor mode")
+        return 1
+    if car_number is not None and not is_live and not opts.monitor_mode:
+        logging.warning("car_number provided but ignored in historical fieldwide mode")
+
+    if not response['Successful']:
+        return 1
+
+    if not opts.network_mode:
+        return _run_race(
+            RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
+            opts, response)
+
+    if opts.dry_run:
+        return _run_race(
+            RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
+            opts, response)
+
+    with _influx.connect() as influx_client:
+        write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+        delete_api = influx_client.delete_api()
+        query_api = influx_client.query_api()
+        return _run_race(
+            RaceContext(race_id, car_number, client, write_api, start_epoc,
+                        metadata=metadata, delete_api=delete_api,
+                        query_api=query_api), opts, response)
 
 
 def _run_race(ctx, opts, response):
