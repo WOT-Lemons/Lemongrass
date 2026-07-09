@@ -36,7 +36,6 @@ def test_build_retries_shares_transient_policy(retries, total):
     assert isinstance(retries, Retry)
     assert retries.total == total
     assert retries.status_forcelist == [429, 502, 503, 504, 530]
-    assert 530 in retries.status_forcelist
     assert retries.respect_retry_after_header is False
     assert retries.allowed_methods is None
     assert retries.backoff_max == 10

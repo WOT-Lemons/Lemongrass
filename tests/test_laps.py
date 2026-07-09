@@ -49,6 +49,19 @@ def single_car_session():
     return _single_car_session_details
 
 
+def _capture_lap_points():
+    """Return (captured_list, patch_cm) so _build_lap_points runs for real and
+    the emitted lap Point objects are captured from _write_points_chunked
+    (standings points written in the same pass are filtered out)."""
+    captured = []
+
+    def _cap(_api, points):
+        captured.extend(p for p in points if p.to_line_protocol().startswith('lap,'))
+
+    cm = patch.object(_mod, '_write_points_chunked', side_effect=_cap)
+    return captured, cm
+
+
 class TestResolveTokens:
     def test_multi_tokens_returns_list(self):
         with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN1,TOKEN2'}, clear=True):
@@ -1367,18 +1380,7 @@ class TestOldRaceClassWiring:
         return _single_car_session_details(
             car_number=car_number, category=cat_id, category_name=cat_name)
 
-    @staticmethod
-    def _capture_points():
-        """Return (captured_list, patch_cm) so _build_lap_points runs for real and
-        the emitted lap Point objects are captured from _write_points_chunked
-        (standings points written in the same pass are filtered out)."""
-        captured = []
-
-        def _cap(_api, points):
-            captured.extend(p for p in points if p.to_line_protocol().startswith('lap,'))
-
-        cm = patch.object(_mod, '_write_points_chunked', side_effect=_cap)
-        return captured, cm
+    _capture_points = staticmethod(_capture_lap_points)
 
     def test_calls_resolve_class_historical_per_session(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -2562,15 +2564,7 @@ class TestOldRaceFullField:
         ctx.client.results.session_details.return_value = session_details
         return ctx
 
-    @staticmethod
-    def _capture_points():
-        captured = []
-
-        def _cap(_api, points):
-            captured.extend(p for p in points if p.to_line_protocol().startswith('lap,'))
-
-        cm = patch.object(_mod, '_write_points_chunked', side_effect=_cap)
-        return captured, cm
+    _capture_points = staticmethod(_capture_lap_points)
 
     @staticmethod
     def _car_number(point):
