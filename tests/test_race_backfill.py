@@ -463,6 +463,20 @@ class TestRunUpgradeStored:
                 _mod.run_upgrade_stored(query_api)
         mk_backfill.assert_not_called()
 
+    def test_processes_races_in_ascending_numeric_order(self):
+        # race_id keys are Influx tag strings; a plain sorted() orders them
+        # lexicographically, so a shorter id sorts into the middle of longer ones.
+        # Sort numerically so the run is a predictable ascending sweep.
+        query_api = self._query_api(
+            stored_races={'113450': 'C', '9793': 'A', '100247': 'B'},
+            total_by_race={'113450': 5, '9793': 5, '100247': 5},
+            current_by_race={'113450': 0, '9793': 0, '100247': 0},
+        )
+        with self._inprocess(return_value=0) as mk_backfill:
+            _mod.run_upgrade_stored(query_api, force=True)
+        called_ids = [c.args[0] for c in mk_backfill.call_args_list]
+        assert called_ids == ['9793', '100247', '113450']
+
     def test_returns_failed_race_ids(self):
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},
@@ -730,6 +744,27 @@ class TestMainTokenResolution:
                         _mod.main()
         assert exc_info.value.code == 1
         assert any('MY_POOL' in r.message for r in caplog.records)
+
+
+class TestMainConfiguresLogging:
+    def test_main_configures_info_logging(self):
+        # race-backfill runs under the `lemongrass` console script, whose dispatch
+        # path (cli.main -> races.main -> race_backfill.main) never configures
+        # logging — the basicConfig in the __main__ guard doesn't run on import.
+        # main() must configure INFO itself, or every progress logging.info() line
+        # (SKIP / re-backfilling / summary) is silently dropped at the default
+        # WARNING level.
+        import logging
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'T'}, clear=True):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
+                    mock_rm_cls.return_value.__enter__.return_value = MagicMock()
+                    with patch.object(_mod, 'find_matching_races', return_value=[]):
+                        with patch.object(_mod, 'run_backfill', return_value=[]):
+                            with patch.object(_mod.logging, 'basicConfig') as mock_bc:
+                                _mod.main()
+        mock_bc.assert_called_once()
+        assert mock_bc.call_args.kwargs.get('level') == logging.INFO
 
 
 class TestValidateWindowPadding:

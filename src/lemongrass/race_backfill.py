@@ -276,7 +276,10 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     # every race, created lazily on the first re-backfill and closed in finally.
     client = None
     try:
-        for race_id, race_name in sorted(stored_races.items()):
+        # race_id keys are Influx tag strings; sort numerically so the run is a
+        # predictable ascending sweep rather than a lexicographic one where a
+        # shorter id (e.g. "9793") lands amid the longer six-digit ids.
+        for race_id, race_name in sorted(stored_races.items(), key=lambda kv: int(kv[0])):
             total_tables = query_api.query(
                 f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
                 f'  |> range(start: {EPOCH_START})\n'
@@ -360,6 +363,13 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
 
 def main():
     """Entry point: parse args, discover races, then backfill or validate."""
+    # The `lemongrass` console script dispatches here by import (cli.main ->
+    # races.main -> race_backfill.main), so the __main__ guard's basicConfig never
+    # runs. Configure logging here or every progress logging.info() line is
+    # dropped at the root logger's default WARNING level.
+    logging.basicConfig(
+        level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
     args = _build_parser().parse_args()
 
     if args.upgrade_stored:
@@ -403,6 +413,4 @@ def main():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     main()
