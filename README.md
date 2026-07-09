@@ -10,15 +10,16 @@ Open source car telemetry for 24 Hours of Lemons.
 - An InfluxDB instance running v2.x
 - Grafana to visualize the data
 
-## Raspberry Pi Services
+## Services
 
-The services on the pi are defined by a `docker-compose.yml` managed in the deployment (IaC) repository, not in this repo.
+This repo provides two long-running services that run on the pi:
 
 | Service | Description |
 | --- | --- |
 | telem | Monitors car data via OBD-II USB adapter |
 | pisugar-monitor | Monitors PiSugar 3 UPS |
-| telegraf | Monitors Raspberry Pi OS |
+
+Deployment and orchestration (docker-compose, telegraf for OS metrics, etc.) are managed in the deployment (IaC) repository, not here.
 
 ## Lap Data
 
