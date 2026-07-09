@@ -295,7 +295,13 @@ def _route_command(command):
 
 
 def new_status(r):
-    """Queue MIL and DTC count for batch write to InfluxDB."""
+    """Queue MIL and DTC count for batch write to InfluxDB.
+
+    For the primary STATUS command, a rising DTC count also triggers an
+    on-demand forced GET_DTC read via _fetch_and_store_dtcs() (queuing an
+    extra -Get-DTCs point), tracking _last_dtc_count / _dtc_fetch_failures with
+    a give-up threshold on repeated failures.
+    """
     global _last_dtc_count, _dtc_fetch_failures
 
     if r.value is None:

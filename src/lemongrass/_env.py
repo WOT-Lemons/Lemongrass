@@ -17,8 +17,9 @@ def _legacy_applies(pool_var: str) -> bool:
 
 
 def resolve_tokens() -> str | list[str]:
-    """Return tokens from the configured pool var (comma-separated) or fall back
-    to the legacy singular RACEMONITOR_TOKEN."""
+    """Return tokens from the configured pool var (comma-separated) or, when the
+    default pool var is in use, fall back to the legacy singular
+    RACEMONITOR_TOKEN. A deployment naming its own pool var gets '' instead."""
     pool_var = _pool_var()
     multi = os.environ.get(pool_var)
     if multi:
