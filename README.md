@@ -12,7 +12,7 @@ Open source car telemetry for 24 Hours of Lemons.
 
 ## Raspberry Pi Services
 
-The services on the pi are managed via [docker-compose.yml](docker-compose.yml).
+The services on the pi are defined by a `docker-compose.yml` managed in the deployment (IaC) repository, not in this repo.
 
 | Service | Description |
 | --- | --- |
