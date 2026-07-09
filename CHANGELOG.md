@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.0.1](https://github.com/WOT-Lemons/Lemongrass/compare/v5.0.0...v5.0.1) (2026-07-09)
+
+
+### Bug Fixes
+
+* **race-backfill:** re-backfill in-process to stop 429 rate-limit exhaustion ([#197](https://github.com/WOT-Lemons/Lemongrass/issues/197)) ([440c487](https://github.com/WOT-Lemons/Lemongrass/commit/440c487b23b3eb6963d46df58039f33c78f9da79))
+
 ## [5.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v4.0.0...v5.0.0) (2026-07-08)
 
 
