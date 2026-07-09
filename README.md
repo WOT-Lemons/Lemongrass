@@ -19,7 +19,7 @@ This repo provides two long-running services that run on the pi:
 | telem | Monitors car data via OBD-II USB adapter |
 | pisugar-monitor | Monitors PiSugar 3 UPS |
 
-Deployment and orchestration (docker-compose, telegraf for OS metrics, etc.) are managed in the deployment (IaC) repository, not here.
+Deployment and orchestration (docker-compose, telegraf for OS metrics, etc.) should be managed in a separate IaC repository, not here.
 
 ## Lap Data
 
