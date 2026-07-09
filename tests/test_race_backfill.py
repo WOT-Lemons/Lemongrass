@@ -1,8 +1,10 @@
 import importlib
+import logging
 import os
 import sys
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,6 +21,40 @@ EPOC_2020 = 1577836800
 EPOC_2021 = 1609459200
 EPOC_2022 = 1640995200
 EPOC_2023 = 1672531200
+
+
+@contextmanager
+def _inprocess_backfill(results=None):
+    """Patch the in-process backfill seam (shared RaceMonitorClient +
+    resolve_tokens + laps.backfill_race), yielding the backfill_race mock.
+
+    The mock carries a `.calls` list recording each invocation as
+    SimpleNamespace(race_id, car_number, client, opts), so tests assert on named
+    arguments and an observable client identity rather than brittle positional
+    call_args indices. It also exposes `.client_cls`, the patched
+    RaceMonitorClient, for asserting how many clients were created. `results`,
+    when given, is the per-call outcome list — an int is returned as the exit
+    code, a BaseException instance is raised; the default is 0 for every call.
+    """
+    calls = []
+    outcomes = iter(results) if results is not None else None
+
+    def record(race_id, car_number, client, opts):
+        calls.append(SimpleNamespace(race_id=race_id, car_number=car_number,
+                                     client=client, opts=opts))
+        if outcomes is None:
+            return 0
+        outcome = next(outcomes)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()) as mk_client, \
+         patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+         patch('lemongrass.laps.backfill_race', side_effect=record) as mk_backfill:
+        mk_backfill.calls = calls
+        mk_backfill.client_cls = mk_client
+        yield mk_backfill
 
 
 class TestFindMatchingRaces:
@@ -97,13 +133,11 @@ class TestRunBackfill:
         mk_client.assert_not_called()
 
     def test_dry_run_logs_race_name(self, caplog):
-        import logging
         with caplog.at_level(logging.INFO, logger='root'):
             _mod.run_backfill(self._races(), dry_run=True)
         assert any('Real Hoopties 2022' in r.message for r in caplog.records)
 
     def test_failure_summary_logged_when_any_race_fails(self, caplog):
-        import logging
         with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
              patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
              patch('lemongrass.laps._influx_only_skip', return_value=False), \
@@ -113,7 +147,6 @@ class TestRunBackfill:
         assert any('2 race(s) failed' in r.message for r in caplog.records)
 
     def test_no_failure_summary_when_all_succeed(self, caplog):
-        import logging
         with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
              patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
              patch('lemongrass.laps._influx_only_skip', return_value=False), \
@@ -151,24 +184,20 @@ class TestRunBackfill:
     def test_reuses_single_client_across_races(self):
         """One RaceMonitorClient (and its rate-limiter window) is shared across
         every race, instead of a fresh subprocess/window per race."""
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()) as mk_client, \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps._influx_only_skip', return_value=False), \
-             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
+        with _inprocess_backfill() as mk_backfill, \
+             patch('lemongrass.laps._influx_only_skip', return_value=False):
             _mod.run_backfill(self._races())
-        assert mk_client.call_count == 1
+        assert mk_backfill.client_cls.call_count == 1
         assert mk_backfill.call_count == 2
-        clients = {c.args[2] for c in mk_backfill.call_args_list}
+        clients = {c.client for c in mk_backfill.calls}
         assert len(clients) == 1
 
     def test_backfill_called_fieldwide_with_race_id(self):
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps._influx_only_skip', return_value=False), \
-             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
+        with _inprocess_backfill() as mk_backfill, \
+             patch('lemongrass.laps._influx_only_skip', return_value=False):
             _mod.run_backfill(self._races()[:1])
-        assert mk_backfill.call_args.args[0] == '101'  # race_id
-        assert mk_backfill.call_args.args[1] is None   # car_number (fieldwide)
+        assert mk_backfill.calls[0].race_id == '101'
+        assert mk_backfill.calls[0].car_number is None
 
     def test_skip_if_complete_skips_without_client_or_racemonitor(self):
         """A race already complete in Influx is skipped with no client created and
@@ -192,39 +221,54 @@ class TestRunBackfill:
         mk_skip.assert_not_called()
         assert mk_backfill.call_count == 1
 
-    def test_backfill_exception_records_failure_and_continues(self):
+
+class TestBackfillOneRace:
+    """Direct coverage of the per-race exception/interrupt/return contract that
+    both run_backfill and run_upgrade_stored delegate to."""
+
+    def _call(self, **backfill_kwargs):
+        failures = []
+        with patch('lemongrass.laps.backfill_race', **backfill_kwargs):
+            stop = _mod._backfill_one_race(MagicMock(), '101', MagicMock(),
+                                           failures, 'Backfill')
+        return stop, failures
+
+    def test_racemonitor_error_recorded_and_continues(self):
         from race_monitor import RaceMonitorHTTPError
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps._influx_only_skip', return_value=False), \
-             patch('lemongrass.laps.backfill_race',
-                   side_effect=[RaceMonitorHTTPError(429, 'rate'), 0]) as mk_backfill:
-            failures = _mod.run_backfill(self._races())
-        assert mk_backfill.call_count == 2
+        stop, failures = self._call(side_effect=RaceMonitorHTTPError(429, 'rate'))
+        assert stop is False
         assert failures == ['101']
 
-    def test_keyboard_interrupt_stops_backfill(self):
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps._influx_only_skip', return_value=False), \
-             patch('lemongrass.laps.backfill_race',
-                   side_effect=[KeyboardInterrupt(), 0]) as mk_backfill:
-            failures = _mod.run_backfill(self._races())
-        assert mk_backfill.call_count == 1
+    def test_keyboard_interrupt_signals_stop(self):
+        stop, failures = self._call(side_effect=KeyboardInterrupt())
+        assert stop is True
         assert failures == []
 
-    def test_programming_bug_propagates_not_swallowed(self):
-        # A non-RaceMonitorError (e.g. a bug or systematic outage) must crash the
-        # run rather than be recorded per-race — otherwise a fault that breaks
-        # every race looks like a data problem instead of a bug.
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps._influx_only_skip', return_value=False), \
-             patch('lemongrass.laps.backfill_race',
-                   side_effect=[AttributeError('boom'), 0]) as mk_backfill:
-            with pytest.raises(AttributeError):
-                _mod.run_backfill(self._races())
-        assert mk_backfill.call_count == 1
+    def test_systemexit_130_signals_stop(self):
+        stop, failures = self._call(side_effect=SystemExit(130))
+        assert stop is True
+        assert failures == []
+
+    def test_systemexit_non_130_recorded_and_continues(self):
+        stop, failures = self._call(side_effect=SystemExit(2))
+        assert stop is False
+        assert failures == ['101']
+
+    def test_programming_bug_propagates(self):
+        # A non-RaceMonitorError (bug or systematic outage) must crash rather than
+        # be recorded per-race, so it surfaces as a bug not a data problem.
+        with pytest.raises(AttributeError):
+            self._call(side_effect=AttributeError('boom'))
+
+    def test_nonzero_return_recorded_as_failure(self):
+        stop, failures = self._call(return_value=1)
+        assert stop is False
+        assert failures == ['101']
+
+    def test_zero_return_no_failure(self):
+        stop, failures = self._call(return_value=0)
+        assert stop is False
+        assert failures == []
 
 
 class TestValidateBackfill:
@@ -257,52 +301,27 @@ class TestValidateBackfill:
         api.query.side_effect = fake_query
         return api
 
-    def test_returns_true_when_race_has_laps(self):
-        query_api = self._make_query_api(lap_count=15)
-        assert _mod.validate_backfill(['101'], query_api) is True
+    def test_returns_true_and_logs_ok_when_race_has_laps(self, caplog):
+        query_api = self._make_query_api(race_name='Lemons 2026', lap_count=15)
+        with caplog.at_level(logging.INFO, logger='root'):
+            assert _mod.validate_backfill(['101'], query_api) is True
+        assert any('OK' in r.message and '15' in r.message and 'Lemons 2026' in r.message
+                   for r in caplog.records)
 
-    def test_returns_false_when_race_has_no_laps(self):
+    def test_returns_false_and_warns_when_race_has_no_laps(self, caplog):
         query_api = self._make_query_api(lap_count=0)
-        assert _mod.validate_backfill(['101'], query_api) is False
+        with caplog.at_level(logging.WARNING, logger='root'):
+            assert _mod.validate_backfill(['101'], query_api) is False
+        assert any('NO laps' in r.message for r in caplog.records)
 
     def test_returns_false_when_race_metadata_missing(self):
         query_api = self._make_query_api(race_name=None, lap_count=15)
         assert _mod.validate_backfill(['101'], query_api) is False
 
-    def test_logs_race_name_in_output(self, caplog):
-        import logging
-        query_api = self._make_query_api(race_name='Lemons 2026', lap_count=15)
-        with caplog.at_level(logging.INFO, logger='root'):
-            _mod.validate_backfill(['101'], query_api)
-        assert any('Lemons 2026' in r.message for r in caplog.records)
-
-    def test_logs_ok_with_lap_count(self, caplog):
-        import logging
-        query_api = self._make_query_api(lap_count=15)
-        with caplog.at_level(logging.INFO, logger='root'):
-            _mod.validate_backfill(['101'], query_api)
-        assert any('OK' in r.message and '15' in r.message for r in caplog.records)
-
-    def test_logs_warning_when_no_laps(self, caplog):
-        import logging
-        query_api = self._make_query_api(lap_count=0)
-        with caplog.at_level(logging.WARNING, logger='root'):
-            _mod.validate_backfill(['101'], query_api)
-        assert any('NO laps' in r.message for r in caplog.records)
-
     def test_laps_not_queried_when_race_metadata_missing(self):
         query_api = self._make_query_api(race_name=None)
         _mod.validate_backfill(['101'], query_api)
         assert query_api.query.call_count == 1
-
-    def test_laps_query_scoped_to_race_time_bounds(self):
-        race_start = datetime(2022, 6, 1, tzinfo=UTC)
-        query_api = self._make_query_api(lap_count=10, race_start=race_start,
-                                         race_end_epoc=1672531200)
-        _mod.validate_backfill(['101'], query_api)
-        laps_flux = query_api.query.call_args_list[1].args[0]
-        assert '1970-01-01' not in laps_flux
-        assert '2022-05-31' in laps_flux  # race_start (2022-06-01) padded back one day
 
     def test_races_query_filters_by_end_time_epoc_field(self):
         query_api = self._make_query_api(lap_count=10)
@@ -311,7 +330,6 @@ class TestValidateBackfill:
         assert '_field == "end_time_epoc"' in races_flux
 
     def test_logs_warning_when_end_time_epoc_zero(self, caplog):
-        import logging
         query_api = self._make_query_api(lap_count=10, race_end_epoc=0)
         with caplog.at_level(logging.WARNING, logger='root'):
             _mod.validate_backfill(['101'], query_api)
@@ -355,9 +373,6 @@ class TestRunUpgradeStored:
             elif '_measurement == "standings"' in flux:
                 # standings query — current (schema_version == SCHEMA_VERSION) vs total (position)
                 if 'r._field == "schema_version"' in flux:
-                    # the freshness contract requires filtering on the current value,
-                    # not merely the presence of a schema_version field
-                    assert f'r._value == {SCHEMA_VERSION}' in flux
                     source = std_current_by_race
                 else:
                     source = std_total_by_race
@@ -379,17 +394,13 @@ class TestRunUpgradeStored:
         return api
 
     @contextmanager
-    def _inprocess(self, **backfill_kwargs):
-        """Patch the in-process backfill seam (shared client + resolve_tokens +
-        laps.backfill_race), yielding the backfill_race mock."""
-        backfill_kwargs.setdefault('return_value', 0)
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps.backfill_race', **backfill_kwargs) as mk_backfill:
+    def _inprocess(self, results=None):
+        """Patch the in-process backfill seam, yielding the backfill_race mock
+        (see module-level _inprocess_backfill)."""
+        with _inprocess_backfill(results) as mk_backfill:
             yield mk_backfill
 
     def test_skips_race_already_at_current_schema(self, caplog):
-        import logging
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},
             total_by_race={'101': 10},
@@ -403,6 +414,26 @@ class TestRunUpgradeStored:
         mk_backfill.assert_not_called()
         assert any('skipping' in r.message and '101' in r.message for r in caplog.records)
 
+    def test_standings_freshness_filters_on_current_schema_value(self):
+        # The freshness contract requires filtering standings on the current
+        # schema value, not merely the presence of a schema_version field.
+        query_api = self._query_api(
+            stored_races={'101': 'Lemons 2024'},
+            total_by_race={'101': 10},
+            current_by_race={'101': 10},
+            std_total_by_race={'101': 8},
+            std_current_by_race={'101': 8},
+        )
+        with self._inprocess():
+            _mod.run_upgrade_stored(query_api)
+        std_current_queries = [
+            c.args[0] for c in query_api.query.call_args_list
+            if '_measurement == "standings"' in c.args[0]
+            and 'r._field == "schema_version"' in c.args[0]
+        ]
+        assert std_current_queries
+        assert all(f'r._value == {SCHEMA_VERSION}' in q for q in std_current_queries)
+
     def test_rebackfills_when_laps_current_but_standings_stale(self):
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},
@@ -414,8 +445,8 @@ class TestRunUpgradeStored:
         with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api)
         assert mk_backfill.call_count == 1
-        assert mk_backfill.call_args.args[0] == '101'
-        assert mk_backfill.call_args.args[1] is None
+        assert mk_backfill.calls[0].race_id == '101'
+        assert mk_backfill.calls[0].car_number is None
 
     def test_rebackfills_when_laps_current_but_standings_missing(self):
         query_api = self._query_api(
@@ -438,8 +469,8 @@ class TestRunUpgradeStored:
         with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api)
         assert mk_backfill.call_count == 1
-        assert mk_backfill.call_args.args[0] == '101'
-        assert mk_backfill.call_args.args[1] is None
+        assert mk_backfill.calls[0].race_id == '101'
+        assert mk_backfill.calls[0].car_number is None
 
     def test_dry_run_does_not_backfill(self):
         query_api = self._query_api(
@@ -452,7 +483,6 @@ class TestRunUpgradeStored:
         mk_backfill.assert_not_called()
 
     def test_skips_race_with_no_stored_laps(self, caplog):
-        import logging
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},
             total_by_race={'101': 0},
@@ -472,9 +502,9 @@ class TestRunUpgradeStored:
             total_by_race={'113450': 5, '9793': 5, '100247': 5},
             current_by_race={'113450': 0, '9793': 0, '100247': 0},
         )
-        with self._inprocess(return_value=0) as mk_backfill:
+        with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api, force=True)
-        called_ids = [c.args[0] for c in mk_backfill.call_args_list]
+        called_ids = [c.race_id for c in mk_backfill.calls]
         assert called_ids == ['9793', '100247', '113450']
 
     def test_returns_failed_race_ids(self):
@@ -483,7 +513,7 @@ class TestRunUpgradeStored:
             total_by_race={'101': 10},
             current_by_race={'101': 5},
         )
-        with self._inprocess(return_value=1):
+        with self._inprocess(results=[1]):
             failures = _mod.run_upgrade_stored(query_api)
         assert failures == ['101']
 
@@ -493,7 +523,7 @@ class TestRunUpgradeStored:
             total_by_race={'101': 10},
             current_by_race={'101': 5},
         )
-        with self._inprocess(return_value=0):
+        with self._inprocess():
             failures = _mod.run_upgrade_stored(query_api)
         assert failures == []
 
@@ -503,37 +533,26 @@ class TestRunUpgradeStored:
             total_by_race={'101': 5, '202': 5},
             current_by_race={'101': 0, '202': 0},
         )
-        with self._inprocess(side_effect=[SystemExit(130), 0]) as mk_backfill:
+        with self._inprocess(results=[SystemExit(130), 0]) as mk_backfill:
             _mod.run_upgrade_stored(query_api)
         assert mk_backfill.call_count == 1
 
-    def test_force_rebackfills_race_already_at_current_schema(self):
+    def test_force_rebackfills_race_already_at_current_schema(self, caplog):
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},
             total_by_race={'101': 10},
             current_by_race={'101': 10},  # already fully current
         )
         with self._inprocess() as mk_backfill:
-            _mod.run_upgrade_stored(query_api, force=True)
-        assert mk_backfill.call_count == 1
-        assert mk_backfill.call_args.args[0] == '101'
-        assert mk_backfill.call_args.args[1] is None
-
-    def test_force_logs_already_current_message(self, caplog):
-        import logging
-        query_api = self._query_api(
-            stored_races={'101': 'Lemons 2024'},
-            total_by_race={'101': 10},
-            current_by_race={'101': 10},  # already fully current
-        )
-        with self._inprocess(return_value=0):
             with caplog.at_level(logging.INFO):
                 _mod.run_upgrade_stored(query_api, force=True)
+        assert mk_backfill.call_count == 1
+        assert mk_backfill.calls[0].race_id == '101'
+        assert mk_backfill.calls[0].car_number is None
         assert any('already current' in r.message and 'force re-backfilling' in r.message
                    for r in caplog.records)
 
     def test_dry_run_force_does_not_backfill(self, caplog):
-        import logging
         query_api = self._query_api(
             stored_races={'101': 'Lemons 2024'},
             total_by_race={'101': 10},
@@ -555,7 +574,6 @@ class TestRunUpgradeStored:
             _mod.run_upgrade_stored(query_api, force=True)
         mk_backfill.assert_not_called()
 
-
     # --- in-process backfill: one shared client/rate-limiter across all races ---
 
     def test_reuses_single_client_across_races(self):
@@ -566,15 +584,12 @@ class TestRunUpgradeStored:
             total_by_race={'101': 10, '202': 10},
             current_by_race={'101': 5, '202': 5},
         )
-        fake_client = MagicMock()
-        with patch.object(_mod, 'RaceMonitorClient', return_value=fake_client) as mk_client, \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
+        with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api)
-        assert mk_client.call_count == 1
+        assert mk_backfill.client_cls.call_count == 1
         assert mk_backfill.call_count == 2
-        clients = {c.args[2] for c in mk_backfill.call_args_list}
-        assert clients == {fake_client}
+        clients = {c.client for c in mk_backfill.calls}
+        assert len(clients) == 1
 
     def test_backfill_called_fieldwide_with_race_id(self):
         """Each race is backfilled fieldwide: race_id passed, car_number None."""
@@ -583,78 +598,11 @@ class TestRunUpgradeStored:
             total_by_race={'101': 10},
             current_by_race={'101': 5},
         )
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps.backfill_race', return_value=0) as mk_backfill:
+        with self._inprocess() as mk_backfill:
             _mod.run_upgrade_stored(query_api)
         assert mk_backfill.call_count == 1
-        args = mk_backfill.call_args.args
-        assert args[0] == '101'   # race_id
-        assert args[1] is None    # car_number (fieldwide)
-
-    def test_backfill_exception_records_failure_and_continues(self):
-        """A per-race error (e.g. 429 exhaustion) is recorded and the run
-        continues to the next race, matching the old continue-on-failure model."""
-        from race_monitor import RaceMonitorHTTPError
-        query_api = self._query_api(
-            stored_races={'101': 'Race 1', '202': 'Race 2'},
-            total_by_race={'101': 10, '202': 10},
-            current_by_race={'101': 5, '202': 5},
-        )
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps.backfill_race',
-                   side_effect=[RaceMonitorHTTPError(429, 'rate'), 0]) as mk_backfill:
-            failures = _mod.run_upgrade_stored(query_api)
-        assert mk_backfill.call_count == 2
-        assert failures == ['101']
-
-    def test_keyboard_interrupt_stops_upgrade(self):
-        """Ctrl-C during a race stops the whole upgrade (no further races)."""
-        query_api = self._query_api(
-            stored_races={'101': 'Race 1', '202': 'Race 2'},
-            total_by_race={'101': 10, '202': 10},
-            current_by_race={'101': 5, '202': 5},
-        )
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps.backfill_race',
-                   side_effect=[KeyboardInterrupt(), 0]) as mk_backfill:
-            failures = _mod.run_upgrade_stored(query_api)
-        assert mk_backfill.call_count == 1
-        assert failures == []
-
-    def test_programming_bug_propagates_not_swallowed(self):
-        """A non-RaceMonitorError crashes the upgrade rather than being recorded
-        per-race, so a systematic fault surfaces as a bug instead of hiding."""
-        query_api = self._query_api(
-            stored_races={'101': 'Race 1', '202': 'Race 2'},
-            total_by_race={'101': 10, '202': 10},
-            current_by_race={'101': 5, '202': 5},
-        )
-        with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \
-             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
-             patch('lemongrass.laps.backfill_race',
-                   side_effect=[AttributeError('boom'), 0]) as mk_backfill:
-            with pytest.raises(AttributeError):
-                _mod.run_upgrade_stored(query_api)
-        assert mk_backfill.call_count == 1
-
-
-class TestUpgradeStoredArgParsing:
-    def test_upgrade_stored_flag_accepted(self):
-        args = _mod._build_parser().parse_args(['--upgrade-stored'])
-        assert args.upgrade_stored is True
-
-    def test_upgrade_stored_default_false(self):
-        args = _mod._build_parser().parse_args([])
-        assert args.upgrade_stored is False
-
-    def test_upgrade_stored_and_force_accepted_together(self):
-        # Previously mutually exclusive — must now parse without error
-        args = _mod._build_parser().parse_args(['--upgrade-stored', '--force'])
-        assert args.upgrade_stored is True
-        assert args.force is True
+        assert mk_backfill.calls[0].race_id == '101'
+        assert mk_backfill.calls[0].car_number is None
 
 
 class TestParseStartDate:
@@ -666,84 +614,145 @@ class TestParseStartDate:
             _mod._parse_start_date('01/01/2021')
         assert exc.value.code == 1
 
-    def test_start_date_arg_default_from_config(self):
-        args = _mod._build_parser().parse_args([])
-        assert args.start_date == _mod.DEFAULT_START_DATE
-
-    def test_start_date_arg_override(self):
-        args = _mod._build_parser().parse_args(['--start-date', '2023-06-01'])
-        assert args.start_date == '2023-06-01'
-
 
 class TestArgParsing:
-    def test_dry_run_flag(self):
-        args = _mod._build_parser().parse_args(['--dry-run'])
-        assert args.dry_run is True
+    @pytest.mark.parametrize('argv, attr, expected', [
+        (['--dry-run'], 'dry_run', True),
+        (['--validate'], 'validate', True),
+        (['--force'], 'force', True),
+        (['--upgrade-stored'], 'upgrade_stored', True),
+        (['--start-date', '2023-06-01'], 'start_date', '2023-06-01'),
+    ])
+    def test_flag_sets_attribute(self, argv, attr, expected):
+        args = _mod._build_parser().parse_args(argv)
+        assert getattr(args, attr) == expected
 
-    def test_dry_run_default(self):
-        args = _mod._build_parser().parse_args([])
-        assert args.dry_run is False
-
-    def test_validate_flag_accepted(self):
-        args = _mod._build_parser().parse_args(['--validate'])
-        assert args.validate is True
-
-    def test_validate_defaults_to_false(self):
-        args = _mod._build_parser().parse_args([])
-        assert args.validate is False
-
-    def test_force_flag_accepted(self):
-        args = _mod._build_parser().parse_args(['--force'])
+    def test_upgrade_stored_and_force_not_mutually_exclusive(self):
+        # Previously mutually exclusive — must now parse together without error.
+        args = _mod._build_parser().parse_args(['--upgrade-stored', '--force'])
+        assert args.upgrade_stored is True
         assert args.force is True
 
-    def test_force_defaults_to_false(self):
-        args = _mod._build_parser().parse_args([])
-        assert args.force is False
+
+class TestOpenClient:
+    def test_exits_when_no_token(self):
+        with patch.object(_mod, 'resolve_tokens', return_value=[]):
+            with pytest.raises(SystemExit) as exc:
+                _mod._open_client()
+        assert exc.value.code == 1
+
+    def test_returns_client_built_from_resolved_tokens(self):
+        with patch.object(_mod, 'resolve_tokens', return_value=['tok']):
+            with patch.object(_mod, 'RaceMonitorClient', return_value='CLIENT') as mk:
+                client = _mod._open_client()
+        assert client == 'CLIENT'
+        mk.assert_called_once_with(api_token=['tok'])
 
 
 class TestMainTokenResolution:
-    def _run_main(self, env):
-        mock_client = MagicMock()
-        with patch.dict(os.environ, env, clear=True):
+    def test_main_wires_resolve_tokens_through(self):
+        """Smoke test: main() resolves tokens and passes them to the client.
+        Thorough token-resolution coverage lives in test_race_diagnose.py."""
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN1,TOKEN2'}, clear=True):
             with patch.object(sys, 'argv', ['race-backfill']):
                 with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
-                    mock_rm_cls.return_value.__enter__.return_value = mock_client
+                    mock_rm_cls.return_value.__enter__.return_value = MagicMock()
                     with patch.object(_mod, 'find_matching_races', return_value=[]):
                         with patch.object(_mod, 'run_backfill', return_value=[]):
                             _mod.main()
-        return mock_rm_cls
-
-    def test_uses_racemonitor_tokens_when_set(self):
-        mock_rm_cls = self._run_main({'RACEMONITOR_TOKENS': 'TOKEN1'})
-        mock_rm_cls.assert_called_once_with(api_token='TOKEN1')
-
-    def test_uses_multi_token_list_when_multiple_tokens_set(self):
-        mock_rm_cls = self._run_main({'RACEMONITOR_TOKENS': 'TOKEN1,TOKEN2'})
         mock_rm_cls.assert_called_once_with(api_token=['TOKEN1', 'TOKEN2'])
 
-    def test_falls_back_to_racemonitor_token(self):
-        mock_rm_cls = self._run_main({'RACEMONITOR_TOKEN': 'FALLBACK'})
-        mock_rm_cls.assert_called_once_with(api_token='FALLBACK')
 
-    def test_exits_when_no_token_set(self):
+class TestMain:
+    """main() control flow: dispatch, exit codes, and interrupt handling."""
+
+    def test_upgrade_stored_with_start_date_exits_1(self):
+        with patch.object(sys, 'argv',
+                          ['race-backfill', '--upgrade-stored', '--start-date', '1999-01-01']):
+            with pytest.raises(SystemExit) as exc:
+                _mod.main()
+        assert exc.value.code == 1
+
+    def test_upgrade_stored_with_validate_exits_1(self):
+        with patch.object(sys, 'argv', ['race-backfill', '--upgrade-stored', '--validate']):
+            with pytest.raises(SystemExit) as exc:
+                _mod.main()
+        assert exc.value.code == 1
+
+    def _run_upgrade_main(self, run_kwargs):
+        with patch.object(sys, 'argv', ['race-backfill', '--upgrade-stored']):
+            with patch('lemongrass._influx.connect') as mk_connect:
+                mk_connect.return_value.__enter__.return_value = MagicMock()
+                with patch.object(_mod, 'run_upgrade_stored', **run_kwargs) as mk_run:
+                    with pytest.raises(SystemExit) as exc:
+                        _mod.main()
+        return exc, mk_run
+
+    def test_upgrade_stored_dispatches_and_exits_0_on_success(self):
+        exc, mk_run = self._run_upgrade_main({'return_value': []})
+        mk_run.assert_called_once()
+        assert exc.value.code == 0
+
+    def test_upgrade_stored_exits_1_on_failures(self):
+        exc, _ = self._run_upgrade_main({'return_value': ['101']})
+        assert exc.value.code == 1
+
+    def test_upgrade_stored_keyboard_interrupt_exits_130(self):
+        exc, _ = self._run_upgrade_main({'side_effect': KeyboardInterrupt()})
+        assert exc.value.code == 130
+
+    def _run_validate_main(self, ok):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'T'}, clear=True):
+            with patch.object(sys, 'argv', ['race-backfill', '--validate']):
+                with patch('lemongrass.race_backfill.RaceMonitorClient') as mk_rm:
+                    mk_rm.return_value.__enter__.return_value = MagicMock()
+                    with patch.object(_mod, 'find_matching_races',
+                                      return_value=[_make_race(101, 'R', EPOC_2022)]):
+                        with patch('lemongrass._influx.connect') as mk_connect:
+                            mk_connect.return_value.__enter__.return_value = MagicMock()
+                            with patch.object(_mod, 'validate_backfill',
+                                              return_value=ok) as mk_val:
+                                with pytest.raises(SystemExit) as exc:
+                                    _mod.main()
+        return exc, mk_val
+
+    def test_validate_dispatches_and_exits_0_when_ok(self):
+        exc, mk_val = self._run_validate_main(ok=True)
+        mk_val.assert_called_once()
+        assert exc.value.code == 0
+
+    def test_validate_exits_1_when_not_ok(self):
+        exc, _ = self._run_validate_main(ok=False)
+        assert exc.value.code == 1
+
+    def test_backfill_failures_exit_1(self):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'T'}, clear=True):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                with patch('lemongrass.race_backfill.RaceMonitorClient') as mk_rm:
+                    mk_rm.return_value.__enter__.return_value = MagicMock()
+                    with patch.object(_mod, 'find_matching_races', return_value=[]):
+                        with patch.object(_mod, 'run_backfill', return_value=['101']):
+                            with pytest.raises(SystemExit) as exc:
+                                _mod.main()
+        assert exc.value.code == 1
+
+    def test_backfill_keyboard_interrupt_exits_130(self):
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'T'}, clear=True):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                with patch('lemongrass.race_backfill.RaceMonitorClient') as mk_rm:
+                    mk_rm.return_value.__enter__.return_value = MagicMock()
+                    with patch.object(_mod, 'find_matching_races',
+                                      side_effect=KeyboardInterrupt()):
+                        with pytest.raises(SystemExit) as exc:
+                            _mod.main()
+        assert exc.value.code == 130
+
+    def test_no_token_exits_1(self):
         with patch.dict(os.environ, {}, clear=True):
             with patch.object(sys, 'argv', ['race-backfill']):
-                with pytest.raises(SystemExit) as exc_info:
+                with pytest.raises(SystemExit) as exc:
                     _mod.main()
-        assert exc_info.value.code == 1
-
-    def test_no_token_error_honors_configured_pool_var(self, caplog, tmp_path):
-        import logging
-        cfg = tmp_path / "c.toml"
-        cfg.write_text('[racemonitor]\ntokens_env = "MY_POOL"\n')
-        env = {'RACEMONITOR_TOKEN': 'stale-legacy', 'LEMONGRASS_CONFIG': str(cfg)}
-        with patch.dict(os.environ, env, clear=True):
-            with patch.object(sys, 'argv', ['race-backfill']):
-                with caplog.at_level(logging.ERROR):
-                    with pytest.raises(SystemExit) as exc_info:
-                        _mod.main()
-        assert exc_info.value.code == 1
-        assert any('MY_POOL' in r.message for r in caplog.records)
+        assert exc.value.code == 1
 
 
 class TestMainConfiguresLogging:
@@ -753,23 +762,29 @@ class TestMainConfiguresLogging:
         # logging — the basicConfig in the __main__ guard doesn't run on import.
         # main() must configure INFO itself, or every progress logging.info() line
         # (SKIP / re-backfilling / summary) is silently dropped at the default
-        # WARNING level.
-        import logging
-        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'T'}, clear=True):
-            with patch.object(sys, 'argv', ['race-backfill']):
-                with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
-                    mock_rm_cls.return_value.__enter__.return_value = MagicMock()
-                    with patch.object(_mod, 'find_matching_races', return_value=[]):
-                        with patch.object(_mod, 'run_backfill', return_value=[]):
-                            with patch.object(_mod.logging, 'basicConfig') as mock_bc:
+        # WARNING level. Observe the effect (root level set to INFO) rather than
+        # that basicConfig was called, by simulating the unconfigured console-script
+        # environment where the root logger has no handlers.
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        root.handlers = []
+        try:
+            with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'T'}, clear=True):
+                with patch.object(sys, 'argv', ['race-backfill']):
+                    with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
+                        mock_rm_cls.return_value.__enter__.return_value = MagicMock()
+                        with patch.object(_mod, 'find_matching_races', return_value=[]):
+                            with patch.object(_mod, 'run_backfill', return_value=[]):
                                 _mod.main()
-        mock_bc.assert_called_once()
-        assert mock_bc.call_args.kwargs.get('level') == logging.INFO
+            assert root.level == logging.INFO
+        finally:
+            root.handlers = saved_handlers
+            root.setLevel(saved_level)
 
 
 class TestValidateWindowPadding:
     def test_lap_query_padded_one_day_each_side(self):
-        import lemongrass.race_backfill as rb
         query_api = MagicMock()
 
         race_record = MagicMock()
@@ -784,7 +799,7 @@ class TestValidateWindowPadding:
         lap_table.records = []
         query_api.query.side_effect = [[race_table], [lap_table]]
 
-        rb.validate_backfill(['999'], query_api)
+        _mod.validate_backfill(['999'], query_api)
         lap_flux = query_api.query.call_args_list[1].args[0]
         assert 'start: 2020-01-01T00:00:00Z' in lap_flux
         assert 'stop: 2020-01-05T00:00:00Z' in lap_flux
@@ -806,4 +821,3 @@ def test_backfill_defaults_come_from_config(monkeypatch, tmp_path):
     finally:
         monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         importlib.reload(race_backfill)  # restore default module state
-

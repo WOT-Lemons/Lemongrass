@@ -1,7 +1,9 @@
 import logging
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from influxdb_client import Point
 from influxdb_client.rest import ApiException
 
@@ -108,23 +110,72 @@ class TestAppend:
         names = sorted(p.name for p in s.dir.glob("*.lp"))
         assert names == ["000000000006.lp"]
 
-    def test_new_file_triggers_dir_fsync(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize(
+        "rotate_bytes, second_append_fsyncs",
+        [
+            (1, 1),        # tiny rotate: second append opens a NEW file -> dir fsync
+            (10_000, 0),   # large rotate: second append REUSES the file -> no fsync
+        ],
+    )
+    def test_dir_fsync_only_on_new_file(
+        self, tmp_path, monkeypatch, rotate_bytes, second_append_fsyncs
+    ):
         # A newly-created (rotated) spool file needs its directory entry fsync'd
-        # so the file survives a hard fault before dir metadata is flushed.
-        s = Spool(tmp_path / "spool", rotate_bytes=1)  # every append rotates
+        # so the file survives a hard fault before dir metadata is flushed; a
+        # reused file does not.
+        s = Spool(tmp_path / "spool", rotate_bytes=rotate_bytes)
         calls = []
         monkeypatch.setattr(s, "_fsync_dir", lambda: calls.append(1), raising=False)
-        s.append([_pt("RPM", 1)])                        # new file -> dir fsync
-        s.append([_pt("RPM", 2)])                        # new file -> dir fsync
-        assert len(calls) == 2
-
-    def test_append_to_existing_file_skips_dir_fsync(self, tmp_path, monkeypatch):
-        s = Spool(tmp_path / "spool", rotate_bytes=10_000)  # reuse one file
-        calls = []
-        monkeypatch.setattr(s, "_fsync_dir", lambda: calls.append(1), raising=False)
-        s.append([_pt("RPM", 1)])                        # new file -> 1 dir fsync
-        s.append([_pt("RPM", 2)])                        # reuse -> no dir fsync
+        s.append([_pt("RPM", 1)])   # first file is always new -> 1 dir fsync
         assert len(calls) == 1
+        s.append([_pt("RPM", 2)])   # new-file or reuse depending on rotate size
+        assert len(calls) == 1 + second_append_fsyncs
+
+    def test_append_returns_false_on_write_oserror(self, tmp_path, monkeypatch, caplog):
+        # A disk error mid-write must not raise into the callback; append reports
+        # False so flush_points falls back to the in-memory backlog.
+        s = Spool(tmp_path / "spool")
+
+        def boom(fd):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(os, "fsync", boom)  # data fsync fails inside the write
+        with caplog.at_level(logging.ERROR):
+            result = s.append([_pt("RPM", 1)])
+        assert result is False
+        assert any("Spool append to" in r.message for r in caplog.records)
+
+    def test_enforce_cap_eviction_unlink_oserror_is_warned(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # Eviction failing to unlink an over-cap file is non-fatal: warn, don't
+        # crash the append that triggered enforcement.
+        s = Spool(tmp_path / "spool", max_bytes=1, rotate_bytes=1)
+        s.append([_pt("RPM", 1)])  # 000000000001.lp
+
+        def failing_unlink(self, missing_ok=False):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        with caplog.at_level(logging.WARNING):
+            result = s.append([_pt("RPM", 2)])  # triggers _enforce_cap eviction
+        assert result is True
+        assert any("Could not evict spool file" in r.message for r in caplog.records)
+
+
+class TestFsyncDir:
+    def test_real_body_runs_without_error(self, tmp_path):
+        # Exercise the real os.open/os.fsync/os.close body (normally monkeypatched
+        # out) against a genuine directory.
+        s = Spool(tmp_path / "spool")
+        s._fsync_dir()  # must not raise
+
+    def test_oserror_is_warned_not_raised(self, tmp_path, caplog):
+        s = Spool(tmp_path / "spool")
+        s.dir = tmp_path / "does-not-exist"  # os.open raises OSError
+        with caplog.at_level(logging.WARNING):
+            s._fsync_dir()  # must not raise
+        assert any("Could not fsync spool dir" in r.message for r in caplog.records)
 
 
 class TestDegradation:
@@ -265,6 +316,73 @@ class TestReplay:
         assert result is True
         # Warning should be logged about the unlink failure
         assert any("Could not remove replayed spool file" in r.message for r in caplog.records)
+
+    def test_unreadable_quarantine_rename_oserror_is_warned(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # Unreadable oldest file that also cannot be renamed to .bad: warn and
+        # still report progress rather than looping forever on it.
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])
+        write_api = MagicMock()
+
+        def failing_read_text(self, *args, **kwargs):
+            raise OSError("I/O error")
+
+        def failing_rename(self, target):
+            raise OSError("cross-device link")
+
+        monkeypatch.setattr(Path, "read_text", failing_read_text)
+        monkeypatch.setattr(Path, "rename", failing_rename)
+        with caplog.at_level(logging.WARNING):
+            result = s.replay_oldest(write_api, BUCKET)
+        assert result is True
+        assert any(
+            "Could not quarantine unreadable spool file" in r.message
+            for r in caplog.records
+        )
+        write_api.write.assert_not_called()
+
+    def test_salvage_unlink_oserror_is_warned(self, tmp_path, monkeypatch, caplog):
+        # 4xx on the full file, salvage (drop torn last line) succeeds, but the
+        # post-salvage unlink fails: warn, still report progress.
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1), _pt("RPM", 2)])  # 2 lines -> salvageable
+        write_api = MagicMock()
+        write_api.write.side_effect = [ApiException(status=400, reason="bad"), None]
+
+        def failing_unlink(self, missing_ok=False):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        with caplog.at_level(logging.WARNING):
+            result = s.replay_oldest(write_api, BUCKET)
+        assert result is True
+        assert any(
+            "Could not remove salvaged spool file" in r.message
+            for r in caplog.records
+        )
+
+    def test_corrupt_quarantine_rename_oserror_is_warned(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # Single-line 4xx-rejected file is unsalvageable -> quarantine; the .bad
+        # rename fails: warn, still report progress.
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])  # single line -> unsalvageable
+        write_api = MagicMock()
+        write_api.write.side_effect = ApiException(status=400, reason="bad")
+
+        def failing_rename(self, target):
+            raise OSError("cross-device link")
+
+        monkeypatch.setattr(Path, "rename", failing_rename)
+        with caplog.at_level(logging.WARNING):
+            result = s.replay_oldest(write_api, BUCKET)
+        assert result is True
+        assert any(
+            "Could not quarantine spool file" in r.message for r in caplog.records
+        )
 
 
 class TestRoundTrip:

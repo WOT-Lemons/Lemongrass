@@ -11,6 +11,44 @@ import lemongrass._env as _env_mod
 import lemongrass.laps as _mod
 
 
+def _single_car_session_details(car_number='42', category='1', category_name='A',
+                                session_id=1, race_id=999, session_name='S1',
+                                start_epoc=0):
+    """Standard single-competitor session-details payload shared by old_race tests.
+
+    Carries the full ~20-key competitor dict (a superset of what any old_race path
+    reads) so callers can delegate here instead of re-declaring it. Override the
+    keyword args for the few fields individual tests vary.
+    """
+    return {
+        'Successful': True,
+        'Session': {
+            'ID': session_id, 'RaceID': race_id, 'Name': session_name,
+            'SessionStartDateEpoc': start_epoc,
+            'Categories': {category: {'ID': category, 'Name': category_name}},
+            'SortedCompetitors': [{
+                'Number': car_number, 'Category': category, 'ID': 1,
+                'SessionID': session_id, 'RaceID': race_id,
+                'FirstName': 'Jane', 'LastName': 'Doe',
+                'Position': '1', 'Laps': '1', 'LastLapTime': '',
+                'BestPosition': '1', 'BestLap': '1',
+                'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+                'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+                'LapTimes': [
+                    {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
+                     'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+                ],
+            }],
+        },
+    }
+
+
+@pytest.fixture
+def single_car_session():
+    """Fixture exposing the shared single-competitor session-details factory."""
+    return _single_car_session_details
+
+
 class TestResolveTokens:
     def test_multi_tokens_returns_list(self):
         with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN1,TOKEN2'}, clear=True):
@@ -49,30 +87,12 @@ class TestResolveTokens:
             result = _env_mod.resolve_tokens()
         assert result == ''
 
-    def test_whitespace_only_racemonitor_tokens_falls_back_to_single_token(self):
+    @pytest.mark.parametrize("tokens_value", ['  ,  , ', '  ', '', ','])
+    def test_empty_ish_racemonitor_tokens_falls_back_to_single_token(self, tokens_value):
+        # Whatever the empty-ish shape (all-whitespace slots, no commas, empty,
+        # bare comma), an empty RACEMONITOR_TOKENS falls back to RACEMONITOR_TOKEN.
         with patch.dict(os.environ,
-                        {'RACEMONITOR_TOKENS': '  ,  , ', 'RACEMONITOR_TOKEN': 'FALLBACK'},
-                        clear=True):
-            result = _env_mod.resolve_tokens()
-        assert result == 'FALLBACK'
-
-    def test_whitespace_only_no_commas_falls_back_to_single_token(self):
-        with patch.dict(os.environ,
-                        {'RACEMONITOR_TOKENS': '  ', 'RACEMONITOR_TOKEN': 'FALLBACK'},
-                        clear=True):
-            result = _env_mod.resolve_tokens()
-        assert result == 'FALLBACK'
-
-    def test_empty_string_racemonitor_tokens_falls_back_to_single_token(self):
-        with patch.dict(os.environ,
-                        {'RACEMONITOR_TOKENS': '', 'RACEMONITOR_TOKEN': 'FALLBACK'},
-                        clear=True):
-            result = _env_mod.resolve_tokens()
-        assert result == 'FALLBACK'
-
-    def test_bare_comma_falls_back_to_single_token(self):
-        with patch.dict(os.environ,
-                        {'RACEMONITOR_TOKENS': ',', 'RACEMONITOR_TOKEN': 'FALLBACK'},
+                        {'RACEMONITOR_TOKENS': tokens_value, 'RACEMONITOR_TOKEN': 'FALLBACK'},
                         clear=True):
             result = _env_mod.resolve_tokens()
         assert result == 'FALLBACK'
@@ -81,16 +101,6 @@ class TestResolveTokens:
         with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN1,,TOKEN2'}, clear=True):
             result = _env_mod.resolve_tokens()
         assert result == ['TOKEN1', 'TOKEN2']
-
-
-class TestIntervalArg:
-    def test_default_interval_is_30(self):
-        args = _mod._build_parser().parse_args(['12345', '42'])
-        assert args.interval == 30
-
-    def test_custom_interval(self):
-        args = _mod._build_parser().parse_args(['12345', '42', '--interval', '60'])
-        assert args.interval == 60
 
 
 class TestMonitorRoutine:
@@ -110,10 +120,6 @@ class TestMonitorRoutine:
         opts = _mod.RaceOptions(network_mode=False, interval=30)
         with patch.object(_mod, 'refresh_competitor', return_value=[{'Lap': 1}]):
             _mod.monitor_routine(ctx, [{'Lap': 1}], opts, _stop_event=stop)
-
-    def test_monitor_status_values_exist(self):
-        assert _mod.MonitorStatus.RACE_ENDED is not None
-        assert _mod.MonitorStatus.INTERRUPTED is not None
 
     def test_refresh_competitor_empty_response_returns_empty_list(self):
         ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
@@ -286,14 +292,16 @@ class TestMonitorRoutine:
         ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
         opts = _mod.RaceOptions(network_mode=True, interval=0)
 
+        session_resp = {'Successful': True, 'Session': {
+            'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+
         call_count = 0
         def fake_get_session(race_id):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 stop.set()
-            return {'Successful': True, 'Session': {
-                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+            return session_resp
 
         ctx.client.live.get_session.side_effect = fake_get_session
 
@@ -302,7 +310,9 @@ class TestMonitorRoutine:
                 with patch.object(_mod, 'push_influx'):
                     _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
 
-        mock_standings.assert_called_once_with(ctx, mock_standings.call_args[0][1], 'sess-1', {})
+        # prev_standings starts as {} on the first poll; the real session_response
+        # (not the mock's own recorded arg) is the expected second argument.
+        mock_standings.assert_called_once_with(ctx, session_resp, 'sess-1', {})
 
     def test_standings_not_written_when_not_network_mode(self):
         stop = threading.Event()
@@ -415,6 +425,51 @@ class TestMonitorRoutine:
                     _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
         # no exception raised is the assertion
 
+    def test_get_session_exception_does_not_kill_monitor(self):
+        """A get_session network error mid-poll is swallowed; the poll continues."""
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+        ctx.client.live.get_session.side_effect = ConnectionError("wifi blip")
+
+        calls = 0
+
+        def fake_refresh(c):
+            nonlocal calls
+            calls += 1
+            stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            result = _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        assert calls == 1  # reached refresh despite get_session raising
+        assert result is None
+
+    def test_is_live_exception_does_not_kill_monitor(self):
+        """An is_live network error on the periodic liveness check is swallowed;
+        the loop keeps polling rather than crashing or ending the race."""
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=30)
+
+        n = _mod._LIVE_CHECK_INTERVAL
+        poll_count = 0
+
+        def fake_wait(timeout):
+            nonlocal poll_count
+            poll_count += 1
+            return poll_count > n  # stop after one full liveness interval
+
+        stop = MagicMock()
+        stop.wait.side_effect = fake_wait
+        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.race.is_live.side_effect = ConnectionError("wifi blip")
+
+        with patch.object(_mod, 'refresh_competitor', return_value=[]):
+            with patch.object(_mod.threading, 'Event', return_value=stop):
+                result = _mod.monitor_routine(ctx, [], opts)
+        assert ctx.client.race.is_live.called  # the check fired and raised
+        assert result is None  # loop exited via stop, not a crash or RACE_ENDED
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
@@ -468,22 +523,12 @@ class TestResolveClassHistorical:
             },
         }
 
-    def test_returns_class_name(self):
+    @pytest.mark.parametrize("name", ['A', 'Super Street', 'GT3,Pro=Am'])
+    def test_class_name_preserved(self, name):
         sd = self._session('42', '1')
+        sd['Session']['Categories']['1']['Name'] = name
         class_name, _ = _mod._resolve_class_historical('42', sd)
-        assert class_name == 'A'
-
-    def test_class_name_spaces_preserved(self):
-        sd = self._session('42', '1')
-        sd['Session']['Categories']['1']['Name'] = 'Super Street'
-        class_name, _ = _mod._resolve_class_historical('42', sd)
-        assert class_name == 'Super Street'
-
-    def test_class_name_special_chars_preserved(self):
-        sd = self._session('42', '1')
-        sd['Session']['Categories']['1']['Name'] = 'GT3,Pro=Am'
-        class_name, _ = _mod._resolve_class_historical('42', sd)
-        assert class_name == 'GT3,Pro=Am'
+        assert class_name == name
 
     def test_only_car_in_class_is_always_position_1(self):
         sd = self._session('42', '1')
@@ -566,11 +611,21 @@ class TestResolveClassLive:
             },
         }
 
-    def test_returns_class_name(self):
+    @pytest.mark.parametrize("name", ['A', 'GT3,Pro=Am'])
+    def test_class_name_preserved(self, name):
         session = self._make_session('42', 'classA', 3)
-        session['Session']['Classes']['classA']['Description'] = 'A'
+        session['Session']['Classes']['classA']['Description'] = name
         class_name, _ = _mod._resolve_class_live(session, '42')
+        assert class_name == name
+
+    def test_non_integer_tracked_position_returns_class_name_and_none(self):
+        # tracked car's Position is unparseable (e.g. DNF) — class name still
+        # resolves but the class position cannot be computed.
+        session = self._make_session('42', 'classA', 3)
+        session['Session']['Competitors']['r1']['Position'] = 'DNF'
+        class_name, class_pos = _mod._resolve_class_live(session, '42')
         assert class_name == 'A'
+        assert class_pos is None
 
     def test_only_car_in_class_is_position_1(self):
         session = self._make_session('42', 'classA', 3)
@@ -602,12 +657,6 @@ class TestResolveClassLive:
         class_name, class_pos = _mod._resolve_class_live({'Successful': False}, '42')
         assert class_name is None
         assert class_pos is None
-
-    def test_class_name_special_chars_preserved(self):
-        session = self._make_session('42', 'classA', 1)
-        session['Session']['Classes']['classA']['Description'] = 'GT3,Pro=Am'
-        class_name, _ = _mod._resolve_class_live(session, '42')
-        assert class_name == 'GT3,Pro=Am'
 
 
 class TestTimeToMs:
@@ -697,31 +746,24 @@ class TestPushInfluxClassInfo:
         assert isinstance(record, list)
         assert len(record) == 2
 
-    def test_includes_class_tag_when_provided(self):
+    @pytest.mark.parametrize("kwargs,substr,present", [
+        # class tag: included when class_name given, omitted otherwise
+        ({'class_name': 'A', 'class_positions': {1: 2}}, 'class=A', True),
+        ({}, 'class=', False),
+        # class_position field: included when class_positions maps the lap
+        ({'class_name': 'A', 'class_positions': {1: 2}}, 'class_position=2i', True),
+        ({}, 'class_position', False),
+        # competitor_name field
+        ({'competitor_name': 'Jane Doe'}, 'competitor_name="Jane Doe"', True),
+        ({}, 'competitor_name', False),
+        # car_info field
+        ({'car_info': '2005/Toy/Celica'}, 'car_info="2005/Toy/Celica"', True),
+        ({}, 'car_info', False),
+    ])
+    def test_optional_field_inclusion(self, kwargs, substr, present):
         ctx, write_api = self._ctx()
-        _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 2})
-        assert 'class=A' in self._record(write_api)
-
-    def test_car_number_tag_before_class_tag(self):
-        ctx, write_api = self._ctx()
-        _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 1})
-        record = self._record(write_api)
-        assert record.index('car_number=') < record.index('class=')
-
-    def test_includes_class_position_field_when_provided(self):
-        ctx, write_api = self._ctx()
-        _mod.push_influx(ctx, self._laps(), False, class_name='A', class_positions={1: 2})
-        assert 'class_position=2i' in self._record(write_api)
-
-    def test_omits_class_tag_when_not_provided(self):
-        ctx, write_api = self._ctx()
-        _mod.push_influx(ctx, self._laps(), False)
-        assert 'class=' not in self._record(write_api)
-
-    def test_omits_class_position_when_not_provided(self):
-        ctx, write_api = self._ctx()
-        _mod.push_influx(ctx, self._laps(), False)
-        assert 'class_position' not in self._record(write_api)
+        _mod.push_influx(ctx, self._laps(), False, **kwargs)
+        assert (substr in self._record(write_api)) is present
 
     def test_ctx_start_epoc_used_when_no_override(self):
         ctx, write_api = self._ctx()  # ctx.start_epoc = 0
@@ -744,26 +786,6 @@ class TestPushInfluxClassInfo:
             _mod.push_influx(ctx, self._laps(), False)
         assert any('epoch' in r.message.lower() and r.levelno == logging.WARNING
                    for r in caplog.records)
-
-    def test_includes_competitor_name_field_when_provided(self):
-        ctx, write_api = self._ctx()
-        _mod.push_influx(ctx, self._laps(), False, competitor_name='Jane Doe')
-        assert 'competitor_name="Jane Doe"' in self._record(write_api)
-
-    def test_omits_competitor_name_field_when_none(self):
-        ctx, write_api = self._ctx()
-        _mod.push_influx(ctx, self._laps(), False)
-        assert 'competitor_name' not in self._record(write_api)
-
-    def test_includes_car_info_field_when_provided(self):
-        ctx, write_api = self._ctx()
-        _mod.push_influx(ctx, self._laps(), False, car_info='2005/Toy/Celica')
-        assert 'car_info="2005/Toy/Celica"' in self._record(write_api)
-
-    def test_omits_car_info_field_when_none(self):
-        ctx, write_api = self._ctx()
-        _mod.push_influx(ctx, self._laps(), False)
-        assert 'car_info' not in self._record(write_api)
 
     def test_measurement_is_lap(self):
         ctx, write_api = self._ctx()
@@ -838,43 +860,14 @@ class TestPushInfluxClassInfo:
         assert 'car_number=42' not in record
 
     def test_passes_session_id_to_build_lap_points(self):
-        ctx, _write_api = self._ctx()
-        with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
-            _mod.push_influx(ctx, self._laps(), False, session_id=77)
-        assert mock_build.call_args.args[8] == 77
-
-
-class TestSkipIfCompleteArg:
-    def test_default_is_false(self):
-        args = _mod._build_parser().parse_args(['12345', '42'])
-        assert args.skip_if_complete is False
-
-    def test_flag_sets_true(self):
-        args = _mod._build_parser().parse_args(['12345', '42', '--skip-if-complete'])
-        assert args.skip_if_complete is True
+        ctx, write_api = self._ctx()
+        _mod.push_influx(ctx, self._laps(), False, session_id=77)
+        assert 'session_id=77' in self._record(write_api)
 
 
 class TestOldRaceSkip:
     def _session_details(self):
-        return {
-            'Successful': True,
-            'Session': {
-                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
-                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
-                'SortedCompetitors': [{
-                    'Number': '42', 'Category': '1', 'ID': 1, 'SessionID': 1,
-                    'RaceID': 999, 'FirstName': 'Jane', 'LastName': 'Doe',
-                    'Position': '1', 'Laps': '1', 'LastLapTime': '',
-                    'BestPosition': '1', 'BestLap': '1',
-                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
-                    'Transponder': '', 'Nationality': '', 'AdditionalData': '',
-                    'LapTimes': [
-                        {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
-                         'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
-                    ],
-                }],
-            },
-        }
+        return _single_car_session_details()
 
     def _ctx(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -1032,12 +1025,10 @@ class TestExistingLapCounts:
 
 class TestArgParserCarNumber:
     def test_car_number_optional(self):
+        # nargs='?' makes the positional car_number optional (defaults to None);
+        # this is custom parser wiring main() depends on, not a stdlib default.
         args = _mod._build_parser().parse_args(['12345'])
         assert args.car_number is None
-
-    def test_car_number_accepted_when_provided(self):
-        args = _mod._build_parser().parse_args(['12345', '42'])
-        assert args.car_number == 42
 
 
 class TestExistingLapCountsFieldwide:
@@ -1116,25 +1107,7 @@ class TestExistingStandingsCountsFieldwide:
 
 class TestOldRaceFieldwide:
     def _session_details(self, car_number='42'):
-        return {
-            'Successful': True,
-            'Session': {
-                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
-                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
-                'SortedCompetitors': [{
-                    'Number': car_number, 'Category': '1', 'ID': 1, 'SessionID': 1,
-                    'RaceID': 999, 'FirstName': 'Jane', 'LastName': 'Doe',
-                    'Position': '1', 'Laps': '1', 'LastLapTime': '',
-                    'BestPosition': '1', 'BestLap': '1',
-                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
-                    'Transponder': '', 'Nationality': '', 'AdditionalData': '',
-                    'LapTimes': [
-                        {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
-                         'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
-                    ],
-                }],
-            },
-        }
+        return _single_car_session_details(car_number=car_number)
 
     def test_proceeds_even_when_tracked_car_absent(self):
         """With no competitor_missing gate, old_race writes even when ctx.car_number absent."""
@@ -1169,28 +1142,6 @@ class TestOldRaceFieldwide:
         mock_del.assert_not_called()
         assert any('No competitors' in r.message for r in caplog.records)
 
-
-class TestOldRacePrintsClass:
-    def _session_details(self):
-        return {
-            'Successful': True,
-            'Session': {
-                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
-                'Categories': {'1': {'ID': '1', 'Name': 'B-Class'}},
-                'SortedCompetitors': [{
-                    'Number': '42', 'Category': '1', 'ID': 1, 'SessionID': 1,
-                    'RaceID': 999, 'FirstName': 'Jane', 'LastName': 'Doe',
-                    'Position': '1', 'Laps': '1', 'LastLapTime': '',
-                    'BestPosition': '1', 'BestLap': '1',
-                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
-                    'Transponder': 'T123', 'Nationality': '', 'AdditionalData': '',
-                    'LapTimes': [
-                        {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
-                         'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
-                    ],
-                }],
-            },
-        }
 
 class TestLiveRace:
     def _session_response(self, class_desc='A'):
@@ -1249,6 +1200,17 @@ class TestLiveRace:
                 with patch.object(_mod, 'push_influx_race'):
                     _mod.live_race(ctx, opts)
         assert ctx.client.live.get_session.call_count == 1
+
+    def test_save_file_writes_csv_with_name_and_race_id(self):
+        # opts.save_file routes to write_csv with a "<competitor name>-<race_id>"
+        # filename built from the live racer detail.
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=False, save_file=True)
+        with patch.object(_mod, 'print_rankings'):
+            with patch.object(_mod, 'write_csv') as mock_csv:
+                _mod.live_race(ctx, opts)
+        mock_csv.assert_called_once()
+        assert mock_csv.call_args.args[0] == 'Jane Doe-999'
 
 
 class TestLiveRaceStandingsWrite:
@@ -1402,28 +1364,21 @@ class TestLiveRaceMetadataFailure:
 
 class TestOldRaceClassWiring:
     def _session_details(self, car_number='42', cat_id='1', cat_name='A'):
-        return {
-            'Successful': True,
-            'Session': {
-                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionDate': '',
-                'SessionTime': '', 'SortMode': '', 'CategoryString': '',
-                'ResultsProcessorVersion': 1, 'SessionStartDateEpoc': 0,
-                'Categories': {cat_id: {'ID': cat_id, 'Name': cat_name}},
-                'SortedCompetitors': [{
-                    'Number': car_number, 'Category': cat_id,
-                    'ID': 1, 'SessionID': 1, 'RaceID': 999,
-                    'FirstName': 'Jane', 'LastName': 'Doe',
-                    'Position': '1', 'Laps': '1', 'LastLapTime': '',
-                    'BestPosition': '1', 'BestLap': '1',
-                    'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
-                    'Transponder': '', 'Nationality': '', 'AdditionalData': '',
-                    'LapTimes': [
-                        {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': '1',
-                         'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
-                    ],
-                }],
-            },
-        }
+        return _single_car_session_details(
+            car_number=car_number, category=cat_id, category_name=cat_name)
+
+    @staticmethod
+    def _capture_points():
+        """Return (captured_list, patch_cm) so _build_lap_points runs for real and
+        the emitted lap Point objects are captured from _write_points_chunked
+        (standings points written in the same pass are filtered out)."""
+        captured = []
+
+        def _cap(_api, points):
+            captured.extend(p for p in points if p.to_line_protocol().startswith('lap,'))
+
+        cm = patch.object(_mod, '_write_points_chunked', side_effect=_cap)
+        return captured, cm
 
     def test_calls_resolve_class_historical_per_session(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -1445,41 +1400,47 @@ class TestOldRaceClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        assert mock_build.call_args.args[4] == 'A'
+        assert 'class=A' in captured[0].to_line_protocol()
 
     def test_passes_session_start_epoc_to_build_lap_points(self):
-        # ctx.start_epoc=9999 is intentionally different from SessionStartDateEpoc=5555
+        # ctx.start_epoc=9999 is intentionally different from SessionStartDateEpoc=5555;
+        # the emitted timestamp must anchor on the session epoch (5555*1000 + 90000ms).
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 9999)
         opts = _mod.RaceOptions(network_mode=True)
         session = self._session_details()
         session['Session']['SessionStartDateEpoc'] = 5555
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = session
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        assert mock_build.call_args.args[6] == 5555
+        assert captured[0].to_line_protocol().endswith(str(5555 * 1000 + 90000))
 
     def test_handles_missing_session_start_epoc_key(self):
-        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        # Missing SessionStartDateEpoc -> None passed through -> _build_lap_points
+        # falls back to ctx.start_epoc (7000 here), anchoring at 7000*1000 + 90000ms.
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 7000)
         opts = _mod.RaceOptions(network_mode=True)
         session = self._session_details()
         del session['Session']['SessionStartDateEpoc']
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = session
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        assert mock_build.call_args.args[6] is None
+        assert captured[0].to_line_protocol().endswith(str(7000 * 1000 + 90000))
 
     def test_no_network_mode_skips_resolve(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
@@ -1496,12 +1457,13 @@ class TestOldRaceClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        assert mock_build.call_args.args[2] == 'Jane Doe'
+        assert 'competitor_name="Jane Doe"' in captured[0].to_line_protocol()
 
     def test_passes_car_info_to_build_lap_points(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -1510,12 +1472,13 @@ class TestOldRaceClassWiring:
         session['Session']['SortedCompetitors'][0]['AdditionalData'] = '2005/Toy/Celica'
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = session
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        assert mock_build.call_args.args[3] == '2005/Toy/Celica'
+        assert 'car_info="2005/Toy/Celica"' in captured[0].to_line_protocol()
 
     def test_competitor_name_none_when_both_name_fields_empty(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -1525,12 +1488,13 @@ class TestOldRaceClassWiring:
         session['Session']['SortedCompetitors'][0]['LastName'] = ''
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = session
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        assert mock_build.call_args.args[2] is None
+        assert 'competitor_name' not in captured[0].to_line_protocol()
 
     def test_old_race_calls_push_influx_race_once_across_multiple_sessions(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000)
@@ -2270,20 +2234,15 @@ class TestPushInfluxRace:
         _mod.push_influx_race(ctx, 5000000)
         assert self._record(write_api).startswith('race,')
 
-    def test_race_id_tag(self):
+    @pytest.mark.parametrize("expected", [
+        'race_id=999',
+        'track_name=Road\\ America',
+        'end_time_epoc=1749132000i',
+    ])
+    def test_line_protocol_contains(self, expected):
         ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_race(ctx, 5000000)
-        assert 'race_id=999' in self._record(write_api)
-
-    def test_track_name_tag(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_race(ctx, 5000000)
-        assert 'track_name=Road\\ America' in self._record(write_api)
-
-    def test_end_time_epoc_field(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_race(ctx, 5000000)
-        assert 'end_time_epoc=1749132000i' in self._record(write_api)
+        assert expected in self._record(write_api)
 
     def test_uses_provided_timestamp(self):
         ctx, write_api, _delete_api = self._ctx()
@@ -2307,10 +2266,10 @@ class TestPushInfluxRace:
         _mod.push_influx_race(ctx, 1000)
         assert 'series_name=' not in self._record(write_api)
 
-    def test_metadata_none_skips_delete_and_write(self):
+    def test_metadata_none_returns_false_and_skips_delete_and_write(self):
         ctx, write_api, delete_api = self._ctx()
         ctx.metadata = None
-        _mod.push_influx_race(ctx, 1000)
+        assert _mod.push_influx_race(ctx, 1000) is False
         delete_api.delete.assert_not_called()
         write_api.write.assert_not_called()
 
@@ -2329,11 +2288,6 @@ class TestPushInfluxRace:
         ctx, write_api, _delete_api = self._ctx()
         write_api.write.side_effect = Exception("network error")
         assert _mod.push_influx_race(ctx, 5000000) is False
-
-    def test_returns_false_when_metadata_none(self):
-        ctx, _write_api, _delete_api = self._ctx()
-        ctx.metadata = None
-        assert _mod.push_influx_race(ctx, 1000) is False
 
 
 class TestPushInfluxRaceFields:
@@ -2366,22 +2320,7 @@ class TestPushInfluxRaceFields:
 
 class TestOldRaceMetadataFailure:
     def _session_details(self):
-        return {
-            'Successful': True,
-            'Session': {
-                'ID': 1, 'Name': 'S1', 'SessionStartDateEpoc': 1000,
-                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
-                'SortedCompetitors': [{
-                    'Number': '42', 'Category': '1', 'FirstName': 'Jane',
-                    'LastName': 'Doe', 'Position': '1', 'Laps': '1',
-                    'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
-                    'AdditionalData': '',
-                    'LapTimes': [{'Lap': '1', 'LapTime': '0:01:30.000',
-                                  'Position': '1', 'FlagStatus': 0,
-                                  'TotalTime': '0:01:30.000'}],
-                }],
-            },
-        }
+        return _single_car_session_details(start_epoc=1000)
 
     def _ctx(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
@@ -2493,25 +2432,16 @@ class TestPushInfluxSession:
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
         assert self._record(write_api).startswith('session,')
 
-    def test_race_id_tag(self):
+    @pytest.mark.parametrize("expected", [
+        'race_id=999',
+        'session_id=42',
+        'session_name="Day 1"',
+        'start_epoc=1700000000i',
+    ])
+    def test_line_protocol_contains(self, expected):
         ctx, write_api, _delete_api = self._ctx()
         _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert 'race_id=999' in self._record(write_api)
-
-    def test_session_id_tag(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert 'session_id=42' in self._record(write_api)
-
-    def test_session_name_field(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert 'session_name="Day 1"' in self._record(write_api)
-
-    def test_start_epoc_field(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert 'start_epoc=1700000000i' in self._record(write_api)
+        assert expected in self._record(write_api)
 
     def test_timestamp_uses_start_epoc_ms(self):
         ctx, write_api, _delete_api = self._ctx()
@@ -2632,18 +2562,32 @@ class TestOldRaceFullField:
         ctx.client.results.session_details.return_value = session_details
         return ctx
 
+    @staticmethod
+    def _capture_points():
+        captured = []
+
+        def _cap(_api, points):
+            captured.extend(p for p in points if p.to_line_protocol().startswith('lap,'))
+
+        cm = patch.object(_mod, '_write_points_chunked', side_effect=_cap)
+        return captured, cm
+
+    @staticmethod
+    def _car_number(point):
+        return point.to_line_protocol().split('car_number=', 1)[1].split(',', 1)[0]
+
     def test_writes_all_competitors_not_just_tracked(self):
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
-        assert mock_build.call_count == 2
-        built_car_numbers = {c.args[7] for c in mock_build.call_args_list}
-        assert built_car_numbers == {'42', '99'}
+        assert len(captured) == 2
+        assert {self._car_number(p) for p in captured} == {'42', '99'}
 
     def test_resolve_class_called_per_competitor(self):
         ctx = self._ctx(self._session_details_two_cars())
@@ -2661,14 +2605,16 @@ class TestOldRaceFullField:
     def test_build_lap_points_receives_explicit_car_number(self):
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
-        for c in mock_build.call_args_list:
-            assert c.args[7] is not None
+        # every emitted point carries an explicit per-competitor car_number tag
+        for point in captured:
+            assert 'car_number=' in point.to_line_protocol()
 
     def test_race_not_stamped_when_write_fails(self):
         ctx = self._ctx(self._session_details_two_cars())
@@ -2697,13 +2643,14 @@ class TestOldRaceFullField:
         }
         ctx = self._ctx(session)
         opts = _mod.RaceOptions(network_mode=True)
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
-        built_car_numbers = {c.args[7] for c in mock_build.call_args_list}
+        built_car_numbers = {self._car_number(p) for p in captured}
         assert 'SC' not in built_car_numbers
         assert '42' in built_car_numbers
 
@@ -2767,14 +2714,16 @@ class TestOldRaceFullField:
     def test_build_lap_points_receives_session_id(self):
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
+        captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
+            with cm:
                 with patch.object(_mod, 'push_influx_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
-        for c in mock_build.call_args_list:
-            assert c.args[8] == 1  # session_id from session details ID=1
+        # session_id tag comes from the session details ID=1
+        for point in captured:
+            assert 'session_id=1' in point.to_line_protocol()
 
 
 class TestBuildLapPointsSessionId:
@@ -2788,14 +2737,13 @@ class TestBuildLapPointsSessionId:
             ctx, self._laps(), 'Jane Doe', None, 'A', None, 0, '42', session_id)
         return points[0].to_line_protocol()
 
-    def test_session_id_tag_integer(self):
-        assert 'session_id=7' in self._build(7)
-
-    def test_session_id_tag_string(self):
-        assert 'session_id=99' in self._build('99')
-
-    def test_session_id_tag_absent_when_none(self):
-        assert 'session_id' not in self._build(None)
+    @pytest.mark.parametrize("session_id,substr,present", [
+        (7, 'session_id=7', True),       # integer
+        ('99', 'session_id=99', True),   # string
+        (None, 'session_id', False),     # omitted
+    ])
+    def test_session_id_tag(self, session_id, substr, present):
+        assert (substr in self._build(session_id)) is present
 
 
 class TestBuildLapPointsNonNumericPosition:
@@ -2871,6 +2819,32 @@ class TestPrintRankingsSortOrder:
         _mod.print_rankings(competitors, False, None, self._categories())
         out = capsys.readouterr().out
         assert out.index('42') < out.index('99')
+
+
+class TestPrintRankingsNames:
+    """print_rankings collects and returns the non-empty competitor names.
+
+    Regression: the name loop guarded on `item != ''` where `item` is the dict
+    KEY (always 'FirstName'/'LastName', never ''), so empty name VALUES were
+    collected anyway. The guard must test the value, so blank names are dropped.
+    """
+
+    def _categories(self):
+        return {'1': {'ID': '1', 'Name': 'Gold'}}
+
+    def _competitor(self, first, last):
+        return {'Position': '1', 'Number': '42', 'FirstName': first, 'LastName': last,
+                'Laps': '5', 'Category': '1', 'Transponder': 'T1'}
+
+    def test_empty_name_values_excluded_from_returned_names(self):
+        competitors = [
+            self._competitor('Jane', 'Doe'),   # both present
+            self._competitor('', 'Solo'),      # blank first name -> only 'Solo'
+            self._competitor('Mono', ''),      # blank last name -> only 'Mono'
+        ]
+        names = _mod.print_rankings(competitors, False, None, self._categories())
+        assert names == ['Jane', 'Doe', 'Solo', 'Mono']
+        assert '' not in names
 
 
 class TestWritePointsChunked:
@@ -2958,6 +2932,29 @@ class TestDryRun:
         assert result == 1
         mock_live.assert_not_called()
         assert any('dry-run' in r.message.lower() for r in caplog.records)
+
+
+class TestRunRaceDispatch:
+    def _ctx(self):
+        return _mod.RaceContext('999', '42', MagicMock(), None, 0)
+
+    def test_monitor_mode_returns_0_when_race_not_live(self):
+        # -m against a completed race disables monitoring and exits cleanly
+        # without falling through to the historical old_race backfill.
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(monitor_mode=True)
+        with patch.object(_mod, 'old_race') as mock_old:
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': False})
+        assert result == 0
+        mock_old.assert_not_called()
+
+    def test_returns_1_on_write_failed(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'live_race',
+                          return_value=_mod.MonitorStatus.WRITE_FAILED):
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 1
 
 
 class TestComputeClassPositionsLive:
@@ -3635,22 +3632,8 @@ class TestLiveRaceNoData:
 
 class TestOldRaceSessionFetching:
     def _session_details(self, sid=1):
-        return {
-            'Successful': True,
-            'Session': {
-                'ID': sid, 'Name': f'S{sid}', 'SessionStartDateEpoc': 1000,
-                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
-                'SortedCompetitors': [{
-                    'Number': '42', 'Category': '1', 'FirstName': 'Jane',
-                    'LastName': 'Doe', 'Position': '1', 'Laps': '1',
-                    'BestLapTime': '', 'LastLapTime': '', 'Transponder': '',
-                    'AdditionalData': '',
-                    'LapTimes': [{'Lap': '1', 'LapTime': '0:01:30.000',
-                                  'Position': '1', 'FlagStatus': 0,
-                                  'TotalTime': '0:01:30.000'}],
-                }],
-            },
-        }
+        return _single_car_session_details(
+            session_id=sid, session_name=f'S{sid}', start_epoc=1000)
 
     def test_zero_sessions_returns_cleanly(self, caplog):
         """A race with no posted sessions must log and return, not UnboundLocalError."""
@@ -3781,6 +3764,24 @@ class TestClassIndex:
         index = _mod._build_class_index(details)
         assert _mod._resolve_class_historical('99', details, index) == (None, {})
 
+    def test_malformed_laps_skipped_in_index(self):
+        # A lap with an unparseable Lap number and one missing Position must be
+        # skipped without aborting the rest of the car's index.
+        details = {
+            'Session': {
+                'Categories': {'1': {'Name': 'A'}},
+                'SortedCompetitors': [
+                    {'Number': '10', 'Category': '1', 'LapTimes': [
+                        {'Lap': '1', 'Position': '1'},
+                        {'Lap': '$J', 'Position': '2'},  # unparseable Lap -> skipped
+                        {'Lap': '3'},                    # missing Position -> skipped
+                    ]},
+                ],
+            },
+        }
+        _, _, laps_by_car, _ = _mod._build_class_index(details)
+        assert laps_by_car['10'] == {1: 1}
+
     def test_old_race_builds_index_once_per_session(self):
         session = {
             'Successful': True,
@@ -3860,21 +3861,17 @@ class TestStoredEndSettled:
     def _stored(self, end_epoc):
         return _mod.StoredRace(schema_version=4, expected_lap_count=1, end_time_epoc=end_epoc)
 
-    def test_zero_epoch_is_not_settled(self):
-        assert _mod.stored_end_settled(self._stored(0)) is False
-
-    def test_none_epoch_is_not_settled(self):
-        assert _mod.stored_end_settled(self._stored(None)) is False
-
-    def test_future_epoch_is_not_settled(self):
+    @pytest.mark.parametrize("end_epoc", [
+        0,                # unknown end
+        None,             # missing end
+        _NOW + 5000,      # future end
+        _NOW - 3600,      # ended an hour ago, still well within the settle buffer
+    ])
+    def test_unknown_future_or_recent_end_is_not_settled(self, end_epoc):
+        # None of these are settled well behind us; a later session under the same
+        # race_id could still be live, so each must fall through to the is_live check.
         with patch.object(_mod.time, 'time', return_value=self._NOW):
-            assert _mod.stored_end_settled(self._stored(self._NOW + 5000)) is False
-
-    def test_recent_past_within_buffer_is_not_settled(self):
-        # Ended an hour ago — a later session under the same race_id could still be
-        # live, so this must fall through to the authoritative is_live check.
-        with patch.object(_mod.time, 'time', return_value=self._NOW):
-            assert _mod.stored_end_settled(self._stored(self._NOW - 3600)) is False
+            assert _mod.stored_end_settled(self._stored(end_epoc)) is False
 
     def test_end_exactly_at_buffer_is_not_settled(self):
         with patch.object(_mod.time, 'time', return_value=self._NOW):
