@@ -645,7 +645,7 @@ def old_race(ctx, opts):
 
 
 def print_rankings(sorted_competitors, _race_live, selected_class, categories):
-    """Take a dict of sorted competitors and print them in a nice table."""
+    """Take a list of sorted competitor dicts and print them in a nice table."""
     print(UNDERLINE)
     list_of_names = []
 
@@ -726,6 +726,8 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
 
     Returns MonitorStatus.RACE_ENDED when the race ends naturally, or
     MonitorStatus.INTERRUPTED on KeyboardInterrupt (caller should exit 130).
+    Returns None when the loop exits because _stop_event was set before the race
+    ended (the test-injection path).
     _stop_event may be injected for testing; defaults to a new threading.Event.
     session_id is tracked across polls and tags each written lap point; a new
     session push fires whenever the live session ID changes.

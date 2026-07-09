@@ -173,12 +173,14 @@ def _open_client():
 def _backfill_one_race(client, race_id, opts, failures, fail_prefix):
     """Backfill one race in-process with the shared client, recording failures.
 
-    Returns True if the loop should stop (an interrupt propagated). An
-    operational RaceMonitor error — including rate-limit exhaustion (429) — is
-    logged with `fail_prefix` and recorded, and the caller continues to the next
-    race. Any other exception (a programming bug or a systematic outage) is left
-    to propagate so it surfaces as a crash rather than being silently recorded
-    once per race across the whole field.
+    Returns True if the loop should stop: a KeyboardInterrupt or a
+    SystemExit(130) is treated as an interrupt and halts the field. An
+    operational RaceMonitor error — including rate-limit exhaustion (429) — or a
+    non-130 SystemExit is logged with `fail_prefix` and recorded as a failure,
+    and the caller continues to the next race. Any other exception (a
+    programming bug or a systematic outage) is left to propagate so it surfaces
+    as a crash rather than being silently recorded once per race across the
+    whole field.
     """
     from lemongrass.laps import backfill_race
     try:
