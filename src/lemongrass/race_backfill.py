@@ -360,6 +360,13 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
 
 def main():
     """Entry point: parse args, discover races, then backfill or validate."""
+    # The `lemongrass` console script dispatches here by import (cli.main ->
+    # races.main -> race_backfill.main), so the __main__ guard's basicConfig never
+    # runs. Configure logging here or every progress logging.info() line is
+    # dropped at the root logger's default WARNING level.
+    logging.basicConfig(
+        level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
     args = _build_parser().parse_args()
 
     if args.upgrade_stored:
@@ -403,6 +410,4 @@ def main():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     main()

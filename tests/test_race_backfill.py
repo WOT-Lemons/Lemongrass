@@ -732,6 +732,27 @@ class TestMainTokenResolution:
         assert any('MY_POOL' in r.message for r in caplog.records)
 
 
+class TestMainConfiguresLogging:
+    def test_main_configures_info_logging(self):
+        # race-backfill runs under the `lemongrass` console script, whose dispatch
+        # path (cli.main -> races.main -> race_backfill.main) never configures
+        # logging — the basicConfig in the __main__ guard doesn't run on import.
+        # main() must configure INFO itself, or every progress logging.info() line
+        # (SKIP / re-backfilling / summary) is silently dropped at the default
+        # WARNING level.
+        import logging
+        with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'T'}, clear=True):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
+                    mock_rm_cls.return_value.__enter__.return_value = MagicMock()
+                    with patch.object(_mod, 'find_matching_races', return_value=[]):
+                        with patch.object(_mod, 'run_backfill', return_value=[]):
+                            with patch.object(_mod.logging, 'basicConfig') as mock_bc:
+                                _mod.main()
+        mock_bc.assert_called_once()
+        assert mock_bc.call_args.kwargs.get('level') == logging.INFO
+
+
 class TestValidateWindowPadding:
     def test_lap_query_padded_one_day_each_side(self):
         import lemongrass.race_backfill as rb
