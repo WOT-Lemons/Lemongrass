@@ -47,9 +47,11 @@ Required environment variables:
 
 import argparse
 import logging
+import os
 import sys
 from datetime import UTC, date, datetime, timedelta
 
+import tomlkit
 from race_monitor import RaceMonitorClient, RaceMonitorError
 
 from lemongrass import _config, _env, _influx
@@ -386,8 +388,59 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     return failures
 
 
+def _save_search_terms(path, terms):
+    """Rewrite races.backfill.search_terms in the TOML file at path.
+
+    tomlkit preserves the rest of the document — comments, formatting, and
+    unrelated keys. Returns True on success; logs a warning and returns False
+    on any read/parse/write failure.
+    """
+    try:
+        with open(path, encoding='utf-8') as f:
+            doc = tomlkit.parse(f.read())
+        if 'races' not in doc:
+            doc['races'] = tomlkit.table()
+        if 'backfill' not in doc['races']:
+            doc['races']['backfill'] = tomlkit.table()
+        doc['races']['backfill']['search_terms'] = list(terms)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(tomlkit.dumps(doc))
+        return True
+    except (OSError, tomlkit.exceptions.TOMLKitError) as exc:
+        logging.warning("could not save search terms to %s: %s", path, exc)
+        return False
+
+
+def _print_terms_snippet(terms):
+    """Print the TOML snippet that persists terms, for manual pasting."""
+    quoted = ", ".join(f'"{t}"' for t in terms)
+    print("To persist these search terms, add to the TOML file named by "
+          "LEMONGRASS_CONFIG:\n\n"
+          "[races.backfill]\n"
+          f"search_terms = [{quoted}]\n")
+
+
 def _maybe_save_terms(result):
-    """Offer to persist changed search terms (implemented with the save flow)."""
+    """Offer to persist changed search terms after an interactive confirm.
+
+    With LEMONGRASS_CONFIG set, a y/N prompt gates a format-preserving rewrite
+    of races.backfill.search_terms; a failed save falls back to printing the
+    snippet. Without it no file is written — config loading has no default
+    path, so a written file would be silently ignored — and the snippet is
+    printed instead. Never blocks the run.
+    """
+    if not result.terms_changed:
+        return
+    path = os.environ.get('LEMONGRASS_CONFIG')
+    if not path:
+        _print_terms_snippet(result.terms)
+        return
+    try:
+        answer = input(f"Save updated search terms to {path}? [y/N] ")
+    except EOFError:
+        return
+    if answer.strip().lower() in ('y', 'yes') and not _save_search_terms(path, result.terms):
+        _print_terms_snippet(result.terms)
 
 
 def main():

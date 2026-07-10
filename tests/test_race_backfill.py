@@ -2,6 +2,7 @@ import importlib
 import logging
 import os
 import sys
+import tomllib
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -926,3 +927,90 @@ def test_backfill_defaults_come_from_config(monkeypatch, tmp_path):
     finally:
         monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         importlib.reload(race_backfill)  # restore default module state
+
+
+def _refine_result(terms=('a', 'b'), changed=True):
+    from lemongrass._backfill_tui import RefineResult
+    return RefineResult(races=[], terms=tuple(terms), terms_changed=changed)
+
+
+class TestSaveSearchTerms:
+    def test_updates_terms_preserving_comments_and_other_keys(self, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('# my config\n'
+                       '[races.backfill]\n'
+                       'search_terms = ["old"]\n'
+                       '\n'
+                       '[influx]\n'
+                       'url = "http://example"\n')
+        assert _mod._save_search_terms(str(cfg), ('a', 'b')) is True
+        text = cfg.read_text()
+        assert '# my config' in text
+        data = tomllib.loads(text)
+        assert data['races']['backfill']['search_terms'] == ['a', 'b']
+        assert data['influx']['url'] == 'http://example'
+
+    def test_creates_missing_tables(self, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('[influx]\nurl = "http://example"\n')
+        assert _mod._save_search_terms(str(cfg), ('a',)) is True
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['search_terms'] == ['a']
+
+    def test_returns_false_on_unreadable_path(self, tmp_path, caplog):
+        missing = tmp_path / 'nope' / 'lemongrass.toml'
+        with caplog.at_level(logging.WARNING):
+            assert _mod._save_search_terms(str(missing), ('a',)) is False
+        assert any('could not save' in r.message for r in caplog.records)
+
+
+class TestMaybeSaveTerms:
+    def test_unchanged_terms_never_prompt(self, monkeypatch, capsys):
+        monkeypatch.setenv('LEMONGRASS_CONFIG', '/some/path.toml')
+        monkeypatch.setattr('builtins.input',
+                            lambda *_: pytest.fail('should not prompt'))
+        _mod._maybe_save_terms(_refine_result(changed=False))
+        assert capsys.readouterr().out == ''
+
+    def test_no_config_prints_snippet_without_prompt(self, monkeypatch, capsys):
+        monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
+        monkeypatch.setattr('builtins.input',
+                            lambda *_: pytest.fail('should not prompt'))
+        _mod._maybe_save_terms(_refine_result(terms=('a', 'b')))
+        out = capsys.readouterr().out
+        assert '[races.backfill]' in out
+        assert 'search_terms = ["a", "b"]' in out
+
+    def test_yes_saves_to_config_path(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: 'y')
+        _mod._maybe_save_terms(_refine_result(terms=('a',)))
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['search_terms'] == ['a']
+
+    def test_default_answer_is_no(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: '')
+        _mod._maybe_save_terms(_refine_result())
+        assert cfg.read_text() == ''
+
+    def test_eof_on_prompt_treated_as_no(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+
+        def _eof(*_):
+            raise EOFError
+        monkeypatch.setattr('builtins.input', _eof)
+        _mod._maybe_save_terms(_refine_result())
+        assert cfg.read_text() == ''
+
+    def test_failed_save_falls_back_to_snippet(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(tmp_path / 'nope' / 'x.toml'))
+        monkeypatch.setattr('builtins.input', lambda *_: 'y')
+        _mod._maybe_save_terms(_refine_result(terms=('a',)))
+        assert '[races.backfill]' in capsys.readouterr().out
