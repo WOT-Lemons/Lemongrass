@@ -46,9 +46,11 @@ Required environment variables:
 """
 
 import argparse
+import contextlib
 import logging
 import os
 import sys
+import tempfile
 from datetime import UTC, date, datetime, timedelta
 
 import tomlkit
@@ -403,8 +405,18 @@ def _save_search_terms(path, terms):
         if 'backfill' not in doc['races']:
             doc['races']['backfill'] = tomlkit.table()
         doc['races']['backfill']['search_terms'] = list(terms)
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(tomlkit.dumps(doc))
+        # Write-then-rename so a crash mid-write can't truncate the config.
+        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or '.',
+                                        suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(tomlkit.dumps(doc))
+            os.chmod(tmp_path, os.stat(path).st_mode)
+            os.replace(tmp_path, path)
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
         return True
     except (OSError, tomlkit.exceptions.TOMLKitError) as exc:
         logging.warning("could not save search terms to %s: %s", path, exc)
@@ -413,11 +425,11 @@ def _save_search_terms(path, terms):
 
 def _print_terms_snippet(terms):
     """Print the TOML snippet that persists terms, for manual pasting."""
-    quoted = ", ".join(f'"{t}"' for t in terms)
+    array = tomlkit.item(list(terms)).as_string()
     print("To persist these search terms, add to the TOML file named by "
           "LEMONGRASS_CONFIG:\n\n"
           "[races.backfill]\n"
-          f"search_terms = [{quoted}]\n")
+          f"search_terms = {array}\n")
 
 
 def _maybe_save_terms(result):

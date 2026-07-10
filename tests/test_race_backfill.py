@@ -966,6 +966,34 @@ class TestSaveSearchTerms:
             assert _mod._save_search_terms(str(missing), ('a',)) is False
         assert any('could not save' in r.message for r in caplog.records)
 
+    def test_failed_write_leaves_original_intact_and_no_temp_files(
+            self, tmp_path, monkeypatch, caplog):
+        cfg = tmp_path / 'lemongrass.toml'
+        original = '[races.backfill]\nsearch_terms = ["old"]\n'
+        cfg.write_text(original)
+
+        def _boom(*_):
+            raise OSError('disk full')
+        monkeypatch.setattr(os, 'replace', _boom)
+        with caplog.at_level(logging.WARNING):
+            assert _mod._save_search_terms(str(cfg), ('a',)) is False
+        assert cfg.read_text() == original
+        assert list(tmp_path.iterdir()) == [cfg]
+
+    def test_preserves_file_mode(self, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        os.chmod(cfg, 0o644)
+        assert _mod._save_search_terms(str(cfg), ('a',)) is True
+        assert os.stat(cfg).st_mode & 0o777 == 0o644
+
+    def test_bare_filename_saves_relative_to_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / 'lemongrass.toml').write_text('')
+        assert _mod._save_search_terms('lemongrass.toml', ('a',)) is True
+        data = tomllib.loads((tmp_path / 'lemongrass.toml').read_text())
+        assert data['races']['backfill']['search_terms'] == ['a']
+
 
 class TestMaybeSaveTerms:
     def test_unchanged_terms_never_prompt(self, monkeypatch, capsys):
@@ -983,6 +1011,15 @@ class TestMaybeSaveTerms:
         out = capsys.readouterr().out
         assert '[races.backfill]' in out
         assert 'search_terms = ["a", "b"]' in out
+
+    def test_snippet_escapes_toml_special_characters(self, monkeypatch, capsys):
+        monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
+        terms = ('say "hi"', 'back\\slash')
+        _mod._maybe_save_terms(_refine_result(terms=terms))
+        out = capsys.readouterr().out
+        snippet = out[out.index('[races.backfill]'):]
+        data = tomllib.loads(snippet)
+        assert data['races']['backfill']['search_terms'] == list(terms)
 
     def test_yes_saves_to_config_path(self, monkeypatch, tmp_path):
         cfg = tmp_path / 'lemongrass.toml'
