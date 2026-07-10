@@ -18,6 +18,7 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Input, Label, ListItem, ListView, SelectionList
 from textual.widgets.selection_list import Selection
+from textual.worker import get_current_worker
 
 
 @dataclass(frozen=True)
@@ -245,12 +246,21 @@ class BackfillApp(App):
 
     @work(thread=True)
     def _search_term(self, term):
-        """Fetch a term's results off the UI thread (rate limit may block ~10s)."""
+        """Fetch a term's results off the UI thread (rate limit may block ~10s).
+
+        If the app exits while the request is in flight, this worker is cancelled;
+        skip call_from_thread in that case since the event loop is already closed.
+        """
+        worker = get_current_worker()
         try:
             resp = self.client.results.search_results(term)
         except RaceMonitorError as exc:
+            if worker.is_cancelled:
+                return
             self.call_from_thread(
                 self.notify, f'search "{term}" failed: {exc}', severity='error')
+            return
+        if worker.is_cancelled:
             return
         self.call_from_thread(self._merge_results, term, resp.get('Races', []))
 

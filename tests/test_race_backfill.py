@@ -699,7 +699,7 @@ class TestMainTokenResolution:
             with patch.object(sys, 'argv', ['race-backfill']):
                 with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
                     mock_rm_cls.return_value.__enter__.return_value = MagicMock()
-                    with patch.object(_mod, 'find_matching_races', return_value=[]):
+                    with patch.object(_mod, 'search_races_by_term', return_value={'term': []}):
                         with patch.object(_mod, 'run_backfill', return_value=[]):
                             _mod.main()
         mock_rm_cls.assert_called_once_with(api_token=['TOKEN1', 'TOKEN2'])
@@ -812,8 +812,9 @@ class TestMain:
             with patch.object(sys, 'argv', ['race-backfill', '--validate']):
                 with patch('lemongrass.race_backfill.RaceMonitorClient') as mk_rm:
                     mk_rm.return_value.__enter__.return_value = MagicMock()
-                    with patch.object(_mod, 'find_matching_races',
-                                      return_value=[_make_race(101, 'R', EPOC_2022)]):
+                    with patch.object(
+                            _mod, 'search_races_by_term',
+                            return_value={'term': [_make_race(101, 'R', EPOC_2022)]}):
                         with patch('lemongrass._influx.connect') as mk_connect:
                             mk_connect.return_value.__enter__.return_value = MagicMock()
                             with patch.object(_mod, 'validate_backfill',
@@ -825,6 +826,7 @@ class TestMain:
     def test_validate_dispatches_and_exits_0_when_ok(self):
         exc, mk_val = self._run_validate_main(ok=True)
         mk_val.assert_called_once()
+        assert mk_val.call_args.args[0] == ['101']
         assert exc.value.code == 0
 
     def test_validate_exits_1_when_not_ok(self):
@@ -836,7 +838,7 @@ class TestMain:
             with patch.object(sys, 'argv', ['race-backfill']):
                 with patch('lemongrass.race_backfill.RaceMonitorClient') as mk_rm:
                     mk_rm.return_value.__enter__.return_value = MagicMock()
-                    with patch.object(_mod, 'find_matching_races', return_value=[]):
+                    with patch.object(_mod, 'search_races_by_term', return_value={'term': []}):
                         with patch.object(_mod, 'run_backfill', return_value=['101']):
                             with pytest.raises(SystemExit) as exc:
                                 _mod.main()
@@ -880,7 +882,8 @@ class TestMainConfiguresLogging:
                 with patch.object(sys, 'argv', ['race-backfill']):
                     with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
                         mock_rm_cls.return_value.__enter__.return_value = MagicMock()
-                        with patch.object(_mod, 'find_matching_races', return_value=[]):
+                        with patch.object(_mod, 'search_races_by_term',
+                                          return_value={'term': []}):
                             with patch.object(_mod, 'run_backfill', return_value=[]):
                                 _mod.main()
             assert root.level == logging.INFO
