@@ -90,18 +90,37 @@ def _build_parser():
     return parser
 
 
+def search_races_by_term(client, terms, start_epoc):
+    """Search RaceMonitor once per term; return {term: [race, ...]}.
+
+    Each list is filtered to races starting at or after start_epoc but is NOT
+    deduplicated across terms, preserving which term matched which race (the
+    interactive refinement UI needs that attribution to drop a term's races
+    when the term is removed).
+    """
+    by_term = {}
+    for term in terms:
+        resp = client.results.search_results(term)
+        by_term[term] = [race for race in resp.get('Races', [])
+                         if race['StartDateEpoc'] >= start_epoc]
+    return by_term
+
+
+def merge_races(races_by_term):
+    """Merge per-term search results: dedup by race ID, sort by start date."""
+    seen = {}
+    for races in races_by_term.values():
+        for race in races:
+            seen[race['ID']] = race
+    return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
+
+
 def find_matching_races(client, start_epoc):
     """Search for matching Lemons races at or after start_epoc.
 
     Makes one API call per search term and deduplicates by race ID.
     """
-    seen = {}
-    for term in LEMONS_SEARCH_TERMS:
-        resp = client.results.search_results(term)
-        for race in resp.get('Races', []):
-            if race['StartDateEpoc'] >= start_epoc:
-                seen[race['ID']] = race
-    return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
+    return merge_races(search_races_by_term(client, LEMONS_SEARCH_TERMS, start_epoc))
 
 
 def validate_backfill(race_ids, query_api):

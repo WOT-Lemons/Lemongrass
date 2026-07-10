@@ -108,6 +108,46 @@ class TestFindMatchingRaces:
         assert [r['ID'] for r in races] == [1, 2]
 
 
+class TestSearchRacesByTerm:
+    def _client(self, responses_by_term):
+        client = MagicMock()
+        client.results.search_results.side_effect = lambda term: {
+            'Races': responses_by_term.get(term, [])
+        }
+        return client
+
+    def test_one_search_call_per_term_in_order(self):
+        client = self._client({})
+        _mod.search_races_by_term(client, ('alpha', 'beta'), start_epoc=EPOC_2021)
+        called = [c.args[0] for c in client.results.search_results.call_args_list]
+        assert called == ['alpha', 'beta']
+
+    def test_filters_races_before_start_epoc(self):
+        client = self._client({'alpha': [_make_race(1, 'old', EPOC_2020),
+                                         _make_race(2, 'new', EPOC_2022)]})
+        by_term = _mod.search_races_by_term(client, ('alpha',), start_epoc=EPOC_2021)
+        assert [r['ID'] for r in by_term['alpha']] == [2]
+
+    def test_keeps_per_term_attribution_without_dedup(self):
+        shared = _make_race(2, 'shared', EPOC_2022)
+        client = self._client({'alpha': [shared], 'beta': [shared]})
+        by_term = _mod.search_races_by_term(client, ('alpha', 'beta'),
+                                            start_epoc=EPOC_2021)
+        assert by_term['alpha'] == [shared]
+        assert by_term['beta'] == [shared]
+
+
+class TestMergeRaces:
+    def test_dedups_by_id_and_sorts_by_start_date(self):
+        by_term = {
+            'alpha': [_make_race(2, 'later', EPOC_2022),
+                      _make_race(1, 'early', EPOC_2021)],
+            'beta': [_make_race(2, 'later', EPOC_2022)],
+        }
+        merged = _mod.merge_races(by_term)
+        assert [r['ID'] for r in merged] == [1, 2]
+
+
 class TestRunBackfill:
     def _races(self):
         return [
