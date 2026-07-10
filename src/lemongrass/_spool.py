@@ -28,6 +28,9 @@ class Spool:
     def __init__(
         self, directory, max_bytes=DEFAULT_MAX_BYTES, rotate_bytes=ROTATE_BYTES
     ):
+        """Open a spool at ``directory``, capped at ``max_bytes`` total and
+        rotating to a new file every ``rotate_bytes``. Durability is disabled
+        (``self.enabled`` False) if the directory cannot be created."""
         self.dir = Path(directory)
         self.max_bytes = max_bytes
         self.rotate_bytes = rotate_bytes
@@ -35,11 +38,13 @@ class Spool:
 
     @classmethod
     def from_config(cls):
+        """Build a Spool from the telem.spool section of the loaded config."""
         from lemongrass import _config
         spool = _config.load_config().telem.spool
         return cls(spool.dir, max_bytes=spool.max_size)
 
     def _ensure_dir(self):
+        """Create the spool directory; return True if usable, False (and log) if not."""
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
             return True
@@ -52,11 +57,17 @@ class Spool:
             return False
 
     def _files(self):
+        """Return the live (.lp) spool files, oldest first (empty if disabled)."""
         if not self.enabled:
             return []
         return sorted(self.dir.glob(f'*{_SUFFIX}'))
 
     def _next_seq(self):
+        """Return the next file sequence number, one past the highest existing.
+
+        Considers BOTH live (.lp) and quarantined (.bad) files so the counter
+        never resets and collides with a lingering quarantined file.
+        """
         # Derive the next sequence from BOTH live (.lp) and quarantined (.bad)
         # files: once every .lp drains, a lingering .bad must not let the
         # counter reset to 1 and collide with (rename would clobber) or
@@ -68,6 +79,8 @@ class Spool:
         return (max(seqs) + 1) if seqs else 1
 
     def _append_path(self):
+        """Path to append to: the newest file if under the rotate threshold,
+        otherwise a freshly sequenced file."""
         files = self._files()
         if files and files[-1].stat().st_size < self.rotate_bytes:
             return files[-1]
@@ -114,6 +127,11 @@ class Spool:
         return True
 
     def _enforce_cap(self):
+        """Evict the oldest files until total size is within ``max_bytes``.
+
+        Counts both live (.lp) and quarantined (.bad) files toward the cap and
+        always keeps at least one file. Eviction counts are logged.
+        """
         # Count both live (.lp) and quarantined (.bad) files toward the cap: a
         # recurring stream of poison/unreadable files must not accumulate .bad
         # files past telem.spool.max_size on a constrained device. Both suffixes

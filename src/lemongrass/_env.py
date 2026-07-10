@@ -5,11 +5,17 @@ _LEGACY_TOKEN_VAR = 'RACEMONITOR_TOKEN'
 
 
 def _pool_var() -> str:
+    """Return the configured name of the RaceMonitor token-pool env var."""
     from lemongrass import _config
     return _config.load_config().racemonitor.tokens_env
 
 
 def _legacy_applies(pool_var: str) -> bool:
+    """Whether the legacy RACEMONITOR_TOKEN fallback applies for ``pool_var``.
+
+    True only when the default pool var is in use, so a deployment that names
+    its own pool var does not pick up a stale singular leftover.
+    """
     # The legacy singular var is honored only alongside the default pool var; a
     # deployment that names its own pool var must not pick up a stale leftover.
     from lemongrass import _config

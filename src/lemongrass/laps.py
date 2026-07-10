@@ -1065,6 +1065,7 @@ def existing_lap_counts(ctx):
     some laps predate the current schema (written by an older laps.py).
     """
     def _count(field_filter):
+        """Count lap points for the tracked car matching ``field_filter``."""
         tables = ctx.query_api.query(
             f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
@@ -1088,6 +1089,7 @@ def existing_lap_counts_fieldwide(ctx):
     the full field. Used by old_race when running in fieldwide mode.
     """
     def _count(field_filter):
+        """Count lap points across all cars in the race matching ``field_filter``."""
         tables = ctx.query_api.query(
             f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
@@ -1143,6 +1145,7 @@ def existing_standings_counts_fieldwide(ctx):
     standings are fresh before skipping a race whose laps are already complete.
     """
     def _count(field_filter):
+        """Count standings points across all cars in the race matching ``field_filter``."""
         tables = ctx.query_api.query(
             f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
             f'  |> range(start: {EPOCH_START})\n'
