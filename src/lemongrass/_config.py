@@ -76,6 +76,8 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Buckets:
+    """InfluxDB bucket names for each class of lemongrass measurement."""
+
     laps: str = 'laps'
     races: str = 'races'
     sessions: str = 'race_sessions'
@@ -85,6 +87,8 @@ class Buckets:
 
 @dataclass(frozen=True)
 class InfluxConfig:
+    """InfluxDB connection settings, bucket names, and the token env-var name."""
+
     url: str = 'https://influxdb.focism.com'
     org: str = 'focism'
     token_env: str = 'INFLUX_TELEMETRY_TOKEN'
@@ -93,22 +97,30 @@ class InfluxConfig:
 
 @dataclass(frozen=True)
 class BackfillConfig:
+    """Race-history backfill: event search terms and the default start date."""
+
     search_terms: tuple = ('Real Hoopties', 'GP du Lac', 'Halloween Hoop')
     default_start_date: str = '2017-01-01'
 
 
 @dataclass(frozen=True)
 class RacesConfig:
+    """Settings for the ``races`` command group."""
+
     backfill: BackfillConfig = field(default_factory=BackfillConfig)
 
 
 @dataclass(frozen=True)
 class RaceMonitorConfig:
+    """RaceMonitor API settings: the name of the token-pool env var."""
+
     tokens_env: str = 'RACEMONITOR_TOKENS'
 
 
 @dataclass(frozen=True)
 class ObdConfig:
+    """OBD-II serial-port settings for the telemetry reader."""
+
     port: str = '/dev/obd'
     baudrate: int = 0
     debug: bool = False
@@ -116,12 +128,16 @@ class ObdConfig:
 
 @dataclass(frozen=True)
 class SpoolConfig:
+    """On-disk telemetry spool: directory and total size cap."""
+
     dir: str = '/data/telem-spool'
     max_size: int = 1024 ** 3
 
 
 @dataclass(frozen=True)
 class TelemConfig:
+    """Telemetry settings: car VIN plus nested OBD and spool config."""
+
     vin: str = ''
     obd: ObdConfig = field(default_factory=ObdConfig)
     spool: SpoolConfig = field(default_factory=SpoolConfig)
@@ -129,6 +145,8 @@ class TelemConfig:
 
 @dataclass(frozen=True)
 class PisugarConfig:
+    """PiSugar battery-monitor connection settings."""
+
     host: str = ''
     api_url: str = 'http://localhost:8421'
     config_path: str = '/etc/pisugar-server/config.json'
@@ -136,6 +154,8 @@ class PisugarConfig:
 
 @dataclass(frozen=True)
 class Config:
+    """Top-level lemongrass configuration aggregating all sections."""
+
     influx: InfluxConfig = field(default_factory=InfluxConfig)
     races: RacesConfig = field(default_factory=RacesConfig)
     racemonitor: RaceMonitorConfig = field(default_factory=RaceMonitorConfig)
@@ -156,6 +176,11 @@ def load_config():
 
 
 def _read_file():
+    """Read and parse the TOML file named by LEMONGRASS_CONFIG.
+
+    Returns an empty dict when the var is unset. Raises ConfigError if the file
+    cannot be read or is not valid UTF-8 TOML.
+    """
     path = os.environ.get('LEMONGRASS_CONFIG')
     if not path:
         return {}
@@ -171,6 +196,10 @@ def _read_file():
 
 
 def _reject_unknown(d, allowed, where):
+    """Raise ConfigError if ``d`` is not a table or has keys outside ``allowed``.
+
+    ``where`` names the table in the error message (e.g. 'influx.buckets').
+    """
     if not isinstance(d, dict):
         raise ConfigError(f"[{where}] must be a table, not {type(d).__name__}")
     extra = set(d) - allowed
@@ -179,6 +208,11 @@ def _reject_unknown(d, allowed, where):
 
 
 def _typed(d, key, default, kind, where):
+    """Return ``d[key]`` validated as ``kind``, or ``default`` if absent.
+
+    ``kind`` is str, int, bool, or tuple (a TOML list of strings, returned as a
+    tuple). Raises ConfigError on a type mismatch, tagging it with ``where``.
+    """
     if key not in d:
         return default
     v = d[key]
@@ -196,6 +230,7 @@ def _typed(d, key, default, kind, where):
 
 
 def _build_config(data):
+    """Validate the top-level table and build a Config from its sections."""
     _reject_unknown(data, {'influx', 'races', 'racemonitor', 'telem', 'pisugar'},
                     'top level')
     return Config(
@@ -208,6 +243,7 @@ def _build_config(data):
 
 
 def _build_influx(d):
+    """Build InfluxConfig, including nested Buckets, from the [influx] table."""
     _reject_unknown(d, {'url', 'org', 'token_env', 'buckets'}, 'influx')
     b = d.get('buckets', {})
     _reject_unknown(b, {'laps', 'races', 'sessions', 'telem', 'pisugar'},
@@ -228,6 +264,7 @@ def _build_influx(d):
 
 
 def _build_races(d):
+    """Build RacesConfig, including nested BackfillConfig, from the [races] table."""
     _reject_unknown(d, {'backfill'}, 'races')
     bf = d.get('backfill', {})
     _reject_unknown(bf, {'search_terms', 'default_start_date'}, 'races.backfill')
@@ -241,6 +278,7 @@ def _build_races(d):
 
 
 def _build_racemonitor(d):
+    """Build RaceMonitorConfig from the [racemonitor] table."""
     _reject_unknown(d, {'tokens_env'}, 'racemonitor')
     dflt = RaceMonitorConfig()
     return RaceMonitorConfig(
@@ -248,6 +286,10 @@ def _build_racemonitor(d):
 
 
 def _build_telem(d):
+    """Build TelemConfig, including nested ObdConfig and SpoolConfig, from [telem].
+
+    spool.max_size accepts a human-readable size string (parsed via parse_size).
+    """
     _reject_unknown(d, {'vin', 'obd', 'spool'}, 'telem')
     obd_d, spool_d = d.get('obd', {}), d.get('spool', {})
     _reject_unknown(obd_d, {'port', 'baudrate', 'debug'}, 'telem.obd')
@@ -274,6 +316,7 @@ def _build_telem(d):
 
 
 def _build_pisugar(d):
+    """Build PisugarConfig from the [pisugar] table."""
     _reject_unknown(d, {'host', 'api_url', 'config_path'}, 'pisugar')
     dflt = PisugarConfig()
     return PisugarConfig(
