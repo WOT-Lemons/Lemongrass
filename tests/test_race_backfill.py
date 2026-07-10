@@ -5,6 +5,7 @@ import sys
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -703,6 +704,70 @@ class TestMainTokenResolution:
         mock_rm_cls.assert_called_once_with(api_token=['TOKEN1', 'TOKEN2'])
 
 
+class TestMainInteractive:
+    RACES: ClassVar[list] = [_make_race(1, 'one', EPOC_2022), _make_race(2, 'two', EPOC_2023)]
+
+    @contextmanager
+    def _main_harness(self, tty, refine_result='unset'):
+        """Run main() with discovery stubbed; yields (run_backfill, refine) mocks."""
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        by_term = {t: list(self.RACES) for t in _mod.LEMONS_SEARCH_TERMS}
+        with patch.object(_mod, 'RaceMonitorClient', return_value=client), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch.object(_mod, 'search_races_by_term', return_value=by_term), \
+             patch.object(_mod, 'run_backfill', return_value=[]) as backfill, \
+             patch.object(_mod.sys.stdin, 'isatty', return_value=tty), \
+             patch.object(_mod.sys.stdout, 'isatty', return_value=tty), \
+             patch('lemongrass._backfill_tui.refine_races') as refine:
+            if refine_result != 'unset':
+                refine.return_value = refine_result
+            yield backfill, refine
+
+    def test_non_tty_skips_tui_and_backfills_all(self):
+        with self._main_harness(tty=False) as (backfill, refine):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                _mod.main()
+        refine.assert_not_called()
+        races = backfill.call_args.args[0]
+        assert [r['ID'] for r in races] == [1, 2]
+
+    def test_tty_cancel_exits_zero_without_backfill(self):
+        with self._main_harness(tty=True, refine_result=None) as (backfill, _):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                with pytest.raises(SystemExit) as exc:
+                    _mod.main()
+        assert exc.value.code == 0
+        backfill.assert_not_called()
+
+    def test_tty_confirm_backfills_selected_subset(self):
+        from lemongrass._backfill_tui import RefineResult
+        subset = RefineResult(races=[self.RACES[1]],
+                              terms=tuple(_mod.LEMONS_SEARCH_TERMS),
+                              terms_changed=False)
+        with self._main_harness(tty=True, refine_result=subset) as (backfill, refine):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                _mod.main()
+        refine.assert_called_once()
+        races = backfill.call_args.args[0]
+        assert [r['ID'] for r in races] == [2]
+
+    def test_tty_validate_uses_selected_subset(self):
+        from lemongrass._backfill_tui import RefineResult
+        subset = RefineResult(races=[self.RACES[0]],
+                              terms=tuple(_mod.LEMONS_SEARCH_TERMS),
+                              terms_changed=False)
+        with self._main_harness(tty=True, refine_result=subset):
+            with patch.object(_mod, 'validate_backfill', return_value=True) as val, \
+                 patch.object(_mod._influx, 'connect', MagicMock()):
+                with patch.object(sys, 'argv', ['race-backfill', '--validate']):
+                    with pytest.raises(SystemExit) as exc:
+                        _mod.main()
+        assert exc.value.code == 0
+        assert val.call_args.args[0] == ['1']
+
+
 class TestMain:
     """main() control flow: dispatch, exit codes, and interrupt handling."""
 
@@ -781,7 +846,7 @@ class TestMain:
             with patch.object(sys, 'argv', ['race-backfill']):
                 with patch('lemongrass.race_backfill.RaceMonitorClient') as mk_rm:
                     mk_rm.return_value.__enter__.return_value = MagicMock()
-                    with patch.object(_mod, 'find_matching_races',
+                    with patch.object(_mod, 'search_races_by_term',
                                       side_effect=KeyboardInterrupt()):
                         with pytest.raises(SystemExit) as exc:
                             _mod.main()

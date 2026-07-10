@@ -32,6 +32,12 @@ Usage:
     # RaceMonitor (faster than --force when only the schema tag changed)
     lemongrass race-backfill --upgrade-stored
 
+    When run in a terminal, race-backfill (including --dry-run and --validate)
+    opens an interactive checklist of the matched races: toggle races with
+    space, add/remove search terms live, then Enter to proceed with the
+    selection (everything starts selected, so Enter alone keeps the old
+    behavior). Non-terminal runs (cron, pipes) skip the UI entirely.
+
 Required environment variables:
     RACEMONITOR_TOKENS     — comma-separated RaceMonitor API tokens (preferred)
     RACEMONITOR_TOKEN      — single RaceMonitor API token (fallback)
@@ -380,6 +386,10 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     return failures
 
 
+def _maybe_save_terms(result):
+    """Offer to persist changed search terms (implemented with the save flow)."""
+
+
 def main():
     """Entry point: parse args, discover races, then backfill or validate."""
     # The `lemongrass` console script dispatches here by import (cli.main ->
@@ -414,8 +424,23 @@ def main():
 
     try:
         with RaceMonitorClient(api_token=tokens) as client:
-            races = find_matching_races(client, start_epoc)
+            races_by_term = search_races_by_term(
+                client, LEMONS_SEARCH_TERMS, start_epoc)
+            races = merge_races(races_by_term)
             logging.info("Found %d matching races", len(races))
+
+            if sys.stdin.isatty() and sys.stdout.isatty():
+                # Imported lazily: non-interactive runs (cron, pipes) never pay
+                # the textual import.
+                from lemongrass._backfill_tui import refine_races
+                result = refine_races(
+                    client, LEMONS_SEARCH_TERMS, races_by_term, start_epoc)
+                if result is None:
+                    logging.info("Cancelled, nothing done.")
+                    sys.exit(0)
+                logging.info("Selected %d of %d races", len(result.races), len(races))
+                races = result.races
+                _maybe_save_terms(result)
 
             if args.validate:
                 race_ids = [str(r['ID']) for r in races]
