@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import ClassVar
 
+from race_monitor import RaceMonitorError
+from textual import work
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
@@ -134,6 +136,7 @@ class BackfillApp(App):
         Binding('enter', 'confirm', 'Confirm', priority=True),
         Binding('a', 'select_all', 'All'),
         Binding('i', 'invert', 'Invert'),
+        Binding('d', 'remove_term', 'Remove term'),
         Binding('escape', 'cancel', 'Cancel'),
         Binding('q', 'cancel', 'Cancel', show=False),
         Binding('ctrl+c', 'cancel', 'Cancel', show=False, priority=True),
@@ -215,9 +218,46 @@ class BackfillApp(App):
         """Exit without a selection."""
         self.exit(None)
 
+    def action_remove_term(self):
+        """Remove the term highlighted in the terms pane."""
+        terms_view = self.query_one('#terms', ListView)
+        if terms_view.index is None or not self.model.terms:
+            return
+        self.model.remove_term(self.model.terms[terms_view.index])
+        self._refresh_all()
+
+    def on_input_submitted(self, event):
+        """Fallback submit path if the priority enter binding is bypassed."""
+        self._submit_term(event.value)
+
     def _submit_term(self, value):
-        """Add a search term (implemented in the term-management task)."""
-        raise NotImplementedError
+        """Add a term: from the session cache if present, else a live search."""
+        term = value.strip()
+        self.query_one('#new-term', Input).value = ''
+        if not term or term in self.model.terms:
+            return
+        if self.model.has_cached(term):
+            self.model.add_term(term)
+            self._refresh_all()
+            return
+        self.notify(f'searching "{term}"…')
+        self._search_term(term)
+
+    @work(thread=True)
+    def _search_term(self, term):
+        """Fetch a term's results off the UI thread (rate limit may block ~10s)."""
+        try:
+            resp = self.client.results.search_results(term)
+        except RaceMonitorError as exc:
+            self.call_from_thread(
+                self.notify, f'search "{term}" failed: {exc}', severity='error')
+            return
+        self.call_from_thread(self._merge_results, term, resp.get('Races', []))
+
+    def _merge_results(self, term, results):
+        """Merge a completed term search into the model and rebuild the panes."""
+        self.model.add_term(term, results)
+        self._refresh_all()
 
 
 def refine_races(client, terms, races_by_term, start_epoc):

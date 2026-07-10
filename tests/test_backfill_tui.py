@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock
 
 import pytest
+from race_monitor import RaceMonitorError
+from textual.widgets import Input, ListView, SelectionList
 
 from lemongrass._backfill_tui import BackfillApp, RaceListModel
 
@@ -150,3 +152,94 @@ class TestBackfillAppCore:
         async with app.run_test() as pilot:
             await pilot.press('escape')
         assert app.return_value is None
+
+
+class TestBackfillAppTerms:
+    async def _type_term(self, pilot, app, term):
+        app.query_one('#new-term', Input).focus()
+        await pilot.pause()
+        for ch in term:
+            await pilot.press(ch)
+        await pilot.press('enter')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    @pytest.mark.asyncio
+    async def test_add_term_searches_and_merges_prechecked(self):
+        client = MagicMock()
+        client.results.search_results.return_value = {
+            'Races': [_race(3, 'three', 300)]}
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._type_term(pilot, app, 'gp')
+            app.query_one('#races', SelectionList).focus()
+            await pilot.pause()
+            await pilot.press('enter')
+        client.results.search_results.assert_called_once_with('gp')
+        result = app.return_value
+        assert [r['ID'] for r in result.races] == [1, 3]
+        assert result.terms == ('t1', 'gp')
+        assert result.terms_changed is True
+
+    @pytest.mark.asyncio
+    async def test_add_term_filters_new_results_by_start_epoc(self):
+        client = MagicMock()
+        client.results.search_results.return_value = {
+            'Races': [_race(3, 'too-old', 50)]}
+        app = _app({'t1': [_race(1, 'one', 150)]}, start_epoc=100, client=client)
+        async with app.run_test() as pilot:
+            await self._type_term(pilot, app, 'gp')
+            app.query_one('#races', SelectionList).focus()
+            await pilot.pause()
+            await pilot.press('enter')
+        assert [r['ID'] for r in app.return_value.races] == [1]
+
+    @pytest.mark.asyncio
+    async def test_search_failure_notifies_and_does_not_add_term(self):
+        client = MagicMock()
+        client.results.search_results.side_effect = RaceMonitorError('boom')
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._type_term(pilot, app, 'gp')
+        assert app.model.terms == ['t1']
+
+    @pytest.mark.asyncio
+    async def test_remove_term_key_drops_its_races(self):
+        app = _app({'t1': [_race(1, 'one', 100)], 't2': [_race(2, 'two', 200)]},
+                   terms=('t1', 't2'))
+        async with app.run_test() as pilot:
+            app.query_one('#terms', ListView).focus()
+            await pilot.pause()
+            # this Textual patch version starts with no highlighted row, so two
+            # presses are needed to reach index 1 ('t2')
+            await pilot.press('down')
+            await pilot.press('down')  # highlight 't2'
+            await pilot.press('d')
+            app.query_one('#races', SelectionList).focus()
+            await pilot.pause()
+            await pilot.press('enter')
+        result = app.return_value
+        assert [r['ID'] for r in result.races] == [1]
+        assert result.terms == ('t1',)
+
+    @pytest.mark.asyncio
+    async def test_readding_removed_term_hits_cache_not_client(self):
+        client = MagicMock()
+        client.results.search_results.return_value = {
+            'Races': [_race(2, 'two', 200)]}
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._type_term(pilot, app, 'gp')     # live search (1 call)
+            app.query_one('#terms', ListView).focus()
+            await pilot.pause()
+            # this Textual patch version starts with no highlighted row, so two
+            # presses are needed to reach index 1 ('gp')
+            await pilot.press('down')
+            await pilot.press('down')
+            await pilot.press('d')                       # remove 'gp'
+            await self._type_term(pilot, app, 'gp')     # re-add: cache hit
+            app.query_one('#races', SelectionList).focus()
+            await pilot.pause()
+            await pilot.press('enter')
+        assert client.results.search_results.call_count == 1
+        assert [r['ID'] for r in app.return_value.races] == [1, 2]
