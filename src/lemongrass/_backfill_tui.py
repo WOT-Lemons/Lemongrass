@@ -8,6 +8,14 @@ behavior is unit-testable without Textual.
 """
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import ClassVar
+
+from textual.app import App
+from textual.binding import Binding, BindingType
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Footer, Input, Label, ListItem, ListView, SelectionList
+from textual.widgets.selection_list import Selection
 
 
 @dataclass(frozen=True)
@@ -101,3 +109,128 @@ class RaceListModel:
     def terms_changed(self):
         """True if the active terms differ from the session's initial terms."""
         return tuple(self.terms) != self._initial_terms
+
+
+def _race_label(race):
+    """One checklist row: 'YYYY-MM-DD  Name  (#id)'."""
+    day = datetime.fromtimestamp(race['StartDateEpoc'], tz=UTC).strftime('%Y-%m-%d')
+    return f"{day}  {race['Name']}  (#{race['ID']})"
+
+
+class BackfillApp(App):
+    """Two-pane refinement UI; exit value is a RefineResult, or None on cancel.
+
+    All state changes are delegated to the RaceListModel; widgets are rebuilt
+    from the model after every mutation, so the model stays the single source
+    of truth.
+    """
+
+    CSS = """
+    #terms-pane { width: 36; }
+    #terms-pane, #races-pane { border: round $primary; padding: 0 1; }
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('enter', 'confirm', 'Confirm', priority=True),
+        Binding('a', 'select_all', 'All'),
+        Binding('i', 'invert', 'Invert'),
+        Binding('escape', 'cancel', 'Cancel'),
+        Binding('q', 'cancel', 'Cancel', show=False),
+        Binding('ctrl+c', 'cancel', 'Cancel', show=False, priority=True),
+    ]
+
+    def __init__(self, client, model):
+        """client is the shared RaceMonitorClient; model a seeded RaceListModel."""
+        super().__init__()
+        self.client = client
+        self.model = model
+
+    def compose(self):
+        """Lay out the terms pane, races checklist, and footer."""
+        with Horizontal():
+            with Vertical(id='terms-pane'):
+                yield Label('Search terms')
+                yield ListView(id='terms')
+                yield Input(placeholder='add search term…', id='new-term')
+            with Vertical(id='races-pane'):
+                yield Label(id='count')
+                yield SelectionList(id='races')
+        yield Footer()
+
+    def on_mount(self):
+        """Populate both panes from the model and focus the checklist."""
+        self._refresh_all()
+        self.query_one('#races', SelectionList).focus()
+
+    def _refresh_all(self):
+        """Rebuild both panes from the model."""
+        terms_view = self.query_one('#terms', ListView)
+        terms_view.clear()
+        for term in self.model.terms:
+            terms_view.append(ListItem(Label(term)))
+        races_view = self.query_one('#races', SelectionList)
+        races_view.clear_options()
+        for race in self.model.races():
+            races_view.add_option(Selection(
+                _race_label(race), race['ID'], race['ID'] in self.model.checked))
+        self._update_count()
+
+    def _update_count(self):
+        """Refresh the 'N of M selected' header above the checklist."""
+        total = len(self.model.races())
+        self.query_one('#count', Label).update(
+            f'Races — {len(self.model.checked)} of {total} selected')
+
+    def on_selection_list_selection_toggled(self, event):
+        """Mirror a checkbox toggle into the model."""
+        self.model.toggle(event.selection.value)
+        self._update_count()
+
+    def action_select_all(self):
+        """Check every visible race."""
+        self.model.set_all(True)
+        self._refresh_all()
+
+    def action_invert(self):
+        """Invert every visible race's checked state."""
+        self.model.invert()
+        self._refresh_all()
+
+    def action_confirm(self):
+        """Exit with the confirmed selection.
+
+        enter is a priority binding so it wins over the SelectionList; when the
+        term Input is focused it submits the typed term instead of confirming
+        (the Input would otherwise swallow the key).
+        """
+        term_input = self.query_one('#new-term', Input)
+        if self.focused is term_input:
+            self._submit_term(term_input.value)
+            return
+        self.exit(RefineResult(races=self.model.selected(),
+                               terms=tuple(self.model.terms),
+                               terms_changed=self.model.terms_changed))
+
+    def action_cancel(self):
+        """Exit without a selection."""
+        self.exit(None)
+
+    def _submit_term(self, value):
+        """Add a search term (implemented in the term-management task)."""
+        raise NotImplementedError
+
+
+def refine_races(client, terms, races_by_term, start_epoc):
+    """Run the refinement app; return a RefineResult, or None if cancelled.
+
+    client is the already-open RaceMonitorClient from the initial search (its
+    rate-limiter window is shared with in-app term searches). races_by_term is
+    the per-term output of search_races_by_term(); start_epoc filters in-app
+    search results the same way --start-date filtered the initial ones.
+    """
+    model = RaceListModel(terms, races_by_term, start_epoc)
+    app = BackfillApp(client, model)
+    try:
+        return app.run()
+    except KeyboardInterrupt:
+        return None

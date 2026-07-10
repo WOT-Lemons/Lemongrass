@@ -1,4 +1,8 @@
-from lemongrass._backfill_tui import RaceListModel
+from unittest.mock import MagicMock
+
+import pytest
+
+from lemongrass._backfill_tui import BackfillApp, RaceListModel
 
 
 def _race(id, name, start_epoc):
@@ -7,6 +11,11 @@ def _race(id, name, start_epoc):
 
 def _model(races_by_term=None, terms=('t1',), start_epoc=0):
     return RaceListModel(terms, races_by_term or {}, start_epoc)
+
+
+def _app(races_by_term=None, terms=('t1',), start_epoc=0, client=None):
+    model = RaceListModel(terms, races_by_term or {}, start_epoc)
+    return BackfillApp(client or MagicMock(), model)
 
 
 class TestRaceListModel:
@@ -94,3 +103,50 @@ class TestRaceListModel:
                            _race(3, 'three', 300)]})
         m.toggle(2)
         assert [r['ID'] for r in m.selected()] == [1, 3]
+
+
+class TestBackfillAppCore:
+    @pytest.mark.asyncio
+    async def test_enter_confirms_all_races_by_default(self):
+        app = _app({'t1': [_race(1, 'one', 100), _race(2, 'two', 200)]})
+        async with app.run_test() as pilot:
+            await pilot.press('enter')
+        result = app.return_value
+        assert [r['ID'] for r in result.races] == [1, 2]
+        assert result.terms == ('t1',)
+        assert result.terms_changed is False
+
+    @pytest.mark.asyncio
+    async def test_space_toggles_highlighted_race(self):
+        app = _app({'t1': [_race(1, 'one', 100), _race(2, 'two', 200)]})
+        async with app.run_test() as pilot:
+            # this Textual patch version needs an explicit move to highlight row 0
+            await pilot.press('down')
+            await pilot.press('space')  # checklist is focused; row 1 highlighted
+            await pilot.press('enter')
+        assert [r['ID'] for r in app.return_value.races] == [2]
+
+    @pytest.mark.asyncio
+    async def test_select_all_and_invert_keys(self):
+        app = _app({'t1': [_race(1, 'one', 100), _race(2, 'two', 200)]})
+        async with app.run_test() as pilot:
+            await pilot.press('i')  # invert: all -> none
+            # this Textual patch version needs an explicit move to highlight row 0
+            await pilot.press('down')
+            await pilot.press('space')  # check row 1
+            await pilot.press('enter')
+        assert [r['ID'] for r in app.return_value.races] == [1]
+
+    @pytest.mark.asyncio
+    async def test_q_cancels_with_none(self):
+        app = _app({'t1': [_race(1, 'one', 100)]})
+        async with app.run_test() as pilot:
+            await pilot.press('q')
+        assert app.return_value is None
+
+    @pytest.mark.asyncio
+    async def test_escape_cancels_with_none(self):
+        app = _app({'t1': [_race(1, 'one', 100)]})
+        async with app.run_test() as pilot:
+            await pilot.press('escape')
+        assert app.return_value is None

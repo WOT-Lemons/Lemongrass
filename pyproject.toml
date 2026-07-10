@@ -24,6 +24,8 @@ dependencies = [
     "obd~=0.7",
     "pandas~=3.0",
     "race-monitor>=1.0,<2.0",
+    "textual~=8.2",
+    "tomlkit~=0.15",
     "urllib3>=2",
 ]
 
@@ -50,10 +52,15 @@ select = ["E", "F", "W", "D1", "I", "B", "UP", "RUF", "N", "C4", "SIM"]
 "tests/**" = ["D1", "SIM117"]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.14,<1.0"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.14,<1.0",
+]
 
 [tool.pytest.ini_options]
 addopts = "-m 'not integration'"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: real OBD path against the ELM327 emulator (emulator must be installed; excluded from the default run)",
 ]
