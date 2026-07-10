@@ -2,9 +2,11 @@ import importlib
 import logging
 import os
 import sys
+import tomllib
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -106,6 +108,46 @@ class TestFindMatchingRaces:
         })
         races = _mod.find_matching_races(client, start_epoc=EPOC_2021)
         assert [r['ID'] for r in races] == [1, 2]
+
+
+class TestSearchRacesByTerm:
+    def _client(self, responses_by_term):
+        client = MagicMock()
+        client.results.search_results.side_effect = lambda term: {
+            'Races': responses_by_term.get(term, [])
+        }
+        return client
+
+    def test_one_search_call_per_term_in_order(self):
+        client = self._client({})
+        _mod.search_races_by_term(client, ('alpha', 'beta'), start_epoc=EPOC_2021)
+        called = [c.args[0] for c in client.results.search_results.call_args_list]
+        assert called == ['alpha', 'beta']
+
+    def test_filters_races_before_start_epoc(self):
+        client = self._client({'alpha': [_make_race(1, 'old', EPOC_2020),
+                                         _make_race(2, 'new', EPOC_2022)]})
+        by_term = _mod.search_races_by_term(client, ('alpha',), start_epoc=EPOC_2021)
+        assert [r['ID'] for r in by_term['alpha']] == [2]
+
+    def test_keeps_per_term_attribution_without_dedup(self):
+        shared = _make_race(2, 'shared', EPOC_2022)
+        client = self._client({'alpha': [shared], 'beta': [shared]})
+        by_term = _mod.search_races_by_term(client, ('alpha', 'beta'),
+                                            start_epoc=EPOC_2021)
+        assert by_term['alpha'] == [shared]
+        assert by_term['beta'] == [shared]
+
+
+class TestMergeRaces:
+    def test_dedups_by_id_and_sorts_by_start_date(self):
+        by_term = {
+            'alpha': [_make_race(2, 'later', EPOC_2022),
+                      _make_race(1, 'early', EPOC_2021)],
+            'beta': [_make_race(2, 'later', EPOC_2022)],
+        }
+        merged = _mod.merge_races(by_term)
+        assert [r['ID'] for r in merged] == [1, 2]
 
 
 class TestRunBackfill:
@@ -657,10 +699,74 @@ class TestMainTokenResolution:
             with patch.object(sys, 'argv', ['race-backfill']):
                 with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
                     mock_rm_cls.return_value.__enter__.return_value = MagicMock()
-                    with patch.object(_mod, 'find_matching_races', return_value=[]):
+                    with patch.object(_mod, 'search_races_by_term', return_value={'term': []}):
                         with patch.object(_mod, 'run_backfill', return_value=[]):
                             _mod.main()
         mock_rm_cls.assert_called_once_with(api_token=['TOKEN1', 'TOKEN2'])
+
+
+class TestMainInteractive:
+    RACES: ClassVar[list] = [_make_race(1, 'one', EPOC_2022), _make_race(2, 'two', EPOC_2023)]
+
+    @contextmanager
+    def _main_harness(self, tty, refine_result='unset'):
+        """Run main() with discovery stubbed; yields (run_backfill, refine) mocks."""
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        by_term = {t: list(self.RACES) for t in _mod.LEMONS_SEARCH_TERMS}
+        with patch.object(_mod, 'RaceMonitorClient', return_value=client), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch.object(_mod, 'search_races_by_term', return_value=by_term), \
+             patch.object(_mod, 'run_backfill', return_value=[]) as backfill, \
+             patch.object(_mod.sys.stdin, 'isatty', return_value=tty), \
+             patch.object(_mod.sys.stdout, 'isatty', return_value=tty), \
+             patch('lemongrass._backfill_tui.refine_races') as refine:
+            if refine_result != 'unset':
+                refine.return_value = refine_result
+            yield backfill, refine
+
+    def test_non_tty_skips_tui_and_backfills_all(self):
+        with self._main_harness(tty=False) as (backfill, refine):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                _mod.main()
+        refine.assert_not_called()
+        races = backfill.call_args.args[0]
+        assert [r['ID'] for r in races] == [1, 2]
+
+    def test_tty_cancel_exits_zero_without_backfill(self):
+        with self._main_harness(tty=True, refine_result=None) as (backfill, _):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                with pytest.raises(SystemExit) as exc:
+                    _mod.main()
+        assert exc.value.code == 0
+        backfill.assert_not_called()
+
+    def test_tty_confirm_backfills_selected_subset(self):
+        from lemongrass._backfill_tui import RefineResult
+        subset = RefineResult(races=[self.RACES[1]],
+                              terms=tuple(_mod.LEMONS_SEARCH_TERMS),
+                              terms_changed=False)
+        with self._main_harness(tty=True, refine_result=subset) as (backfill, refine):
+            with patch.object(sys, 'argv', ['race-backfill']):
+                _mod.main()
+        refine.assert_called_once()
+        races = backfill.call_args.args[0]
+        assert [r['ID'] for r in races] == [2]
+
+    def test_tty_validate_uses_selected_subset(self):
+        from lemongrass._backfill_tui import RefineResult
+        subset = RefineResult(races=[self.RACES[0]],
+                              terms=tuple(_mod.LEMONS_SEARCH_TERMS),
+                              terms_changed=False)
+        with self._main_harness(tty=True, refine_result=subset):
+            with patch.object(_mod, 'validate_backfill', return_value=True) as val, \
+                 patch.object(_mod._influx, 'connect', MagicMock()):
+                with patch.object(sys, 'argv', ['race-backfill', '--validate']):
+                    with pytest.raises(SystemExit) as exc:
+                        _mod.main()
+        assert exc.value.code == 0
+        assert val.call_args.args[0] == ['1']
 
 
 class TestMain:
@@ -706,8 +812,9 @@ class TestMain:
             with patch.object(sys, 'argv', ['race-backfill', '--validate']):
                 with patch('lemongrass.race_backfill.RaceMonitorClient') as mk_rm:
                     mk_rm.return_value.__enter__.return_value = MagicMock()
-                    with patch.object(_mod, 'find_matching_races',
-                                      return_value=[_make_race(101, 'R', EPOC_2022)]):
+                    with patch.object(
+                            _mod, 'search_races_by_term',
+                            return_value={'term': [_make_race(101, 'R', EPOC_2022)]}):
                         with patch('lemongrass._influx.connect') as mk_connect:
                             mk_connect.return_value.__enter__.return_value = MagicMock()
                             with patch.object(_mod, 'validate_backfill',
@@ -719,6 +826,7 @@ class TestMain:
     def test_validate_dispatches_and_exits_0_when_ok(self):
         exc, mk_val = self._run_validate_main(ok=True)
         mk_val.assert_called_once()
+        assert mk_val.call_args.args[0] == ['101']
         assert exc.value.code == 0
 
     def test_validate_exits_1_when_not_ok(self):
@@ -730,7 +838,7 @@ class TestMain:
             with patch.object(sys, 'argv', ['race-backfill']):
                 with patch('lemongrass.race_backfill.RaceMonitorClient') as mk_rm:
                     mk_rm.return_value.__enter__.return_value = MagicMock()
-                    with patch.object(_mod, 'find_matching_races', return_value=[]):
+                    with patch.object(_mod, 'search_races_by_term', return_value={'term': []}):
                         with patch.object(_mod, 'run_backfill', return_value=['101']):
                             with pytest.raises(SystemExit) as exc:
                                 _mod.main()
@@ -741,7 +849,7 @@ class TestMain:
             with patch.object(sys, 'argv', ['race-backfill']):
                 with patch('lemongrass.race_backfill.RaceMonitorClient') as mk_rm:
                     mk_rm.return_value.__enter__.return_value = MagicMock()
-                    with patch.object(_mod, 'find_matching_races',
+                    with patch.object(_mod, 'search_races_by_term',
                                       side_effect=KeyboardInterrupt()):
                         with pytest.raises(SystemExit) as exc:
                             _mod.main()
@@ -774,7 +882,8 @@ class TestMainConfiguresLogging:
                 with patch.object(sys, 'argv', ['race-backfill']):
                     with patch('lemongrass.race_backfill.RaceMonitorClient') as mock_rm_cls:
                         mock_rm_cls.return_value.__enter__.return_value = MagicMock()
-                        with patch.object(_mod, 'find_matching_races', return_value=[]):
+                        with patch.object(_mod, 'search_races_by_term',
+                                          return_value={'term': []}):
                             with patch.object(_mod, 'run_backfill', return_value=[]):
                                 _mod.main()
             assert root.level == logging.INFO
@@ -821,3 +930,127 @@ def test_backfill_defaults_come_from_config(monkeypatch, tmp_path):
     finally:
         monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
         importlib.reload(race_backfill)  # restore default module state
+
+
+def _refine_result(terms=('a', 'b'), changed=True):
+    from lemongrass._backfill_tui import RefineResult
+    return RefineResult(races=[], terms=tuple(terms), terms_changed=changed)
+
+
+class TestSaveSearchTerms:
+    def test_updates_terms_preserving_comments_and_other_keys(self, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('# my config\n'
+                       '[races.backfill]\n'
+                       'search_terms = ["old"]\n'
+                       '\n'
+                       '[influx]\n'
+                       'url = "http://example"\n')
+        assert _mod._save_search_terms(str(cfg), ('a', 'b')) is True
+        text = cfg.read_text()
+        assert '# my config' in text
+        data = tomllib.loads(text)
+        assert data['races']['backfill']['search_terms'] == ['a', 'b']
+        assert data['influx']['url'] == 'http://example'
+
+    def test_creates_missing_tables(self, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('[influx]\nurl = "http://example"\n')
+        assert _mod._save_search_terms(str(cfg), ('a',)) is True
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['search_terms'] == ['a']
+
+    def test_returns_false_on_unreadable_path(self, tmp_path, caplog):
+        missing = tmp_path / 'nope' / 'lemongrass.toml'
+        with caplog.at_level(logging.WARNING):
+            assert _mod._save_search_terms(str(missing), ('a',)) is False
+        assert any('could not save' in r.message for r in caplog.records)
+
+    def test_failed_write_leaves_original_intact_and_no_temp_files(
+            self, tmp_path, monkeypatch, caplog):
+        cfg = tmp_path / 'lemongrass.toml'
+        original = '[races.backfill]\nsearch_terms = ["old"]\n'
+        cfg.write_text(original)
+
+        def _boom(*_):
+            raise OSError('disk full')
+        monkeypatch.setattr(os, 'replace', _boom)
+        with caplog.at_level(logging.WARNING):
+            assert _mod._save_search_terms(str(cfg), ('a',)) is False
+        assert cfg.read_text() == original
+        assert list(tmp_path.iterdir()) == [cfg]
+
+    def test_preserves_file_mode(self, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        os.chmod(cfg, 0o644)
+        assert _mod._save_search_terms(str(cfg), ('a',)) is True
+        assert os.stat(cfg).st_mode & 0o777 == 0o644
+
+    def test_bare_filename_saves_relative_to_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / 'lemongrass.toml').write_text('')
+        assert _mod._save_search_terms('lemongrass.toml', ('a',)) is True
+        data = tomllib.loads((tmp_path / 'lemongrass.toml').read_text())
+        assert data['races']['backfill']['search_terms'] == ['a']
+
+
+class TestMaybeSaveTerms:
+    def test_unchanged_terms_never_prompt(self, monkeypatch, capsys):
+        monkeypatch.setenv('LEMONGRASS_CONFIG', '/some/path.toml')
+        monkeypatch.setattr('builtins.input',
+                            lambda *_: pytest.fail('should not prompt'))
+        _mod._maybe_save_terms(_refine_result(changed=False))
+        assert capsys.readouterr().out == ''
+
+    def test_no_config_prints_snippet_without_prompt(self, monkeypatch, capsys):
+        monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
+        monkeypatch.setattr('builtins.input',
+                            lambda *_: pytest.fail('should not prompt'))
+        _mod._maybe_save_terms(_refine_result(terms=('a', 'b')))
+        out = capsys.readouterr().out
+        assert '[races.backfill]' in out
+        assert 'search_terms = ["a", "b"]' in out
+
+    def test_snippet_escapes_toml_special_characters(self, monkeypatch, capsys):
+        monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
+        terms = ('say "hi"', 'back\\slash')
+        _mod._maybe_save_terms(_refine_result(terms=terms))
+        out = capsys.readouterr().out
+        snippet = out[out.index('[races.backfill]'):]
+        data = tomllib.loads(snippet)
+        assert data['races']['backfill']['search_terms'] == list(terms)
+
+    def test_yes_saves_to_config_path(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: 'y')
+        _mod._maybe_save_terms(_refine_result(terms=('a',)))
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['search_terms'] == ['a']
+
+    def test_default_answer_is_no(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: '')
+        _mod._maybe_save_terms(_refine_result())
+        assert cfg.read_text() == ''
+
+    def test_eof_on_prompt_treated_as_no(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+
+        def _eof(*_):
+            raise EOFError
+        monkeypatch.setattr('builtins.input', _eof)
+        _mod._maybe_save_terms(_refine_result())
+        assert cfg.read_text() == ''
+
+    def test_failed_save_falls_back_to_snippet(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(tmp_path / 'nope' / 'x.toml'))
+        monkeypatch.setattr('builtins.input', lambda *_: 'y')
+        _mod._maybe_save_terms(_refine_result(terms=('a',)))
+        assert '[races.backfill]' in capsys.readouterr().out

@@ -32,6 +32,12 @@ Usage:
     # RaceMonitor (faster than --force when only the schema tag changed)
     lemongrass race-backfill --upgrade-stored
 
+    When run in a terminal, race-backfill (including --dry-run and --validate)
+    opens an interactive checklist of the matched races: toggle races with
+    space, add/remove search terms live, then Enter to proceed with the
+    selection (everything starts selected, so Enter alone keeps the old
+    behavior). Non-terminal runs (cron, pipes) skip the UI entirely.
+
 Required environment variables:
     RACEMONITOR_TOKENS     — comma-separated RaceMonitor API tokens (preferred)
     RACEMONITOR_TOKEN      — single RaceMonitor API token (fallback)
@@ -40,10 +46,14 @@ Required environment variables:
 """
 
 import argparse
+import contextlib
 import logging
+import os
 import sys
+import tempfile
 from datetime import UTC, date, datetime, timedelta
 
+import tomlkit
 from race_monitor import RaceMonitorClient, RaceMonitorError
 
 from lemongrass import _config, _env, _influx
@@ -90,18 +100,37 @@ def _build_parser():
     return parser
 
 
+def search_races_by_term(client, terms, start_epoc):
+    """Search RaceMonitor once per term; return {term: [race, ...]}.
+
+    Each list is filtered to races starting at or after start_epoc but is NOT
+    deduplicated across terms, preserving which term matched which race (the
+    interactive refinement UI needs that attribution to drop a term's races
+    when the term is removed).
+    """
+    by_term = {}
+    for term in terms:
+        resp = client.results.search_results(term)
+        by_term[term] = [race for race in resp.get('Races', [])
+                         if race['StartDateEpoc'] >= start_epoc]
+    return by_term
+
+
+def merge_races(races_by_term):
+    """Merge per-term search results: dedup by race ID, sort by start date."""
+    seen = {}
+    for races in races_by_term.values():
+        for race in races:
+            seen[race['ID']] = race
+    return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
+
+
 def find_matching_races(client, start_epoc):
     """Search for matching Lemons races at or after start_epoc.
 
     Makes one API call per search term and deduplicates by race ID.
     """
-    seen = {}
-    for term in LEMONS_SEARCH_TERMS:
-        resp = client.results.search_results(term)
-        for race in resp.get('Races', []):
-            if race['StartDateEpoc'] >= start_epoc:
-                seen[race['ID']] = race
-    return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
+    return merge_races(search_races_by_term(client, LEMONS_SEARCH_TERMS, start_epoc))
 
 
 def validate_backfill(race_ids, query_api):
@@ -361,6 +390,71 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     return failures
 
 
+def _save_search_terms(path, terms):
+    """Rewrite races.backfill.search_terms in the TOML file at path.
+
+    tomlkit preserves the rest of the document — comments, formatting, and
+    unrelated keys. Returns True on success; logs a warning and returns False
+    on any read/parse/write failure.
+    """
+    try:
+        with open(path, encoding='utf-8') as f:
+            doc = tomlkit.parse(f.read())
+        if 'races' not in doc:
+            doc['races'] = tomlkit.table()
+        if 'backfill' not in doc['races']:
+            doc['races']['backfill'] = tomlkit.table()
+        doc['races']['backfill']['search_terms'] = list(terms)
+        # Write-then-rename so a crash mid-write can't truncate the config.
+        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or '.',
+                                        suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(tomlkit.dumps(doc))
+            os.chmod(tmp_path, os.stat(path).st_mode)
+            os.replace(tmp_path, path)
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+        return True
+    except (OSError, tomlkit.exceptions.TOMLKitError) as exc:
+        logging.warning("could not save search terms to %s: %s", path, exc)
+        return False
+
+
+def _print_terms_snippet(terms):
+    """Print the TOML snippet that persists terms, for manual pasting."""
+    array = tomlkit.item(list(terms)).as_string()
+    print("To persist these search terms, add to the TOML file named by "
+          "LEMONGRASS_CONFIG:\n\n"
+          "[races.backfill]\n"
+          f"search_terms = {array}\n")
+
+
+def _maybe_save_terms(result):
+    """Offer to persist changed search terms after an interactive confirm.
+
+    With LEMONGRASS_CONFIG set, a y/N prompt gates a format-preserving rewrite
+    of races.backfill.search_terms; a failed save falls back to printing the
+    snippet. Without it no file is written — config loading has no default
+    path, so a written file would be silently ignored — and the snippet is
+    printed instead. Never blocks the run.
+    """
+    if not result.terms_changed:
+        return
+    path = os.environ.get('LEMONGRASS_CONFIG')
+    if not path:
+        _print_terms_snippet(result.terms)
+        return
+    try:
+        answer = input(f"Save updated search terms to {path}? [y/N] ")
+    except EOFError:
+        return
+    if answer.strip().lower() in ('y', 'yes') and not _save_search_terms(path, result.terms):
+        _print_terms_snippet(result.terms)
+
+
 def main():
     """Entry point: parse args, discover races, then backfill or validate."""
     # The `lemongrass` console script dispatches here by import (cli.main ->
@@ -395,8 +489,23 @@ def main():
 
     try:
         with RaceMonitorClient(api_token=tokens) as client:
-            races = find_matching_races(client, start_epoc)
+            races_by_term = search_races_by_term(
+                client, LEMONS_SEARCH_TERMS, start_epoc)
+            races = merge_races(races_by_term)
             logging.info("Found %d matching races", len(races))
+
+            if sys.stdin.isatty() and sys.stdout.isatty():
+                # Imported lazily: non-interactive runs (cron, pipes) never pay
+                # the textual import.
+                from lemongrass._backfill_tui import refine_races
+                result = refine_races(
+                    client, LEMONS_SEARCH_TERMS, races_by_term, start_epoc)
+                if result is None:
+                    logging.info("Cancelled, nothing done.")
+                    sys.exit(0)
+                logging.info("Selected %d of %d races", len(result.races), len(races))
+                races = result.races
+                _maybe_save_terms(result)
 
             if args.validate:
                 race_ids = [str(r['ID']) for r in races]

@@ -76,6 +76,15 @@ Config is validated on load and fails loud rather than silently misbehaving:
 | `pisugar.api_url` | string | `http://localhost:8421` | pisugar-server base URL |
 | `pisugar.config_path` | string | `/etc/pisugar-server/config.json` | pisugar credentials file |
 
+## Interactive search-term refinement
+
+When `race-backfill` runs in a terminal it opens an interactive checklist of the matched
+races; search terms added or removed there apply to that run only. On confirm, if the
+terms changed, it offers to write the updated `races.backfill.search_terms` back to the
+file named by `LEMONGRASS_CONFIG` — the rest of the file, including comments, is
+preserved. Without `LEMONGRASS_CONFIG` set (or if the save fails), it prints the TOML
+snippet to paste in by hand instead of writing any file.
+
 ## Examples
 
 Override only the bucket names (e.g. a shared InfluxDB):
