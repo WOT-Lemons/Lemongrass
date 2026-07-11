@@ -1225,6 +1225,26 @@ class TestMaybeSaveConfig:
         assert data['races']['backfill']['series_id'] == 1234
         assert data['races']['backfill']['search_terms'] == []
 
+    def test_clear_save_failure_snippet_includes_search_terms(
+            self, monkeypatch, tmp_path, capsys):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: 'y')
+        real_save = _mod._save_backfill_value
+
+        def _fail_on_clear(path, key, value):
+            if key == 'search_terms':
+                return False
+            return real_save(path, key, value)
+        monkeypatch.setattr(_mod, '_save_backfill_value', _fail_on_clear)
+        _mod._maybe_save_config(_refine_result(
+            terms=self._default_terms(), changed=False,
+            series_id=1234, series_changed=True))
+        out = capsys.readouterr().out
+        assert 'series_id = 1234' in out
+        assert 'search_terms = []' in out
+
     def test_clear_declined_leaves_terms_alone(self, monkeypatch, tmp_path):
         cfg = tmp_path / 'lemongrass.toml'
         cfg.write_text('')

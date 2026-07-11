@@ -456,14 +456,21 @@ def _save_search_terms(path, terms):
     return _save_backfill_value(path, 'search_terms', list(terms))
 
 
-def _print_config_snippet(result):
-    """Print the TOML snippet that persists the session's config changes."""
+def _print_config_snippet(result, clear_terms=False):
+    """Print the TOML snippet that persists the session's config changes.
+
+    clear_terms covers the fallback for a failed "clear redundant default
+    search terms" save, which is only offered when result.terms_changed is
+    False, so it needs its own line rather than reusing that branch.
+    """
     lines = ['[races.backfill]']
     if result.series_changed:
         lines.append(f'series_id = {result.series_id}')
     if result.terms_changed:
         array = tomlkit.item(list(result.terms)).as_string()
         lines.append(f'search_terms = {array}')
+    elif clear_terms:
+        lines.append('search_terms = []')
     print("To persist these settings, add to the TOML file named by "
           "LEMONGRASS_CONFIG:\n\n" + '\n'.join(lines) + '\n')
 
@@ -494,6 +501,7 @@ def _maybe_save_config(result):
         _print_config_snippet(result)
         return
     snippet_needed = False
+    clear_failed = False
     saved_series = False
     if result.series_changed and _ask_yes(
             f"Save series_id={result.series_id} to {path}? [y/N] "):
@@ -504,9 +512,10 @@ def _maybe_save_config(result):
             snippet_needed |= not _save_search_terms(path, result.terms)
     elif (saved_series and tuple(result.terms) == _DEFAULT_TERMS
             and _ask_yes("Also clear the now-redundant default search terms? [y/N] ")):
-        snippet_needed |= not _save_backfill_value(path, 'search_terms', [])
+        clear_failed = not _save_backfill_value(path, 'search_terms', [])
+        snippet_needed |= clear_failed
     if snippet_needed:
-        _print_config_snippet(result)
+        _print_config_snippet(result, clear_terms=clear_failed)
 
 
 def main():
