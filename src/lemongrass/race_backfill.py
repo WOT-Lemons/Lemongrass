@@ -2,14 +2,14 @@
 """Discover and backfill historical 24 Hours of Lemons lap data.
 
 Discovers past Lemons races — by series enumeration when
-races.backfill.series_id is configured (with search terms as an additive
-layer), otherwise by name-based search terms alone — and writes fieldwide lap
-data to the laps/races InfluxDB buckets. In a terminal, an interactive
-checklist refines the selection first; press 's' there to find and pin the
-series by searching for any known race. Each race is backfilled in-process
-through a single shared RaceMonitorClient, so the rate-limiter window carries
-across the whole run and requests stay paced under the server's per-token
-budget.
+races.backfill.series_id is configured (the search terms then select which
+of the series' races to include by name; no terms means the whole series),
+otherwise by name-based search terms alone — and writes fieldwide lap data
+to the laps/races InfluxDB buckets. In a terminal, an interactive checklist
+refines the selection first; press 's' there to find and pin the series by
+searching for any known race. Each race is backfilled in-process through a
+single shared RaceMonitorClient, so the rate-limiter window carries across
+the whole run and requests stay paced under the server's per-token budget.
 
 If running from the repo, prefix commands with `uv run`
 (e.g. `uv run lemongrass race-backfill`).
