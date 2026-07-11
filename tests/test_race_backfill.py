@@ -150,6 +150,13 @@ class TestMergeRaces:
         merged = _mod.merge_races(by_term)
         assert [r['ID'] for r in merged] == [1, 2]
 
+    def test_series_races_merge_and_dedup_with_term_races(self):
+        shared = _make_race(2, 'shared', EPOC_2022)
+        merged = _mod.merge_races(
+            {'t1': [_make_race(1, 'one', EPOC_2021), shared]},
+            series_races=[shared, _make_race(3, 'three', EPOC_2023)])
+        assert [r['ID'] for r in merged] == [1, 2, 3]
+
 
 def _series_race(id, start_epoc, has_results=True):
     return {'ID': id, 'Name': f'race-{id}', 'StartDateEpoc': start_epoc,
@@ -817,6 +824,85 @@ class TestMainInteractive:
                         _mod.main()
         assert exc.value.code == 0
         assert val.call_args.args[0] == ['1']
+
+
+class TestMainSeriesDiscovery:
+    TERM_RACES: ClassVar[list] = [_make_race(1, 'term-race', EPOC_2022)]
+    SERIES_RACES: ClassVar[list] = [
+        {'ID': 9, 'Name': 'series-race', 'StartDateEpoc': EPOC_2023,
+         'HasResults': True, 'SeriesName': '24 Hours of Lemons'}]
+
+    @contextmanager
+    def _harness(self, tty, series_id=1234, terms=('t1',), enumerate_error=None):
+        """Run main() with discovery stubbed; yields (backfill, refine, enumerate)."""
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        by_term = {t: list(self.TERM_RACES) for t in terms}
+        enum_kwargs = ({'side_effect': enumerate_error} if enumerate_error
+                       else {'return_value': list(self.SERIES_RACES)})
+        with patch.object(_mod, 'RaceMonitorClient', return_value=client), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch.object(_mod, 'LEMONS_SERIES_ID', series_id), \
+             patch.object(_mod, 'LEMONS_SEARCH_TERMS', tuple(terms)), \
+             patch.object(_mod, 'search_races_by_term', return_value=by_term), \
+             patch.object(_mod, 'enumerate_series', **enum_kwargs) as enumerate_mock, \
+             patch.object(_mod, 'run_backfill', return_value=[]) as backfill, \
+             patch.object(_mod.sys.stdin, 'isatty', return_value=tty), \
+             patch.object(_mod.sys.stdout, 'isatty', return_value=tty), \
+             patch('lemongrass._backfill_tui.refine_races') as refine:
+            refine.return_value = None  # TTY tests: cancel unless overridden
+            with patch.object(sys, 'argv', ['race-backfill']):
+                yield backfill, refine, enumerate_mock
+
+    def test_non_tty_merges_series_and_term_races(self):
+        with self._harness(tty=False) as (backfill, _, enumerate_mock):
+            _mod.main()
+        enumerate_mock.assert_called_once()
+        assert enumerate_mock.call_args.args[1] == 1234
+        races = backfill.call_args.args[0]
+        assert [r['ID'] for r in races] == [1, 9]
+
+    def test_series_id_zero_skips_enumeration(self):
+        with self._harness(tty=False, series_id=0) as (backfill, _, enumerate_mock):
+            _mod.main()
+        enumerate_mock.assert_not_called()
+        assert [r['ID'] for r in backfill.call_args.args[0]] == [1]
+
+    def test_non_tty_enum_failure_with_terms_warns_and_continues(self, caplog):
+        err = RaceMonitorError('beta broke')
+        with self._harness(tty=False, enumerate_error=err) as (backfill, _, _2):
+            with caplog.at_level(logging.WARNING):
+                _mod.main()
+        assert any('series enumeration failed' in r.message
+                   for r in caplog.records)
+        assert [r['ID'] for r in backfill.call_args.args[0]] == [1]
+
+    def test_non_tty_enum_failure_without_terms_exits_1(self, caplog):
+        err = RaceMonitorError('beta broke')
+        with self._harness(tty=False, terms=(), enumerate_error=err) as (backfill, _, _2):
+            with caplog.at_level(logging.ERROR):
+                with pytest.raises(SystemExit) as exc:
+                    _mod.main()
+        assert exc.value.code == 1
+        backfill.assert_not_called()
+
+    def test_tty_passes_series_to_refine(self):
+        with self._harness(tty=True) as (_, refine, _2):
+            with pytest.raises(SystemExit):  # refine returns None -> cancel, exit 0
+                _mod.main()
+        kwargs = refine.call_args.kwargs
+        assert kwargs['series'] == (1234, '24 Hours of Lemons', self.SERIES_RACES)
+        assert kwargs['series_error'] is None
+
+    def test_tty_enum_failure_passes_error_to_refine(self):
+        err = RaceMonitorError('beta broke')
+        with self._harness(tty=True, enumerate_error=err) as (_, refine, _2):
+            with pytest.raises(SystemExit):
+                _mod.main()
+        kwargs = refine.call_args.kwargs
+        assert kwargs['series'] is None
+        assert kwargs['series_error'] is err
 
 
 class TestMain:

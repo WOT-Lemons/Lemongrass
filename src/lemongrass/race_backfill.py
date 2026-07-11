@@ -61,6 +61,7 @@ from lemongrass._env import resolve_tokens
 
 _backfill_cfg = _config.load_config().races.backfill
 LEMONS_SEARCH_TERMS = _backfill_cfg.search_terms
+LEMONS_SERIES_ID = _backfill_cfg.series_id
 DEFAULT_START_DATE = _backfill_cfg.default_start_date
 EPOCH_START = '1970-01-01T00:00:00Z'
 
@@ -116,10 +117,11 @@ def search_races_by_term(client, terms, start_epoc):
     return by_term
 
 
-def merge_races(races_by_term):
-    """Merge per-term search results: dedup by race ID, sort by start date."""
+def merge_races(races_by_term, series_races=()):
+    """Merge per-term search results (plus optional series enumeration):
+    dedup by race ID, sort by start date."""
     seen = {}
-    for races in races_by_term.values():
+    for races in [*races_by_term.values(), series_races]:
         for race in races:
             seen[race['ID']] = race
     return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
@@ -511,20 +513,48 @@ def main():
         sys.exit(1)
 
     start_epoc = _parse_start_date(args.start_date)
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     try:
         with RaceMonitorClient(api_token=tokens) as client:
+            series = None
+            series_error = None
+            if LEMONS_SERIES_ID:
+                try:
+                    series_races = enumerate_series(client, LEMONS_SERIES_ID,
+                                                    start_epoc)
+                except RaceMonitorError as exc:
+                    # Beta endpoint: degrade per the resilience rule. TTY runs
+                    # surface the error inside the TUI; non-TTY runs fall back
+                    # to terms when configured, else nothing remains to run.
+                    series_error = exc
+                    if not tty:
+                        if LEMONS_SEARCH_TERMS:
+                            logging.warning(
+                                "series enumeration failed (%s); continuing "
+                                "with search terms only", exc)
+                        else:
+                            logging.error(
+                                "series enumeration failed (%s) and no search "
+                                "terms configured", exc)
+                            sys.exit(1)
+                else:
+                    series_name = (series_races[0]['SeriesName'] if series_races
+                                   else f'series {LEMONS_SERIES_ID}')
+                    series = (LEMONS_SERIES_ID, series_name, series_races)
+
             races_by_term = search_races_by_term(
                 client, LEMONS_SEARCH_TERMS, start_epoc)
-            races = merge_races(races_by_term)
+            races = merge_races(races_by_term, series[2] if series else ())
             logging.info("Found %d matching races", len(races))
 
-            if sys.stdin.isatty() and sys.stdout.isatty():
+            if tty:
                 # Imported lazily: non-interactive runs (cron, pipes) never pay
                 # the textual import.
                 from lemongrass._backfill_tui import refine_races
                 result = refine_races(
-                    client, LEMONS_SEARCH_TERMS, races_by_term, start_epoc)
+                    client, LEMONS_SEARCH_TERMS, races_by_term, start_epoc,
+                    series=series, series_error=series_error)
                 if result is None:
                     logging.info("Cancelled, nothing done.")
                     sys.exit(0)
