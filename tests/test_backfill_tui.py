@@ -11,8 +11,8 @@ def _race(id, name, start_epoc):
     return {'ID': id, 'Name': name, 'StartDateEpoc': start_epoc}
 
 
-def _model(races_by_term=None, terms=('t1',), start_epoc=0):
-    return RaceListModel(terms, races_by_term or {}, start_epoc)
+def _model(races_by_term=None, terms=('t1',), start_epoc=0, series=None):
+    return RaceListModel(terms, races_by_term or {}, start_epoc, series=series)
 
 
 def _app(races_by_term=None, terms=('t1',), start_epoc=0, client=None):
@@ -105,6 +105,65 @@ class TestRaceListModel:
                            _race(3, 'three', 300)]})
         m.toggle(2)
         assert [r['ID'] for r in m.selected()] == [1, 3]
+
+    def test_seeded_series_races_visible_and_prechecked(self):
+        m = _model({'t1': [_race(1, 'one', 100)]},
+                   series=(1234, 'Lemons', [_race(9, 'series', 300)]))
+        assert [r['ID'] for r in m.races()] == [1, 9]
+        assert m.checked == {1, 9}
+        assert m.series == (1234, 'Lemons', 1)
+        assert m.series_id == 1234
+        assert m.series_changed is False
+
+    def test_no_series_by_default(self):
+        m = _model({'t1': [_race(1, 'one', 100)]})
+        assert m.series is None
+        assert m.series_id == 0
+        assert m.series_changed is False
+
+    def test_set_series_prechecks_new_preserves_existing_state(self):
+        m = _model({'t1': [_race(1, 'one', 100), _race(2, 'two', 200)]})
+        m.toggle(1)  # user unchecked race 1
+        m.set_series(1234, 'Lemons', [_race(2, 'two', 200), _race(9, 'new', 300)])
+        assert [r['ID'] for r in m.races()] == [1, 2, 9]
+        assert m.checked == {2, 9}  # 1 stays unchecked, new 9 pre-checked
+        assert m.series_changed is True
+
+    def test_set_series_replaces_previous_series(self):
+        m = _model({'t1': [_race(1, 'one', 100)]},
+                   series=(1234, 'Lemons', [_race(9, 'old-series', 300)]))
+        m.set_series(5678, 'Other', [_race(7, 'new-series', 400)])
+        assert [r['ID'] for r in m.races()] == [1, 7]
+        assert m.checked == {1, 7}  # 9 dropped with the old series
+        assert m.series == (5678, 'Other', 1)
+
+    def test_repin_same_series_id_is_not_changed(self):
+        m = _model({'t1': []}, series=(1234, 'Lemons', []))
+        m.set_series(1234, 'Lemons', [])
+        assert m.series_changed is False
+
+    def test_series_races_filtered_by_start_epoc(self):
+        m = _model({'t1': [_race(1, 'one', 150)]}, start_epoc=100,
+                   series=(1234, 'Lemons', [_race(8, 'old', 50), _race(9, 'new', 200)]))
+        assert [r['ID'] for r in m.races()] == [1, 9]
+        assert m.series == (1234, 'Lemons', 1)
+
+    def test_remove_term_keeps_series_races(self):
+        shared = _race(2, 'shared', 200)
+        m = _model({'t1': [_race(1, 'one', 100), shared]},
+                   series=(1234, 'Lemons', [shared]))
+        m.remove_term('t1')
+        assert [r['ID'] for r in m.races()] == [2]
+        assert m.terms == []
+
+    def test_cache_results_does_not_activate_term(self):
+        m = _model({'t1': [_race(1, 'one', 100)]})
+        m.cache_results('gp', [_race(2, 'two', 200)])
+        assert m.terms == ['t1']
+        assert [r['ID'] for r in m.races()] == [1]
+        assert m.has_cached('gp')
+        m.add_term('gp')  # served from cache, no results arg needed
+        assert [r['ID'] for r in m.races()] == [1, 2]
 
 
 class TestBackfillAppCore:

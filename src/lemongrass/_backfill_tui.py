@@ -35,30 +35,85 @@ class RefineResult:
     terms_changed: bool
 
 
-class RaceListModel:
-    """State for the refinement UI: active terms, cached results, checked IDs.
+# Cache key for the pinned-series source. An object sentinel, not a string:
+# it can never collide with a user-typed search term.
+_SERIES_KEY = object()
 
-    The per-term cache outlives term removal, so re-adding a removed term costs
-    no API call. races() derives the visible list on demand: dedup by race ID
-    across active terms, filter to StartDateEpoc >= start_epoc, sort by date.
+
+class RaceListModel:
+    """State for the refinement UI: sources, cached results, checked IDs.
+
+    Sources are the pinned series (at most one, keyed by the _SERIES_KEY
+    sentinel) plus the active search terms. The per-source cache outlives
+    removal, so re-adding a removed term costs no API call. races() derives
+    the visible list on demand: dedup by race ID across active sources,
+    filter to StartDateEpoc >= start_epoc, sort by date.
     """
 
-    def __init__(self, terms, races_by_term, start_epoc):
-        """Seed with the initial terms and their (already fetched) results."""
+    def __init__(self, terms, races_by_term, start_epoc, series=None):
+        """Seed with initial terms/results and an optional pinned series.
+
+        series is (series_id, series_name, races) from the config-driven
+        enumeration, or None when no series is configured.
+        """
         self.start_epoc = start_epoc
         self._initial_terms = tuple(terms)
         self.terms = list(terms)
         self._cache = {term: list(races_by_term.get(term, [])) for term in terms}
+        self._series = None
+        self._initial_series_id = series[0] if series else 0
+        if series:
+            series_id, series_name, races = series
+            self._series = (series_id, series_name)
+            self._cache[_SERIES_KEY] = list(races)
         self.checked = {race['ID'] for race in self.races()}
+
+    def _sources(self):
+        """Active source keys: the series sentinel (if pinned) plus terms."""
+        return ([_SERIES_KEY] if self._series else []) + self.terms
 
     def races(self):
         """Return visible races: deduped, date-filtered, date-sorted."""
         seen = {}
-        for term in self.terms:
-            for race in self._cache.get(term, []):
+        for source in self._sources():
+            for race in self._cache.get(source, []):
                 if race['StartDateEpoc'] >= self.start_epoc:
                     seen[race['ID']] = race
         return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
+
+    def set_series(self, series_id, series_name, races):
+        """Pin (or replace) the series source; newly visible races become
+        checked, races matched only by a previous series drop out."""
+        before = {race['ID'] for race in self.races()}
+        self._series = (series_id, series_name)
+        self._cache[_SERIES_KEY] = list(races)
+        visible = {race['ID'] for race in self.races()}
+        self.checked = (self.checked & visible) | (visible - before)
+
+    def cache_results(self, term, results):
+        """Session-cache a term's raw results without activating the term
+        (used by the series modal so its searches double as term cache)."""
+        self._cache.setdefault(term, list(results))
+
+    @property
+    def series(self):
+        """(series_id, series_name, visible_count), or None if unpinned."""
+        if self._series is None:
+            return None
+        series_id, series_name = self._series
+        count = sum(1 for r in self._cache.get(_SERIES_KEY, [])
+                    if r['StartDateEpoc'] >= self.start_epoc)
+        return (series_id, series_name, count)
+
+    @property
+    def series_id(self):
+        """The pinned series' ID, or 0 when no series is pinned."""
+        return self._series[0] if self._series else 0
+
+    @property
+    def series_changed(self):
+        """True if the pinned series differs from the config-seeded one."""
+        return self.series_id != self._initial_series_id
 
     def has_cached(self, term):
         """True if term already has session-cached search results."""
