@@ -243,6 +243,15 @@ class TestEnumerateSeries:
         with pytest.raises(RaceMonitorError):
             _mod.enumerate_series(client, 1234, 0)
 
+    def test_race_row_missing_start_epoc_raises(self):
+        # A per-row malformed entry (HasResults but no StartDateEpoc) must
+        # surface as RaceMonitorError, not a bare KeyError, per the docstring.
+        client = self._client([{'Successful': True, 'Races': [
+            {'ID': 1, 'Name': 'race-1', 'HasResults': True},
+        ]}])
+        with pytest.raises(RaceMonitorError):
+            _mod.enumerate_series(client, 1234, 0)
+
 
 class TestRunBackfill:
     def _races(self):

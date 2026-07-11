@@ -190,6 +190,10 @@ class RaceListModel:
         """True if term already has session-cached search results."""
         return term in self._cache
 
+    def cached(self, term):
+        """Return term's session-cached search results (KeyError if absent)."""
+        return self._cache[term]
+
     def add_term(self, term, results=None):
         """Activate a term and re-derive the visible set.
 
@@ -309,10 +313,13 @@ class SeriesSearchModal(ModalScreen):
         term = event.value.strip()
         if not term:
             return
+        if self.model.has_cached(term):
+            self._show_hits(term, self.model.cached(term))
+            return
         self._status(f'searching "{term}"…')
         self._search(term)
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def _search(self, term):
         """Fetch search hits off the UI thread; report errors via notify."""
         worker = get_current_worker()
@@ -373,7 +380,7 @@ class SeriesSearchModal(ModalScreen):
             return
         if worker.is_cancelled:
             return
-        name = races[0]['SeriesName'] if races else f'series {series_id}'
+        name = (races[0].get('SeriesName') if races else None) or f'series {series_id}'
         self.app.call_from_thread(self.dismiss, (series_id, name, races))
 
 

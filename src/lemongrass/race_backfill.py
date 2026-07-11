@@ -171,8 +171,13 @@ def enumerate_series(client, series_id, start_epoc):
         logging.warning(
             "series %d returned %d races (the request cap); results may be "
             "truncated", series_id, len(races))
-    return [r for r in races
-            if r.get('HasResults') and r['StartDateEpoc'] >= start_epoc]
+    try:
+        return [r for r in races
+                if r.get('HasResults') and r['StartDateEpoc'] >= start_epoc]
+    except (KeyError, TypeError) as exc:
+        raise RaceMonitorError(
+            f"past_races returned a malformed race row for series {series_id}"
+        ) from exc
 
 
 def find_matching_races(client, start_epoc):
@@ -584,8 +589,9 @@ def main():
                                 "terms configured", exc)
                             sys.exit(1)
                 else:
-                    series_name = (series_races[0]['SeriesName'] if series_races
-                                   else f'series {LEMONS_SERIES_ID}')
+                    series_name = ((series_races[0].get('SeriesName')
+                                    if series_races else None)
+                                   or f'series {LEMONS_SERIES_ID}')
                     series = (LEMONS_SERIES_ID, series_name, series_races)
 
             if series:

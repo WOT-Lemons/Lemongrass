@@ -530,6 +530,43 @@ class TestSeriesSearchModal:
         assert [r['ID'] for r in result.races] == [9]
 
     @pytest.mark.asyncio
+    async def test_full_flow_series_race_missing_series_name(self):
+        # A series race lacking SeriesName must not crash the resolve worker;
+        # the label falls back to "series <id>".
+        hit = {'ID': 55, 'Name': 'a lemons race', 'StartDateEpoc': 100}
+        series_race = {'ID': 9, 'Name': 'series-race t1', 'StartDateEpoc': 300,
+                       'HasResults': True}
+        client = self._client(hits=[hit], series_races=[series_race])
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._search(pilot, app, 'gp')
+            await self._pick_first_hit(pilot, app)
+            assert not isinstance(app.screen, SeriesSearchModal)
+            label = str(app.query_one('#series', Label).content)
+            assert 'series 1234' in label
+            app.query_one('#races', SelectionList).focus()
+            await pilot.pause()
+            await pilot.press('enter')
+        result = app.return_value
+        assert result.series_id == 1234
+        assert [r['ID'] for r in result.races] == [9]
+
+    @pytest.mark.asyncio
+    async def test_modal_resubmit_cached_term_skips_client(self):
+        # Resubmitting an already-cached term reuses the cache instead of
+        # hitting the rate-limited endpoint again.
+        hit = {'ID': 55, 'Name': 'a lemons race', 'StartDateEpoc': 100}
+        client = self._client(hits=[hit])
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._search(pilot, app, 'gp')     # live search (1 call)
+            app.screen.query_one(Input).focus()
+            await pilot.pause()
+            await pilot.press('enter')               # resubmit: cache hit
+            await pilot.pause()
+        assert client.results.search_results.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_modal_search_results_cached_for_terms(self):
         hit = {'ID': 55, 'Name': 'a lemons race', 'StartDateEpoc': 100}
         client = self._client(hits=[hit])
