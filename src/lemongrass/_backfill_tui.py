@@ -21,6 +21,8 @@ from textual.widgets import Footer, Input, Label, ListItem, ListView, SelectionL
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
+from lemongrass.race_backfill import enumerate_series, filter_races_by_terms
+
 
 @dataclass(frozen=True)
 class RefineResult:
@@ -47,11 +49,12 @@ _SERIES_KEY = object()
 class RaceListModel:
     """State for the refinement UI: sources, cached results, checked IDs.
 
-    Sources are the pinned series (at most one, keyed by the _SERIES_KEY
-    sentinel) plus the active search terms. The per-source cache outlives
-    removal, so re-adding a removed term costs no API call. races() derives
-    the visible list on demand: dedup by race ID across active sources,
-    filter to StartDateEpoc >= start_epoc, sort by date.
+    Pinned (a series is set): the series is the only candidate set and the
+    active terms filter it by race name — empty terms means the whole
+    series. Unpinned: terms are search sources, unioned and deduped by race
+    ID. The per-term cache outlives removal, so re-adding a removed term in
+    unpinned mode costs no API call. races() derives the visible list on
+    demand, filtered to StartDateEpoc >= start_epoc and date-sorted.
     """
 
     def __init__(self, terms, races_by_term, start_epoc, series=None):
@@ -72,27 +75,34 @@ class RaceListModel:
             self._cache[_SERIES_KEY] = list(races)
         self.checked = {race['ID'] for race in self.races()}
 
-    def _sources(self):
-        """Active source keys: the series sentinel (if pinned) plus terms."""
-        return ([_SERIES_KEY] if self._series else []) + self.terms
-
     def races(self):
-        """Return visible races: deduped, date-filtered, date-sorted."""
+        """Return visible races, date-filtered and date-sorted (see class
+        docstring for pinned vs unpinned semantics)."""
+        if self._series:
+            races = [r for r in self._cache.get(_SERIES_KEY, [])
+                     if r['StartDateEpoc'] >= self.start_epoc]
+            return sorted(filter_races_by_terms(races, self.terms),
+                          key=lambda r: r['StartDateEpoc'])
         seen = {}
-        for source in self._sources():
-            for race in self._cache.get(source, []):
+        for term in self.terms:
+            for race in self._cache.get(term, []):
                 if race['StartDateEpoc'] >= self.start_epoc:
                     seen[race['ID']] = race
         return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
 
+    def _rebalance_checked(self, before):
+        """Re-derive checked after a visibility change: newly visible races
+        become checked, hidden races drop out, and the user's choices on
+        still-visible races are preserved."""
+        visible = {race['ID'] for race in self.races()}
+        self.checked = (self.checked & visible) | (visible - before)
+
     def set_series(self, series_id, series_name, races):
-        """Pin (or replace) the series source; newly visible races become
-        checked, races matched only by a previous series drop out."""
+        """Pin (or replace) the series source and re-derive the view."""
         before = {race['ID'] for race in self.races()}
         self._series = (series_id, series_name)
         self._cache[_SERIES_KEY] = list(races)
-        visible = {race['ID'] for race in self.races()}
-        self.checked = (self.checked & visible) | (visible - before)
+        self._rebalance_checked(before)
 
     def cache_results(self, term, results):
         """Session-cache a term's raw results without activating the term
@@ -101,13 +111,18 @@ class RaceListModel:
 
     @property
     def series(self):
-        """(series_id, series_name, visible_count), or None if unpinned."""
+        """(series_id, series_name, matched, total), or None if unpinned.
+
+        matched counts series races passing the date and term filters; total
+        counts date-filtered only (what clearing every term would show).
+        """
         if self._series is None:
             return None
         series_id, series_name = self._series
-        count = sum(1 for r in self._cache.get(_SERIES_KEY, [])
-                    if r['StartDateEpoc'] >= self.start_epoc)
-        return (series_id, series_name, count)
+        dated = [r for r in self._cache.get(_SERIES_KEY, [])
+                 if r['StartDateEpoc'] >= self.start_epoc]
+        return (series_id, series_name,
+                len(filter_races_by_terms(dated, self.terms)), len(dated))
 
     @property
     def series_id(self):
@@ -124,29 +139,32 @@ class RaceListModel:
         return term in self._cache
 
     def add_term(self, term, results=None):
-        """Activate a term; newly visible races become checked.
+        """Activate a term and re-derive the visible set.
 
-        results is the term's raw search-result list, required unless the term
-        is already cached from earlier in the session. Blank and already-active
-        terms are ignored.
+        Unpinned, results is the term's raw search-result list, required
+        unless the term is already session-cached. Pinned, terms are local
+        name filters and need no results. Blank and already-active terms are
+        ignored.
         """
         term = term.strip()
         if not term or term in self.terms:
             return
         if results is not None:
             self._cache[term] = list(results)
-        elif term not in self._cache:
+        elif not self._series and term not in self._cache:
             raise ValueError(f"no cached results for {term!r}; pass results")
         before = {race['ID'] for race in self.races()}
         self.terms.append(term)
-        self.checked |= {race['ID'] for race in self.races()} - before
+        self._rebalance_checked(before)
 
     def remove_term(self, term):
-        """Deactivate a term; races matched only by it drop from the list."""
+        """Deactivate a term and re-derive the visible set (pinned mode can
+        broaden: removing the last term shows the whole series)."""
         if term not in self.terms:
             return
+        before = {race['ID'] for race in self.races()}
         self.terms.remove(term)
-        self.checked &= {race['ID'] for race in self.races()}
+        self._rebalance_checked(before)
 
     def toggle(self, race_id):
         """Flip one race's checked state."""
@@ -290,10 +308,6 @@ class SeriesSearchModal(ModalScreen):
         Two-plus rate-limited calls, so runs off the UI thread. A KeyError
         covers a malformed details payload (Beta-adjacent defensiveness).
         """
-        # Imported here, not at module level: race_backfill imports this
-        # module lazily inside main(), so a top-level import back into
-        # race_backfill would be circular.
-        from lemongrass.race_backfill import enumerate_series
         worker = get_current_worker()
         try:
             details = self.client.race.details(race_id)
@@ -388,8 +402,8 @@ class BackfillApp(App):
         series = self.model.series
         label = self.query_one('#series', Label)
         if series is not None:
-            _series_id, name, count = series
-            label.update(f'📌 {name} ({count} races)')
+            _series_id, name, matched, total = series
+            label.update(f'📌 {name} ({matched} of {total} races)')
         elif self.series_error is not None:
             label.update('⚠ series enumeration failed')
         else:
@@ -472,12 +486,13 @@ class BackfillApp(App):
         self._submit_term(event.value)
 
     def _submit_term(self, value):
-        """Add a term: from the session cache if present, else a live search."""
+        """Add a term: a local name filter when a series is pinned, else from
+        the session cache or a live search."""
         term = value.strip()
         self.query_one('#new-term', Input).value = ''
         if not term or term in self.model.terms:
             return
-        if self.model.has_cached(term):
+        if self.model.series_id or self.model.has_cached(term):
             self.model.add_term(term)
             self._refresh_all()
             return

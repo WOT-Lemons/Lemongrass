@@ -107,55 +107,16 @@ class TestRaceListModel:
         m.toggle(2)
         assert [r['ID'] for r in m.selected()] == [1, 3]
 
-    def test_seeded_series_races_visible_and_prechecked(self):
-        m = _model({'t1': [_race(1, 'one', 100)]},
-                   series=(1234, 'Lemons', [_race(9, 'series', 300)]))
-        assert [r['ID'] for r in m.races()] == [1, 9]
-        assert m.checked == {1, 9}
-        assert m.series == (1234, 'Lemons', 1)
-        assert m.series_id == 1234
-        assert m.series_changed is False
-
     def test_no_series_by_default(self):
         m = _model({'t1': [_race(1, 'one', 100)]})
         assert m.series is None
         assert m.series_id == 0
         assert m.series_changed is False
 
-    def test_set_series_prechecks_new_preserves_existing_state(self):
-        m = _model({'t1': [_race(1, 'one', 100), _race(2, 'two', 200)]})
-        m.toggle(1)  # user unchecked race 1
-        m.set_series(1234, 'Lemons', [_race(2, 'two', 200), _race(9, 'new', 300)])
-        assert [r['ID'] for r in m.races()] == [1, 2, 9]
-        assert m.checked == {2, 9}  # 1 stays unchecked, new 9 pre-checked
-        assert m.series_changed is True
-
-    def test_set_series_replaces_previous_series(self):
-        m = _model({'t1': [_race(1, 'one', 100)]},
-                   series=(1234, 'Lemons', [_race(9, 'old-series', 300)]))
-        m.set_series(5678, 'Other', [_race(7, 'new-series', 400)])
-        assert [r['ID'] for r in m.races()] == [1, 7]
-        assert m.checked == {1, 7}  # 9 dropped with the old series
-        assert m.series == (5678, 'Other', 1)
-
     def test_repin_same_series_id_is_not_changed(self):
         m = _model({'t1': []}, series=(1234, 'Lemons', []))
         m.set_series(1234, 'Lemons', [])
         assert m.series_changed is False
-
-    def test_series_races_filtered_by_start_epoc(self):
-        m = _model({'t1': [_race(1, 'one', 150)]}, start_epoc=100,
-                   series=(1234, 'Lemons', [_race(8, 'old', 50), _race(9, 'new', 200)]))
-        assert [r['ID'] for r in m.races()] == [1, 9]
-        assert m.series == (1234, 'Lemons', 1)
-
-    def test_remove_term_keeps_series_races(self):
-        shared = _race(2, 'shared', 200)
-        m = _model({'t1': [_race(1, 'one', 100), shared]},
-                   series=(1234, 'Lemons', [shared]))
-        m.remove_term('t1')
-        assert [r['ID'] for r in m.races()] == [2]
-        assert m.terms == []
 
     def test_cache_results_does_not_activate_term(self):
         m = _model({'t1': [_race(1, 'one', 100)]})
@@ -165,6 +126,73 @@ class TestRaceListModel:
         assert m.has_cached('gp')
         m.add_term('gp')  # served from cache, no results arg needed
         assert [r['ID'] for r in m.races()] == [1, 2]
+
+    def test_pinned_series_filtered_by_terms(self):
+        m = _model({'t1': [_race(1, 'one t1', 100)]},
+                   series=(1234, 'Lemons', [_race(9, 'gp t1 2024', 300),
+                                            _race(8, 'other race', 200)]))
+        # Series is the only candidate set: term race 1 is not in it, 8
+        # doesn't match 't1'.
+        assert [r['ID'] for r in m.races()] == [9]
+        assert m.checked == {9}
+        assert m.series == (1234, 'Lemons', 1, 2)
+        assert m.series_id == 1234
+
+    def test_pinned_empty_terms_shows_whole_series(self):
+        m = _model({}, terms=(),
+                   series=(1234, 'Lemons', [_race(8, 'a', 100),
+                                            _race(9, 'b', 200)]))
+        assert [r['ID'] for r in m.races()] == [8, 9]
+        assert m.series == (1234, 'Lemons', 2, 2)
+
+    def test_pin_mid_session_switches_to_intersection(self):
+        m = _model({'t1': [_race(1, 'one t1', 100), _race(2, 't1 shared', 200)]})
+        m.toggle(1)  # user unchecked race 1
+        m.set_series(1234, 'Lemons',
+                     [_race(2, 't1 shared', 200), _race(9, 'gp t1', 300),
+                      _race(7, 'no match', 250)])
+        # 1 dropped (not in series), 7 hidden (no term match).
+        assert [r['ID'] for r in m.races()] == [2, 9]
+        assert m.checked == {2, 9}  # 2 was checked and survives; 9 is new
+        assert m.series_changed is True
+
+    def test_set_series_replaces_previous_series(self):
+        m = _model({}, terms=(),
+                   series=(1234, 'Lemons', [_race(9, 'old-series', 300)]))
+        m.set_series(5678, 'Other', [_race(7, 'new-series', 400)])
+        assert [r['ID'] for r in m.races()] == [7]
+        assert m.checked == {7}
+        assert m.series == (5678, 'Other', 1, 1)
+
+    def test_pinned_add_term_narrows_and_prunes_checked(self):
+        m = _model({}, terms=(),
+                   series=(1234, 'Lemons', [_race(8, 'gp du lac', 100),
+                                            _race(9, 'hoopties', 200)]))
+        m.add_term('hoop')  # no cache/results needed when pinned
+        assert [r['ID'] for r in m.races()] == [9]
+        assert m.checked == {9}
+        assert m.series == (1234, 'Lemons', 1, 2)
+
+    def test_pinned_remove_last_term_broadens_and_checks_new(self):
+        m = _model({}, terms=('hoop',),
+                   series=(1234, 'Lemons', [_race(8, 'gp du lac', 100),
+                                            _race(9, 'hoopties', 200)]))
+        assert m.checked == {9}
+        m.remove_term('hoop')
+        assert [r['ID'] for r in m.races()] == [8, 9]
+        assert m.checked == {8, 9}
+
+    def test_pinned_series_start_epoc_filters_matched_and_total(self):
+        m = _model({}, terms=(), start_epoc=150,
+                   series=(1234, 'Lemons', [_race(8, 'old', 50),
+                                            _race(9, 'new', 200)]))
+        assert [r['ID'] for r in m.races()] == [9]
+        assert m.series == (1234, 'Lemons', 1, 1)
+
+    def test_unpinned_add_term_still_requires_results(self):
+        m = _model({'t1': [_race(1, 'one', 100)]})
+        with pytest.raises(ValueError):
+            m.add_term('nocache')
 
 
 class TestBackfillAppCore:
@@ -216,17 +244,36 @@ class TestBackfillAppCore:
 
 class TestBackfillAppSeries:
     @pytest.mark.asyncio
-    async def test_seeded_series_shown_and_confirmed_in_result(self):
-        app = _app({'t1': [_race(1, 'one', 100)]},
-                   series=(1234, 'Lemons', [_race(9, 'series', 300)]))
+    async def test_seeded_series_filtered_and_confirmed_in_result(self):
+        app = _app({'t1': [_race(1, 'one t1', 100)]},
+                   series=(1234, 'Lemons', [_race(9, 'series t1', 300),
+                                            _race(8, 'unmatched', 200)]))
         async with app.run_test() as pilot:
             label = str(app.query_one('#series', Label).content)
-            assert 'Lemons' in label and '1 races' in label
+            assert 'Lemons' in label and '1 of 2 races' in label
             await pilot.press('enter')
         result = app.return_value
-        assert [r['ID'] for r in result.races] == [1, 9]
+        assert [r['ID'] for r in result.races] == [9]
         assert result.series_id == 1234
         assert result.series_changed is False
+
+    @pytest.mark.asyncio
+    async def test_add_term_with_pinned_series_is_local(self):
+        client = MagicMock()
+        app = _app({}, terms=(), client=client,
+                   series=(1234, 'Lemons', [_race(8, 'gp du lac', 100),
+                                            _race(9, 'hoopties', 200)]))
+        async with app.run_test() as pilot:
+            app.query_one('#new-term', Input).focus()
+            await pilot.pause()
+            for ch in 'hoop':
+                await pilot.press(ch)
+            await pilot.press('enter')
+            await pilot.pause()
+            label = str(app.query_one('#series', Label).content)
+            assert '1 of 2 races' in label
+        client.results.search_results.assert_not_called()
+        assert app.model.terms == ['hoop']
 
     @pytest.mark.asyncio
     async def test_no_series_shows_hint(self):
@@ -392,7 +439,7 @@ class TestSeriesSearchModal:
     @pytest.mark.asyncio
     async def test_full_flow_pins_series(self):
         hit = {'ID': 55, 'Name': 'a lemons race', 'StartDateEpoc': 100}
-        series_race = {'ID': 9, 'Name': 'series-race', 'StartDateEpoc': 300,
+        series_race = {'ID': 9, 'Name': 'series-race t1', 'StartDateEpoc': 300,
                        'HasResults': True, 'SeriesName': '24 Hours of Lemons'}
         client = self._client(hits=[hit], series_races=[series_race])
         app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
@@ -409,7 +456,7 @@ class TestSeriesSearchModal:
         result = app.return_value
         assert result.series_id == 1234
         assert result.series_changed is True
-        assert [r['ID'] for r in result.races] == [1, 9]
+        assert [r['ID'] for r in result.races] == [9]
 
     @pytest.mark.asyncio
     async def test_modal_search_results_cached_for_terms(self):
