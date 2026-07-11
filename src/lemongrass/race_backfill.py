@@ -132,29 +132,36 @@ def merge_races(races_by_term, series_races=()):
     return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
 
 
+# The server ignores past_races' firstResult offset (verified 2026-07-11:
+# every "page" returns the same first rows), so offset pagination can never
+# terminate on a series of 100+ races. One request with a generous cap
+# fetches the whole series instead (~267 Lemons races as of 2026).
+_SERIES_MAX_RESULTS = 1000
+
+
 def enumerate_series(client, series_id, start_epoc):
     """Enumerate a series' past races via common.past_races (Beta endpoint).
 
-    Pages first_result in steps of 100 until a short page. Keeps races with
+    Makes a single request capped at _SERIES_MAX_RESULTS — the endpoint's
+    firstResult offset is ignored server-side, so pagination is impossible;
+    a result at the cap is logged as possibly truncated. Keeps races with
     results (HasResults) starting at or after start_epoc — a race with no
     results cannot be backfilled. Raises RaceMonitorError on an unsuccessful
     or malformed response so callers have a single failure seam for the Beta
     endpoint's "subject to change without notice" risk.
     """
-    races = []
-    first_result = 0
-    while True:
-        resp = client.common.past_races(
-            series_id=series_id, first_result=first_result, max_results=100)
-        if not resp.get('Successful') or not isinstance(resp.get('Races'), list):
-            raise RaceMonitorError(
-                f"past_races returned an unsuccessful response for series {series_id}")
-        page = resp['Races']
-        races.extend(r for r in page
-                     if r.get('HasResults') and r['StartDateEpoc'] >= start_epoc)
-        if len(page) < 100:
-            return races
-        first_result += 100
+    resp = client.common.past_races(
+        series_id=series_id, first_result=0, max_results=_SERIES_MAX_RESULTS)
+    if not resp.get('Successful') or not isinstance(resp.get('Races'), list):
+        raise RaceMonitorError(
+            f"past_races returned an unsuccessful response for series {series_id}")
+    races = resp['Races']
+    if len(races) >= _SERIES_MAX_RESULTS:
+        logging.warning(
+            "series %d returned %d races (the request cap); results may be "
+            "truncated", series_id, len(races))
+    return [r for r in races
+            if r.get('HasResults') and r['StartDateEpoc'] >= start_epoc]
 
 
 def find_matching_races(client, start_epoc):

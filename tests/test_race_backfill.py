@@ -178,23 +178,37 @@ class TestEnumerateSeries:
         races = _mod.enumerate_series(client, 1234, EPOC_2021)
         assert [r['ID'] for r in races] == [2]
 
-    def test_single_short_page_makes_one_call(self):
+    def test_single_call_with_generous_cap(self):
         client = self._client([{'Successful': True,
                                 'Races': [_series_race(1, EPOC_2022)]}])
         _mod.enumerate_series(client, 1234, 0)
         client.common.past_races.assert_called_once_with(
-            series_id=1234, first_result=0, max_results=100)
+            series_id=1234, first_result=0, max_results=1000)
 
-    def test_paginates_until_short_page(self):
-        page1 = [_series_race(i, EPOC_2022) for i in range(100)]
-        page2 = [_series_race(100, EPOC_2022), _series_race(101, EPOC_2022)]
-        client = self._client([{'Successful': True, 'Races': page1},
-                               {'Successful': True, 'Races': page2}])
-        races = _mod.enumerate_series(client, 1234, 0)
-        assert len(races) == 102
-        offsets = [c.kwargs['first_result']
-                   for c in client.common.past_races.call_args_list]
-        assert offsets == [0, 100]
+    def test_hundred_plus_races_still_one_call(self):
+        # Regression: the Beta endpoint ignores first_result, so offset
+        # pagination re-fetched the same full page forever. A response at
+        # or above the old 100-per-page size must not trigger a second call.
+        races = [_series_race(i, EPOC_2022) for i in range(267)]
+        client = self._client([{'Successful': True, 'Races': races}])
+        result = _mod.enumerate_series(client, 1234, 0)
+        assert len(result) == 267
+        assert client.common.past_races.call_count == 1
+
+    def test_result_at_cap_warns_of_truncation(self, caplog):
+        races = [_series_race(i, EPOC_2022) for i in range(1000)]
+        client = self._client([{'Successful': True, 'Races': races}])
+        with caplog.at_level(logging.WARNING):
+            result = _mod.enumerate_series(client, 1234, 0)
+        assert len(result) == 1000
+        assert any('truncated' in r.message for r in caplog.records)
+
+    def test_result_below_cap_does_not_warn(self, caplog):
+        client = self._client([{'Successful': True,
+                                'Races': [_series_race(1, EPOC_2022)]}])
+        with caplog.at_level(logging.WARNING):
+            _mod.enumerate_series(client, 1234, 0)
+        assert not caplog.records
 
     def test_unsuccessful_response_raises(self):
         client = self._client([{'Successful': False, 'Races': []}])
