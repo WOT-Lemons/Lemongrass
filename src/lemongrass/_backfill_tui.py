@@ -7,6 +7,9 @@ every piece of state and all merge/dedup logic, with no UI imports, so the
 behavior is unit-testable without Textual.
 """
 
+import logging
+from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -17,7 +20,15 @@ from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Input, Label, ListItem, ListView, SelectionList
+from textual.widgets import (
+    Footer,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    RichLog,
+    SelectionList,
+)
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
@@ -39,6 +50,47 @@ class RefineResult:
     terms_changed: bool
     series_id: int = 0
     series_changed: bool = False
+
+
+class _TuiLogHandler(logging.Handler):
+    """Buffer formatted log records for the TUI's log pane.
+
+    emit() only appends to a deque, so it is safe from any thread — the
+    worker threads' httpx and rate-limiter records included. BackfillApp
+    drains the buffer into the RichLog widget on a timer; nothing here may
+    touch Textual.
+    """
+
+    def __init__(self):
+        super().__init__(level=logging.INFO)
+        self.lines = deque(maxlen=200)
+        self.setFormatter(logging.Formatter(
+            '%(asctime)s %(levelname)s %(message)s', datefmt='%H:%M:%S'))
+
+    def emit(self, record):
+        """Append the formatted record to the bounded buffer."""
+        self.lines.append(self.format(record))
+
+
+@contextmanager
+def _logging_to(handler):
+    """Route root logging exclusively to handler for the duration.
+
+    The terminal handlers would corrupt the Textual display; they are
+    restored on exit even if the app crashes, so post-TUI logging prints
+    normally.
+    """
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    for existing in saved:
+        root.removeHandler(existing)
+    root.addHandler(handler)
+    try:
+        yield
+    finally:
+        root.removeHandler(handler)
+        for existing in saved:
+            root.addHandler(existing)
 
 
 # Cache key for the pinned-series source. An object sentinel, not a string:
@@ -336,6 +388,7 @@ class BackfillApp(App):
     CSS = """
     #terms-pane { width: 36; }
     #terms-pane, #races-pane { border: round $primary; padding: 0 1; }
+    #log { height: 4; }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -358,6 +411,7 @@ class BackfillApp(App):
         self.model = model
         self.series_error = series_error
         self._main_screen = None
+        self.log_handler = _TuiLogHandler()
 
     def compose(self):
         """Lay out the series section, terms pane, races checklist, and footer."""
@@ -371,6 +425,7 @@ class BackfillApp(App):
             with Vertical(id='races-pane'):
                 yield Label(id='count')
                 yield SelectionList(id='races')
+        yield RichLog(id='log')
         yield Footer()
 
     def on_mount(self):
@@ -381,6 +436,7 @@ class BackfillApp(App):
             self.notify(
                 f'series enumeration failed — showing term matches only: '
                 f'{self.series_error}', severity='error')
+        self.set_interval(0.25, self._drain_log)
         self.query_one('#races', SelectionList).focus()
 
     def _refresh_all(self):
@@ -414,6 +470,12 @@ class BackfillApp(App):
         total = len(self.model.races())
         self.query_one('#count', Label).update(
             f'Races — {len(self.model.checked)} of {total} selected')
+
+    def _drain_log(self):
+        """Move buffered log lines into the log pane."""
+        log_view = self.query_one('#log', RichLog)
+        while self.log_handler.lines:
+            log_view.write(self.log_handler.lines.popleft())
 
     def on_selection_list_selection_toggled(self, event):
         """Mirror a checkbox toggle into the model."""
@@ -535,11 +597,13 @@ def refine_races(client, terms, races_by_term, start_epoc, series=None,
     (series_id, series_name, races) enumeration or None; series_error the
     exception from a failed enumeration (shown as an in-app error state).
     start_epoc filters in-app search results the same way --start-date
-    filtered the initial ones.
+    filtered the initial ones. While the app runs, root logging is routed
+    into the in-app log pane and restored afterwards.
     """
     model = RaceListModel(terms, races_by_term, start_epoc, series=series)
     app = BackfillApp(client, model, series_error=series_error)
     try:
-        return app.run()
+        with _logging_to(app.log_handler):
+            return app.run()
     except KeyboardInterrupt:
         return None

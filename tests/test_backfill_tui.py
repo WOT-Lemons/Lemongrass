@@ -1,10 +1,18 @@
+import logging
+import re
 from unittest.mock import MagicMock
 
 import pytest
 from race_monitor import RaceMonitorError
-from textual.widgets import Input, Label, ListView, SelectionList
+from textual.widgets import Input, Label, ListView, RichLog, SelectionList
 
-from lemongrass._backfill_tui import BackfillApp, RaceListModel, SeriesSearchModal
+from lemongrass._backfill_tui import (
+    BackfillApp,
+    RaceListModel,
+    SeriesSearchModal,
+    _logging_to,
+    _TuiLogHandler,
+)
 
 
 def _race(id, name, start_epoc):
@@ -19,6 +27,69 @@ def _app(races_by_term=None, terms=('t1',), start_epoc=0, client=None,
          series=None, series_error=None):
     model = RaceListModel(terms, races_by_term or {}, start_epoc, series=series)
     return BackfillApp(client or MagicMock(), model, series_error=series_error)
+
+
+def _info_record(message):
+    return logging.LogRecord('httpx', logging.INFO, __file__, 0,
+                             message, None, None)
+
+
+class TestTuiLogHandler:
+    def test_emit_buffers_formatted_line(self):
+        handler = _TuiLogHandler()
+        handler.emit(_info_record('HTTP Request: POST /PastRaces 200 OK'))
+        assert len(handler.lines) == 1
+        line = handler.lines[0]
+        assert 'INFO' in line
+        assert 'HTTP Request: POST /PastRaces 200 OK' in line
+        assert re.match(r'^\d\d:\d\d:\d\d ', line)  # HH:MM:SS, no date
+
+    def test_buffer_is_bounded(self):
+        handler = _TuiLogHandler()
+        for i in range(250):
+            handler.emit(_info_record(f'line {i}'))
+        assert len(handler.lines) == 200
+        assert 'line 249' in handler.lines[-1]
+
+
+class TestLoggingTo:
+    def test_swaps_in_handler_and_restores(self):
+        root = logging.getLogger()
+        sentinel = logging.NullHandler()
+        root.addHandler(sentinel)
+        handler = _TuiLogHandler()
+        try:
+            with _logging_to(handler):
+                assert root.handlers == [handler]
+            assert sentinel in root.handlers
+            assert handler not in root.handlers
+        finally:
+            root.removeHandler(sentinel)
+
+    def test_restores_after_exception(self):
+        root = logging.getLogger()
+        sentinel = logging.NullHandler()
+        root.addHandler(sentinel)
+        handler = _TuiLogHandler()
+        try:
+            with pytest.raises(RuntimeError):
+                with _logging_to(handler):
+                    raise RuntimeError('app crashed')
+            assert sentinel in root.handlers
+            assert handler not in root.handlers
+        finally:
+            root.removeHandler(sentinel)
+
+
+class TestBackfillAppLogPane:
+    @pytest.mark.asyncio
+    async def test_buffered_lines_drain_into_pane(self):
+        app = _app({'t1': [_race(1, 'one', 100)]})
+        async with app.run_test() as pilot:
+            app.log_handler.emit(_info_record('sleeping 9.77s'))
+            await pilot.pause(0.4)  # past the 0.25s drain interval
+            log_view = app.query_one('#log', RichLog)
+            assert len(log_view.lines) >= 1
 
 
 class TestRaceListModel:
