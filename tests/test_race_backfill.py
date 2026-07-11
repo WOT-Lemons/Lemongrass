@@ -10,6 +10,7 @@ from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
+from race_monitor import RaceMonitorError
 
 import lemongrass.race_backfill as _mod
 from lemongrass.laps import SCHEMA_VERSION
@@ -148,6 +149,55 @@ class TestMergeRaces:
         }
         merged = _mod.merge_races(by_term)
         assert [r['ID'] for r in merged] == [1, 2]
+
+
+def _series_race(id, start_epoc, has_results=True):
+    return {'ID': id, 'Name': f'race-{id}', 'StartDateEpoc': start_epoc,
+            'HasResults': has_results, 'SeriesName': '24 Hours of Lemons'}
+
+
+class TestEnumerateSeries:
+    def _client(self, responses):
+        client = MagicMock()
+        client.common.past_races.side_effect = responses
+        return client
+
+    def test_filters_has_results_and_start_epoc(self):
+        client = self._client([{'Successful': True, 'Races': [
+            _series_race(1, EPOC_2020),                      # too old
+            _series_race(2, EPOC_2022),                      # kept
+            _series_race(3, EPOC_2023, has_results=False),   # no results
+        ]}])
+        races = _mod.enumerate_series(client, 1234, EPOC_2021)
+        assert [r['ID'] for r in races] == [2]
+
+    def test_single_short_page_makes_one_call(self):
+        client = self._client([{'Successful': True,
+                                'Races': [_series_race(1, EPOC_2022)]}])
+        _mod.enumerate_series(client, 1234, 0)
+        client.common.past_races.assert_called_once_with(
+            series_id=1234, first_result=0, max_results=100)
+
+    def test_paginates_until_short_page(self):
+        page1 = [_series_race(i, EPOC_2022) for i in range(100)]
+        page2 = [_series_race(100, EPOC_2022), _series_race(101, EPOC_2022)]
+        client = self._client([{'Successful': True, 'Races': page1},
+                               {'Successful': True, 'Races': page2}])
+        races = _mod.enumerate_series(client, 1234, 0)
+        assert len(races) == 102
+        offsets = [c.kwargs['first_result']
+                   for c in client.common.past_races.call_args_list]
+        assert offsets == [0, 100]
+
+    def test_unsuccessful_response_raises(self):
+        client = self._client([{'Successful': False, 'Races': []}])
+        with pytest.raises(RaceMonitorError):
+            _mod.enumerate_series(client, 1234, 0)
+
+    def test_missing_races_key_raises(self):
+        client = self._client([{'Successful': True}])
+        with pytest.raises(RaceMonitorError):
+            _mod.enumerate_series(client, 1234, 0)
 
 
 class TestRunBackfill:

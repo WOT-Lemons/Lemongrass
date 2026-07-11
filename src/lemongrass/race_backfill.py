@@ -125,6 +125,31 @@ def merge_races(races_by_term):
     return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
 
 
+def enumerate_series(client, series_id, start_epoc):
+    """Enumerate a series' past races via common.past_races (Beta endpoint).
+
+    Pages first_result in steps of 100 until a short page. Keeps races with
+    results (HasResults) starting at or after start_epoc — a race with no
+    results cannot be backfilled. Raises RaceMonitorError on an unsuccessful
+    or malformed response so callers have a single failure seam for the Beta
+    endpoint's "subject to change without notice" risk.
+    """
+    races = []
+    first_result = 0
+    while True:
+        resp = client.common.past_races(
+            series_id=series_id, first_result=first_result, max_results=100)
+        if not resp.get('Successful') or 'Races' not in resp:
+            raise RaceMonitorError(
+                f"past_races returned an unsuccessful response for series {series_id}")
+        page = resp['Races']
+        races.extend(r for r in page
+                     if r.get('HasResults') and r['StartDateEpoc'] >= start_epoc)
+        if len(page) < 100:
+            return races
+        first_result += 100
+
+
 def find_matching_races(client, start_epoc):
     """Search for matching Lemons races at or after start_epoc.
 
