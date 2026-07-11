@@ -45,6 +45,7 @@ class TestDefaults:
         assert c.races.backfill.search_terms == (
             "Real Hoopties", "GP du Lac", "Halloween Hoop")
         assert c.races.backfill.default_start_date == "2017-01-01"
+        assert c.races.backfill.series_id == 0
         assert c.racemonitor.tokens_env == "RACEMONITOR_TOKENS"
         assert c.telem.vin == ""
         assert c.telem.obd.port == "/dev/obd"
@@ -83,6 +84,7 @@ class TestFileOverlay:
             [races.backfill]
             search_terms = ["Foo", "Bar"]
             default_start_date = "2020-05-01"
+            series_id = 1234
             [telem.spool]
             max_size = "2GiB"
         """)
@@ -91,7 +93,16 @@ class TestFileOverlay:
         assert c.influx.org == "team"
         assert c.races.backfill.search_terms == ("Foo", "Bar")
         assert c.races.backfill.default_start_date == "2020-05-01"
+        assert c.races.backfill.series_id == 1234
         assert c.telem.spool.max_size == 2 * 1024 ** 3
+
+    def test_explicit_empty_search_terms_overrides_default(self, tmp_path, monkeypatch):
+        _write_cfg(tmp_path, monkeypatch, """
+            [races.backfill]
+            search_terms = []
+        """)
+        c = _config.load_config()
+        assert c.races.backfill.search_terms == ()
 
 
 class TestValidation:
@@ -138,6 +149,7 @@ class TestValidation:
         ("[telem.obd]\ndebug = 5", "debug must be a boolean"),
         ("[races.backfill]\nsearch_terms = [1, 2]",
          "search_terms must be a list of strings"),
+        ("[races.backfill]\nseries_id = \"lemons\"", "series_id must be an integer"),
     ])
     def test_typed_wrong_type_raises(self, tmp_path, monkeypatch, body, match):
         _write_cfg(tmp_path, monkeypatch, body)

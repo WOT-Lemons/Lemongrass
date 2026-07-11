@@ -19,6 +19,7 @@ pisugar = "pisugar"
 [races.backfill]
 search_terms = ["Real Hoopties", "GP du Lac", "Halloween Hoop"]
 default_start_date = "2017-01-01"          # earliest race date, overridable via --start-date
+series_id = 0                              # 0 = all series
 
 [racemonitor]
 tokens_env = "RACEMONITOR_TOKENS"          # env var holding the comma-separated token pool
