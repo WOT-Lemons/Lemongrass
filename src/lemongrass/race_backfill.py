@@ -122,11 +122,23 @@ def search_races_by_term(client, terms, start_epoc):
     return by_term
 
 
-def merge_races(races_by_term, series_races=()):
-    """Merge per-term search results (plus optional series enumeration):
-    dedup by race ID, sort by start date."""
+def filter_races_by_terms(races, terms):
+    """Keep races whose Name contains any term (case-insensitive substring).
+
+    Empty terms keeps everything — a pinned series with no terms means the
+    whole series. Order preserved.
+    """
+    if not terms:
+        return list(races)
+    lowered = [t.lower() for t in terms]
+    return [r for r in races
+            if any(t in r['Name'].lower() for t in lowered)]
+
+
+def merge_races(races_by_term):
+    """Merge per-term search results: dedup by race ID, sort by start date."""
     seen = {}
-    for races in [*races_by_term.values(), series_races]:
+    for races in races_by_term.values():
         for race in races:
             seen[race['ID']] = race
     return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
@@ -169,7 +181,8 @@ def find_matching_races(client, start_epoc):
 
     Makes one API call per search term and deduplicates by race ID.
     """
-    return merge_races(search_races_by_term(client, LEMONS_SEARCH_TERMS, start_epoc))
+    return merge_races(search_races_by_term(client, LEMONS_SEARCH_TERMS,
+                                            start_epoc))
 
 
 def validate_backfill(race_ids, query_api):
@@ -566,6 +579,7 @@ def main():
         with RaceMonitorClient(api_token=tokens) as client:
             series = None
             series_error = None
+            races_by_term = {}
             if LEMONS_SERIES_ID:
                 try:
                     series_races = enumerate_series(client, LEMONS_SERIES_ID,
@@ -590,9 +604,16 @@ def main():
                                    else f'series {LEMONS_SERIES_ID}')
                     series = (LEMONS_SERIES_ID, series_name, series_races)
 
-            races_by_term = search_races_by_term(
-                client, LEMONS_SEARCH_TERMS, start_epoc)
-            races = merge_races(races_by_term, series[2] if series else ())
+            if series:
+                # Terms select events within the series locally; no per-term
+                # API calls needed.
+                races = sorted(
+                    filter_races_by_terms(series[2], LEMONS_SEARCH_TERMS),
+                    key=lambda r: r['StartDateEpoc'])
+            else:
+                races_by_term = search_races_by_term(
+                    client, LEMONS_SEARCH_TERMS, start_epoc)
+                races = merge_races(races_by_term)
             logging.info("Found %d matching races", len(races))
 
             if tty:
