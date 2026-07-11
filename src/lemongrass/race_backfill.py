@@ -146,7 +146,7 @@ def enumerate_series(client, series_id, start_epoc):
     while True:
         resp = client.common.past_races(
             series_id=series_id, first_result=first_result, max_results=100)
-        if not resp.get('Successful') or 'Races' not in resp:
+        if not resp.get('Successful') or not isinstance(resp.get('Races'), list):
             raise RaceMonitorError(
                 f"past_races returned an unsuccessful response for series {series_id}")
         page = resp['Races']

@@ -206,6 +206,11 @@ class TestEnumerateSeries:
         with pytest.raises(RaceMonitorError):
             _mod.enumerate_series(client, 1234, 0)
 
+    def test_races_none_raises(self):
+        client = self._client([{'Successful': True, 'Races': None}])
+        with pytest.raises(RaceMonitorError):
+            _mod.enumerate_series(client, 1234, 0)
+
 
 class TestRunBackfill:
     def _races(self):
