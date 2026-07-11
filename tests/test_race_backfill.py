@@ -1246,10 +1246,6 @@ class TestMaybeSaveConfig:
         _mod._maybe_save_config(_refine_result(terms=('a',)))
         assert '[races.backfill]' in capsys.readouterr().out
 
-    def _default_terms(self):
-        from lemongrass._config import BackfillConfig
-        return BackfillConfig().search_terms
-
     def test_series_changed_prompts_and_saves(self, monkeypatch, tmp_path):
         cfg = tmp_path / 'lemongrass.toml'
         cfg.write_text('')
@@ -1267,51 +1263,6 @@ class TestMaybeSaveConfig:
         assert 'search_terms' not in data['races']['backfill']
         assert any('series_id=1234' in p for p in prompts)
 
-    def test_series_save_with_default_terms_offers_clear(self, monkeypatch, tmp_path):
-        cfg = tmp_path / 'lemongrass.toml'
-        cfg.write_text('')
-        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
-        monkeypatch.setattr('builtins.input', lambda *_: 'y')
-        _mod._maybe_save_config(_refine_result(
-            terms=self._default_terms(), changed=False,
-            series_id=1234, series_changed=True))
-        data = tomllib.loads(cfg.read_text())
-        assert data['races']['backfill']['series_id'] == 1234
-        assert data['races']['backfill']['search_terms'] == []
-
-    def test_clear_save_failure_snippet_includes_search_terms(
-            self, monkeypatch, tmp_path, capsys):
-        cfg = tmp_path / 'lemongrass.toml'
-        cfg.write_text('')
-        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
-        monkeypatch.setattr('builtins.input', lambda *_: 'y')
-        real_save = _mod._save_backfill_value
-
-        def _fail_on_clear(path, key, value):
-            if key == 'search_terms':
-                return False
-            return real_save(path, key, value)
-        monkeypatch.setattr(_mod, '_save_backfill_value', _fail_on_clear)
-        _mod._maybe_save_config(_refine_result(
-            terms=self._default_terms(), changed=False,
-            series_id=1234, series_changed=True))
-        out = capsys.readouterr().out
-        assert 'series_id = 1234' in out
-        assert 'search_terms = []' in out
-
-    def test_clear_declined_leaves_terms_alone(self, monkeypatch, tmp_path):
-        cfg = tmp_path / 'lemongrass.toml'
-        cfg.write_text('')
-        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
-        answers = iter(['y', 'n'])  # save series: yes; clear terms: no
-        monkeypatch.setattr('builtins.input', lambda *_: next(answers))
-        _mod._maybe_save_config(_refine_result(
-            terms=self._default_terms(), changed=False,
-            series_id=1234, series_changed=True))
-        data = tomllib.loads(cfg.read_text())
-        assert data['races']['backfill']['series_id'] == 1234
-        assert 'search_terms' not in data['races']['backfill']
-
     def test_no_clear_offer_when_terms_customized(self, monkeypatch, tmp_path):
         cfg = tmp_path / 'lemongrass.toml'
         cfg.write_text('')
@@ -1328,6 +1279,24 @@ class TestMaybeSaveConfig:
         assert data['races']['backfill']['series_id'] == 1234
         assert data['races']['backfill']['search_terms'] == ['custom']
         assert not any('redundant' in p for p in prompts)
+
+    def test_series_only_save_asks_single_prompt(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        prompts = []
+
+        def _yes(prompt):
+            prompts.append(prompt)
+            return 'y'
+        monkeypatch.setattr('builtins.input', _yes)
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=False, series_id=1234, series_changed=True))
+        assert len(prompts) == 1
+        assert 'series_id=1234' in prompts[0]
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['series_id'] == 1234
+        assert 'search_terms' not in data['races']['backfill']
 
     def test_series_snippet_printed_without_config(self, monkeypatch, capsys):
         monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)

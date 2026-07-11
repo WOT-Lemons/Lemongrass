@@ -67,7 +67,6 @@ _backfill_cfg = _config.load_config().races.backfill
 LEMONS_SEARCH_TERMS = _backfill_cfg.search_terms
 LEMONS_SERIES_ID = _backfill_cfg.series_id
 DEFAULT_START_DATE = _backfill_cfg.default_start_date
-_DEFAULT_TERMS = _config.BackfillConfig().search_terms
 EPOCH_START = '1970-01-01T00:00:00Z'
 
 WINDOW_PAD_S = _influx.WINDOW_PAD_S
@@ -480,21 +479,14 @@ def _save_search_terms(path, terms):
     return _save_backfill_value(path, 'search_terms', list(terms))
 
 
-def _print_config_snippet(result, clear_terms=False):
-    """Print the TOML snippet that persists the session's config changes.
-
-    clear_terms covers the fallback for a failed "clear redundant default
-    search terms" save, which is only offered when result.terms_changed is
-    False, so it needs its own line rather than reusing that branch.
-    """
+def _print_config_snippet(result):
+    """Print the TOML snippet that persists the session's config changes."""
     lines = ['[races.backfill]']
     if result.series_changed:
         lines.append(f'series_id = {result.series_id}')
     if result.terms_changed:
         array = tomlkit.item(list(result.terms)).as_string()
         lines.append(f'search_terms = {array}')
-    elif clear_terms:
-        lines.append('search_terms = []')
     print("To persist these settings, add to the TOML file named by "
           "LEMONGRASS_CONFIG:\n\n" + '\n'.join(lines) + '\n')
 
@@ -514,9 +506,7 @@ def _maybe_save_config(result):
     races.backfill keys; a failed save falls back to printing the snippet.
     Without it no file is written — config loading has no default path, so a
     written file would be silently ignored — and the snippet is printed
-    instead. After a series save, if the active terms are still the built-in
-    defaults, a final prompt offers to clear them (the series enumeration now
-    covers what they proxied for). Never blocks the run.
+    instead. Never blocks the run.
     """
     if not (result.terms_changed or result.series_changed):
         return
@@ -525,21 +515,15 @@ def _maybe_save_config(result):
         _print_config_snippet(result)
         return
     snippet_needed = False
-    clear_failed = False
-    saved_series = False
     if result.series_changed and _ask_yes(
             f"Save series_id={result.series_id} to {path}? [y/N] "):
-        saved_series = _save_backfill_value(path, 'series_id', result.series_id)
-        snippet_needed |= not saved_series
-    if result.terms_changed:
-        if _ask_yes(f"Save updated search terms to {path}? [y/N] "):
-            snippet_needed |= not _save_search_terms(path, result.terms)
-    elif (saved_series and tuple(result.terms) == _DEFAULT_TERMS
-            and _ask_yes("Also clear the now-redundant default search terms? [y/N] ")):
-        clear_failed = not _save_backfill_value(path, 'search_terms', [])
-        snippet_needed |= clear_failed
+        snippet_needed |= not _save_backfill_value(path, 'series_id',
+                                                   result.series_id)
+    if result.terms_changed and _ask_yes(
+            f"Save updated search terms to {path}? [y/N] "):
+        snippet_needed |= not _save_search_terms(path, result.terms)
     if snippet_needed:
-        _print_config_snippet(result, clear_terms=clear_failed)
+        _print_config_snippet(result)
 
 
 def main():
