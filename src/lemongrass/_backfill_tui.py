@@ -16,6 +16,7 @@ from textual import work
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, Label, ListItem, ListView, SelectionList
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
@@ -178,6 +179,138 @@ def _race_label(race):
     return f"{day}  {race['Name']}  (#{race['ID']})"
 
 
+class SeriesSearchModal(ModalScreen):
+    """Find a series: search race names, pick a race, pin its series.
+
+    Flow: query → results.search_results (hits listed) → pick a hit →
+    race.details reveals its SeriesID → enumerate_series fetches the full
+    series. Dismisses with (series_id, series_name, races), or None on
+    escape. Every RaceMonitor call runs off-thread (each may block ~10s
+    under the shared rate limiter). Errors notify and leave the modal open
+    for retry. Search hits are session-cached in the model's term cache, so
+    a later term search for the same string is free.
+    """
+
+    CSS = """
+    SeriesSearchModal { align: center middle; }
+    #series-modal { width: 72; height: 20; border: round $primary; padding: 0 1; }
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('escape', 'cancel', 'Cancel', priority=True),
+    ]
+
+    def __init__(self, client, model):
+        """client is the shared RaceMonitorClient; model the app's RaceListModel
+        (for start_epoc filtering and search-result caching)."""
+        super().__init__()
+        self.client = client
+        self.model = model
+        self._hits = []
+
+    def compose(self):
+        """Lay out the query input, hit list, and status line."""
+        with Vertical(id='series-modal'):
+            yield Label('Find series — search by race name, pick a race')
+            yield Input(placeholder='race name…', id='series-query')
+            yield ListView(id='series-hits')
+            yield Label('', id='series-status')
+
+    def on_mount(self):
+        """Focus the query input."""
+        self.query_one('#series-query', Input).focus()
+
+    def action_cancel(self):
+        """Dismiss without pinning."""
+        self.dismiss(None)
+
+    def _status(self, text):
+        """Update the status line."""
+        self.query_one('#series-status', Label).update(text)
+
+    def on_input_submitted(self, event):
+        """Kick off an off-thread race-name search.
+
+        Stops the event so it doesn't bubble past this modal to
+        BackfillApp.on_input_submitted (its '#new-term' fallback path), which
+        would otherwise also fire for the same keypress.
+        """
+        event.stop()
+        term = event.value.strip()
+        if not term:
+            return
+        self._status(f'searching "{term}"…')
+        self._search(term)
+
+    @work(thread=True)
+    def _search(self, term):
+        """Fetch search hits off the UI thread; report errors via notify."""
+        worker = get_current_worker()
+        try:
+            resp = self.client.results.search_results(term)
+        except RaceMonitorError as exc:
+            if worker.is_cancelled:
+                return
+            self.app.call_from_thread(
+                self._fail, f'search "{term}" failed: {exc}')
+            return
+        if worker.is_cancelled:
+            return
+        self.app.call_from_thread(self._show_hits, term, resp.get('Races', []))
+
+    def _fail(self, message):
+        """Clear the status line and surface an error notification."""
+        self._status('')
+        self.app.notify(message, severity='error')
+
+    def _show_hits(self, term, races):
+        """Render search hits and cache them for the term pane."""
+        self.model.cache_results(term, races)
+        self._hits = list(races)
+        view = self.query_one('#series-hits', ListView)
+        view.clear()
+        for race in self._hits:
+            view.append(ListItem(Label(_race_label(race))))
+        self._status(f'{len(self._hits)} races — pick one to pin its series'
+                     if self._hits else 'no races found')
+
+    def on_list_view_selected(self, event):
+        """Resolve the picked race's series off-thread."""
+        index = self.query_one('#series-hits', ListView).index
+        if index is None or not self._hits:
+            return
+        race = self._hits[index]
+        self._status(f'resolving series for "{race["Name"]}"…')
+        self._resolve(race['ID'])
+
+    @work(thread=True)
+    def _resolve(self, race_id):
+        """race.details → SeriesID → enumerate_series; dismiss with the pin.
+
+        Two-plus rate-limited calls, so runs off the UI thread. A KeyError
+        covers a malformed details payload (Beta-adjacent defensiveness).
+        """
+        # Imported here, not at module level: race_backfill imports this
+        # module lazily inside main(), so a top-level import back into
+        # race_backfill would be circular.
+        from lemongrass.race_backfill import enumerate_series
+        worker = get_current_worker()
+        try:
+            details = self.client.race.details(race_id)
+            series_id = details['Race']['SeriesID']
+            races = enumerate_series(self.client, series_id, self.model.start_epoc)
+        except (KeyError, RaceMonitorError) as exc:
+            if worker.is_cancelled:
+                return
+            self.app.call_from_thread(
+                self._fail, f'series lookup failed: {exc!r}')
+            return
+        if worker.is_cancelled:
+            return
+        name = races[0]['SeriesName'] if races else f'series {series_id}'
+        self.app.call_from_thread(self.dismiss, (series_id, name, races))
+
+
 class BackfillApp(App):
     """Two-pane refinement UI; exit value is a RefineResult, or None on cancel.
 
@@ -196,6 +329,7 @@ class BackfillApp(App):
         Binding('a', 'select_all', 'All'),
         Binding('i', 'invert', 'Invert'),
         Binding('d', 'remove_term', 'Remove term'),
+        Binding('s', 'find_series', 'Series'),
         Binding('escape', 'cancel', 'Cancel'),
         Binding('q', 'cancel', 'Cancel', show=False),
         Binding('ctrl+c', 'cancel', 'Cancel', show=False, priority=True),
@@ -209,6 +343,7 @@ class BackfillApp(App):
         self.client = client
         self.model = model
         self.series_error = series_error
+        self._main_screen = None
 
     def compose(self):
         """Lay out the series section, terms pane, races checklist, and footer."""
@@ -226,6 +361,7 @@ class BackfillApp(App):
 
     def on_mount(self):
         """Populate both panes from the model and focus the checklist."""
+        self._main_screen = self.screen
         self._refresh_all()
         if self.series_error is not None:
             self.notify(
@@ -280,6 +416,18 @@ class BackfillApp(App):
         self.model.invert()
         self._refresh_all()
 
+    def check_action(self, action, parameters):
+        """Disable 'confirm' while a modal (e.g. SeriesSearchModal) is on top.
+
+        'enter' is a priority binding, which — unlike regular bindings — is
+        not confined to the active screen's modal boundary: Textual checks it
+        against the whole focus chain, App included, before the focused
+        widget ever sees the key. Without this guard, pressing enter inside
+        the series-search modal's Input/ListView would exit the whole app
+        instead of submitting the search or picking a hit.
+        """
+        return not (action == 'confirm' and self.screen is not self._main_screen)
+
     def action_confirm(self):
         """Exit with the confirmed selection.
 
@@ -300,6 +448,16 @@ class BackfillApp(App):
     def action_cancel(self):
         """Exit without a selection."""
         self.exit(None)
+
+    def action_find_series(self):
+        """Open the series-search modal; pin its result into the model."""
+        def _pinned(result):
+            if result is None:
+                return
+            series_id, series_name, races = result
+            self.model.set_series(series_id, series_name, races)
+            self._refresh_all()
+        self.push_screen(SeriesSearchModal(self.client, self.model), _pinned)
 
     def action_remove_term(self):
         """Remove the term highlighted in the terms pane."""

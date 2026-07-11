@@ -4,7 +4,7 @@ import pytest
 from race_monitor import RaceMonitorError
 from textual.widgets import Input, Label, ListView, SelectionList
 
-from lemongrass._backfill_tui import BackfillApp, RaceListModel
+from lemongrass._backfill_tui import BackfillApp, RaceListModel, SeriesSearchModal
 
 
 def _race(id, name, start_epoc):
@@ -338,3 +338,107 @@ class TestBackfillAppTerms:
             await pilot.press('enter')
         assert client.results.search_results.call_count == 1
         assert [r['ID'] for r in app.return_value.races] == [1, 2]
+
+
+class TestSeriesSearchModal:
+    def _client(self, hits=None, series_id=1234, series_races=None,
+                details_error=None, search_error=None):
+        """Client stub for the modal flow: search → details → past_races."""
+        client = MagicMock()
+        if search_error:
+            client.results.search_results.side_effect = search_error
+        else:
+            client.results.search_results.return_value = {'Races': hits or []}
+        if details_error:
+            client.race.details.side_effect = details_error
+        else:
+            client.race.details.return_value = {
+                'Successful': True, 'Race': {'ID': 1, 'SeriesID': series_id}}
+        client.common.past_races.return_value = {
+            'Successful': True, 'Races': series_races or []}
+        return client
+
+    async def _search(self, pilot, app, query):
+        """Open the modal, type query, submit, and wait for the worker."""
+        await pilot.press('s')
+        await pilot.pause()
+        for ch in query:
+            await pilot.press(ch)
+        await pilot.press('enter')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    async def _pick_first_hit(self, pilot, app):
+        """Select the first hit in the modal's results list."""
+        app.screen.query_one('#series-hits', ListView).focus()
+        await pilot.pause()
+        await pilot.press('down')
+        await pilot.press('enter')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    @pytest.mark.asyncio
+    async def test_s_opens_modal_escape_closes(self):
+        app = _app({'t1': [_race(1, 'one', 100)]})
+        async with app.run_test() as pilot:
+            await pilot.press('s')
+            await pilot.pause()
+            assert isinstance(app.screen, SeriesSearchModal)
+            await pilot.press('escape')
+            await pilot.pause()
+            assert not isinstance(app.screen, SeriesSearchModal)
+        assert app.model.series is None
+
+    @pytest.mark.asyncio
+    async def test_full_flow_pins_series(self):
+        hit = {'ID': 55, 'Name': 'a lemons race', 'StartDateEpoc': 100}
+        series_race = {'ID': 9, 'Name': 'series-race', 'StartDateEpoc': 300,
+                       'HasResults': True, 'SeriesName': '24 Hours of Lemons'}
+        client = self._client(hits=[hit], series_races=[series_race])
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._search(pilot, app, 'gp')
+            await self._pick_first_hit(pilot, app)
+            assert not isinstance(app.screen, SeriesSearchModal)
+            label = str(app.query_one('#series', Label).content)
+            assert '24 Hours of Lemons' in label
+            app.query_one('#races', SelectionList).focus()
+            await pilot.pause()
+            await pilot.press('enter')
+        client.race.details.assert_called_once_with(55)
+        result = app.return_value
+        assert result.series_id == 1234
+        assert result.series_changed is True
+        assert [r['ID'] for r in result.races] == [1, 9]
+
+    @pytest.mark.asyncio
+    async def test_modal_search_results_cached_for_terms(self):
+        hit = {'ID': 55, 'Name': 'a lemons race', 'StartDateEpoc': 100}
+        client = self._client(hits=[hit])
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._search(pilot, app, 'gp')
+            await pilot.press('escape')
+            await pilot.pause()
+        assert app.model.has_cached('gp')
+        assert client.results.search_results.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_search_error_keeps_modal_open(self):
+        client = self._client(search_error=RaceMonitorError('boom'))
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._search(pilot, app, 'gp')
+            assert isinstance(app.screen, SeriesSearchModal)
+        assert app.model.series is None
+
+    @pytest.mark.asyncio
+    async def test_details_error_keeps_modal_open(self):
+        hit = {'ID': 55, 'Name': 'a lemons race', 'StartDateEpoc': 100}
+        client = self._client(hits=[hit], details_error=RaceMonitorError('boom'))
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._search(pilot, app, 'gp')
+            await self._pick_first_hit(pilot, app)
+            assert isinstance(app.screen, SeriesSearchModal)
+        assert app.model.series is None
