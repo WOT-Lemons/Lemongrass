@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from race_monitor import RaceMonitorError
-from textual.widgets import Input, ListView, SelectionList
+from textual.widgets import Input, Label, ListView, SelectionList
 
 from lemongrass._backfill_tui import BackfillApp, RaceListModel
 
@@ -15,9 +15,10 @@ def _model(races_by_term=None, terms=('t1',), start_epoc=0, series=None):
     return RaceListModel(terms, races_by_term or {}, start_epoc, series=series)
 
 
-def _app(races_by_term=None, terms=('t1',), start_epoc=0, client=None):
-    model = RaceListModel(terms, races_by_term or {}, start_epoc)
-    return BackfillApp(client or MagicMock(), model)
+def _app(races_by_term=None, terms=('t1',), start_epoc=0, client=None,
+         series=None, series_error=None):
+    model = RaceListModel(terms, races_by_term or {}, start_epoc, series=series)
+    return BackfillApp(client or MagicMock(), model, series_error=series_error)
 
 
 class TestRaceListModel:
@@ -211,6 +212,41 @@ class TestBackfillAppCore:
         async with app.run_test() as pilot:
             await pilot.press('escape')
         assert app.return_value is None
+
+
+class TestBackfillAppSeries:
+    @pytest.mark.asyncio
+    async def test_seeded_series_shown_and_confirmed_in_result(self):
+        app = _app({'t1': [_race(1, 'one', 100)]},
+                   series=(1234, 'Lemons', [_race(9, 'series', 300)]))
+        async with app.run_test() as pilot:
+            label = str(app.query_one('#series', Label).content)
+            assert 'Lemons' in label and '1 races' in label
+            await pilot.press('enter')
+        result = app.return_value
+        assert [r['ID'] for r in result.races] == [1, 9]
+        assert result.series_id == 1234
+        assert result.series_changed is False
+
+    @pytest.mark.asyncio
+    async def test_no_series_shows_hint(self):
+        app = _app({'t1': [_race(1, 'one', 100)]})
+        async with app.run_test():
+            label = str(app.query_one('#series', Label).content)
+        assert 'press s' in label
+
+    @pytest.mark.asyncio
+    async def test_series_error_shows_state_and_notifies(self):
+        app = _app({'t1': [_race(1, 'one', 100)]},
+                   series_error=RaceMonitorError('beta broke'))
+        app.notify = MagicMock()
+        async with app.run_test() as pilot:
+            label = str(app.query_one('#series', Label).content)
+            assert 'failed' in label
+            await pilot.press('enter')
+        app.notify.assert_called_once()
+        assert app.notify.call_args.kwargs.get('severity') == 'error'
+        assert app.return_value.series_id == 0
 
 
 class TestBackfillAppTerms:

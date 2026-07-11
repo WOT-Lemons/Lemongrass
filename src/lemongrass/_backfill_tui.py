@@ -27,12 +27,15 @@ class RefineResult:
 
     races is the checked subset (date-sorted race dicts); terms the final
     search terms in display order; terms_changed whether they differ from the
-    terms the session started with.
+    terms the session started with. series_id is the pinned series (0 if
+    none); series_changed whether it differs from the config-seeded one.
     """
 
     races: list
     terms: tuple
     terms_changed: bool
+    series_id: int = 0
+    series_changed: bool = False
 
 
 # Cache key for the pinned-series source. An object sentinel, not a string:
@@ -198,16 +201,21 @@ class BackfillApp(App):
         Binding('ctrl+c', 'cancel', 'Cancel', show=False, priority=True),
     ]
 
-    def __init__(self, client, model):
-        """client is the shared RaceMonitorClient; model a seeded RaceListModel."""
+    def __init__(self, client, model, series_error=None):
+        """client is the shared RaceMonitorClient; model a seeded RaceListModel.
+        series_error, when set, is the exception from a failed config-driven
+        series enumeration, surfaced as an error state in the Series pane."""
         super().__init__()
         self.client = client
         self.model = model
+        self.series_error = series_error
 
     def compose(self):
-        """Lay out the terms pane, races checklist, and footer."""
+        """Lay out the series section, terms pane, races checklist, and footer."""
         with Horizontal():
             with Vertical(id='terms-pane'):
+                yield Label('Series')
+                yield Label('', id='series')
                 yield Label('Search terms')
                 yield ListView(id='terms')
                 yield Input(placeholder='add search term…', id='new-term')
@@ -219,6 +227,10 @@ class BackfillApp(App):
     def on_mount(self):
         """Populate both panes from the model and focus the checklist."""
         self._refresh_all()
+        if self.series_error is not None:
+            self.notify(
+                f'series enumeration failed — showing term matches only: '
+                f'{self.series_error}', severity='error')
         self.query_one('#races', SelectionList).focus()
 
     def _refresh_all(self):
@@ -233,6 +245,19 @@ class BackfillApp(App):
             races_view.add_option(Selection(
                 _race_label(race), race['ID'], race['ID'] in self.model.checked))
         self._update_count()
+        self._update_series()
+
+    def _update_series(self):
+        """Refresh the Series section: pin, error state, or how-to hint."""
+        series = self.model.series
+        label = self.query_one('#series', Label)
+        if series is not None:
+            _series_id, name, count = series
+            label.update(f'📌 {name} ({count} races)')
+        elif self.series_error is not None:
+            label.update('⚠ series enumeration failed')
+        else:
+            label.update('none — press s to find')
 
     def _update_count(self):
         """Refresh the 'N of M selected' header above the checklist."""
@@ -268,7 +293,9 @@ class BackfillApp(App):
             return
         self.exit(RefineResult(races=self.model.selected(),
                                terms=tuple(self.model.terms),
-                               terms_changed=self.model.terms_changed))
+                               terms_changed=self.model.terms_changed,
+                               series_id=self.model.series_id,
+                               series_changed=self.model.series_changed))
 
     def action_cancel(self):
         """Exit without a selection."""
@@ -325,16 +352,20 @@ class BackfillApp(App):
         self._refresh_all()
 
 
-def refine_races(client, terms, races_by_term, start_epoc):
+def refine_races(client, terms, races_by_term, start_epoc, series=None,
+                 series_error=None):
     """Run the refinement app; return a RefineResult, or None if cancelled.
 
     client is the already-open RaceMonitorClient from the initial search (its
-    rate-limiter window is shared with in-app term searches). races_by_term is
-    the per-term output of search_races_by_term(); start_epoc filters in-app
-    search results the same way --start-date filtered the initial ones.
+    rate-limiter window is shared with in-app searches). races_by_term is the
+    per-term output of search_races_by_term(); series the config-driven
+    (series_id, series_name, races) enumeration or None; series_error the
+    exception from a failed enumeration (shown as an in-app error state).
+    start_epoc filters in-app search results the same way --start-date
+    filtered the initial ones.
     """
-    model = RaceListModel(terms, races_by_term, start_epoc)
-    app = BackfillApp(client, model)
+    model = RaceListModel(terms, races_by_term, start_epoc, series=series)
+    app = BackfillApp(client, model, series_error=series_error)
     try:
         return app.run()
     except KeyboardInterrupt:
