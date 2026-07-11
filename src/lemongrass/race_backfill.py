@@ -63,6 +63,7 @@ _backfill_cfg = _config.load_config().races.backfill
 LEMONS_SEARCH_TERMS = _backfill_cfg.search_terms
 LEMONS_SERIES_ID = _backfill_cfg.series_id
 DEFAULT_START_DATE = _backfill_cfg.default_start_date
+_DEFAULT_TERMS = _config.BackfillConfig().search_terms
 EPOCH_START = '1970-01-01T00:00:00Z'
 
 WINDOW_PAD_S = _influx.WINDOW_PAD_S
@@ -417,8 +418,8 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     return failures
 
 
-def _save_search_terms(path, terms):
-    """Rewrite races.backfill.search_terms in the TOML file at path.
+def _save_backfill_value(path, key, value):
+    """Rewrite one races.backfill key in the TOML file at path.
 
     tomlkit preserves the rest of the document — comments, formatting, and
     unrelated keys. Returns True on success; logs a warning and returns False
@@ -431,7 +432,7 @@ def _save_search_terms(path, terms):
             doc['races'] = tomlkit.table()
         if 'backfill' not in doc['races']:
             doc['races']['backfill'] = tomlkit.table()
-        doc['races']['backfill']['search_terms'] = list(terms)
+        doc['races']['backfill'][key] = value
         # Write-then-rename so a crash mid-write can't truncate the config.
         fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or '.',
                                         suffix='.tmp')
@@ -446,40 +447,66 @@ def _save_search_terms(path, terms):
             raise
         return True
     except (OSError, tomlkit.exceptions.TOMLKitError) as exc:
-        logging.warning("could not save search terms to %s: %s", path, exc)
+        logging.warning("could not save %s to %s: %s", key, path, exc)
         return False
 
 
-def _print_terms_snippet(terms):
-    """Print the TOML snippet that persists terms, for manual pasting."""
-    array = tomlkit.item(list(terms)).as_string()
-    print("To persist these search terms, add to the TOML file named by "
-          "LEMONGRASS_CONFIG:\n\n"
-          "[races.backfill]\n"
-          f"search_terms = {array}\n")
+def _save_search_terms(path, terms):
+    """Rewrite races.backfill.search_terms in the TOML file at path."""
+    return _save_backfill_value(path, 'search_terms', list(terms))
 
 
-def _maybe_save_terms(result):
-    """Offer to persist changed search terms after an interactive confirm.
+def _print_config_snippet(result):
+    """Print the TOML snippet that persists the session's config changes."""
+    lines = ['[races.backfill]']
+    if result.series_changed:
+        lines.append(f'series_id = {result.series_id}')
+    if result.terms_changed:
+        array = tomlkit.item(list(result.terms)).as_string()
+        lines.append(f'search_terms = {array}')
+    print("To persist these settings, add to the TOML file named by "
+          "LEMONGRASS_CONFIG:\n\n" + '\n'.join(lines) + '\n')
 
-    With LEMONGRASS_CONFIG set, a y/N prompt gates a format-preserving rewrite
-    of races.backfill.search_terms; a failed save falls back to printing the
-    snippet. Without it no file is written — config loading has no default
-    path, so a written file would be silently ignored — and the snippet is
-    printed instead. Never blocks the run.
+
+def _ask_yes(prompt):
+    """One y/N prompt; EOF (stdin closed mid-run) counts as no."""
+    try:
+        return input(prompt).strip().lower() in ('y', 'yes')
+    except EOFError:
+        return False
+
+
+def _maybe_save_config(result):
+    """Offer to persist changed search terms / pinned series after the TUI.
+
+    With LEMONGRASS_CONFIG set, y/N prompts gate format-preserving rewrites of
+    races.backfill keys; a failed save falls back to printing the snippet.
+    Without it no file is written — config loading has no default path, so a
+    written file would be silently ignored — and the snippet is printed
+    instead. After a series save, if the active terms are still the built-in
+    defaults, a final prompt offers to clear them (the series enumeration now
+    covers what they proxied for). Never blocks the run.
     """
-    if not result.terms_changed:
+    if not (result.terms_changed or result.series_changed):
         return
     path = os.environ.get('LEMONGRASS_CONFIG')
     if not path:
-        _print_terms_snippet(result.terms)
+        _print_config_snippet(result)
         return
-    try:
-        answer = input(f"Save updated search terms to {path}? [y/N] ")
-    except EOFError:
-        return
-    if answer.strip().lower() in ('y', 'yes') and not _save_search_terms(path, result.terms):
-        _print_terms_snippet(result.terms)
+    snippet_needed = False
+    saved_series = False
+    if result.series_changed and _ask_yes(
+            f"Save series_id={result.series_id} to {path}? [y/N] "):
+        saved_series = _save_backfill_value(path, 'series_id', result.series_id)
+        snippet_needed |= not saved_series
+    if result.terms_changed:
+        if _ask_yes(f"Save updated search terms to {path}? [y/N] "):
+            snippet_needed |= not _save_search_terms(path, result.terms)
+    elif (saved_series and tuple(result.terms) == _DEFAULT_TERMS
+            and _ask_yes("Also clear the now-redundant default search terms? [y/N] ")):
+        snippet_needed |= not _save_backfill_value(path, 'search_terms', [])
+    if snippet_needed:
+        _print_config_snippet(result)
 
 
 def main():
@@ -560,7 +587,7 @@ def main():
                     sys.exit(0)
                 logging.info("Selected %d of %d races", len(result.races), len(races))
                 races = result.races
-                _maybe_save_terms(result)
+                _maybe_save_config(result)
 
             if args.validate:
                 race_ids = [str(r['ID']) for r in races]

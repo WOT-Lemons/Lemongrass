@@ -1068,9 +1068,10 @@ def test_backfill_defaults_come_from_config(monkeypatch, tmp_path):
         importlib.reload(race_backfill)  # restore default module state
 
 
-def _refine_result(terms=('a', 'b'), changed=True):
+def _refine_result(terms=('a', 'b'), changed=True, series_id=0, series_changed=False):
     from lemongrass._backfill_tui import RefineResult
-    return RefineResult(races=[], terms=tuple(terms), terms_changed=changed)
+    return RefineResult(races=[], terms=tuple(terms), terms_changed=changed,
+                        series_id=series_id, series_changed=series_changed)
 
 
 class TestSaveSearchTerms:
@@ -1131,19 +1132,19 @@ class TestSaveSearchTerms:
         assert data['races']['backfill']['search_terms'] == ['a']
 
 
-class TestMaybeSaveTerms:
+class TestMaybeSaveConfig:
     def test_unchanged_terms_never_prompt(self, monkeypatch, capsys):
         monkeypatch.setenv('LEMONGRASS_CONFIG', '/some/path.toml')
         monkeypatch.setattr('builtins.input',
                             lambda *_: pytest.fail('should not prompt'))
-        _mod._maybe_save_terms(_refine_result(changed=False))
+        _mod._maybe_save_config(_refine_result(changed=False))
         assert capsys.readouterr().out == ''
 
     def test_no_config_prints_snippet_without_prompt(self, monkeypatch, capsys):
         monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
         monkeypatch.setattr('builtins.input',
                             lambda *_: pytest.fail('should not prompt'))
-        _mod._maybe_save_terms(_refine_result(terms=('a', 'b')))
+        _mod._maybe_save_config(_refine_result(terms=('a', 'b')))
         out = capsys.readouterr().out
         assert '[races.backfill]' in out
         assert 'search_terms = ["a", "b"]' in out
@@ -1151,7 +1152,7 @@ class TestMaybeSaveTerms:
     def test_snippet_escapes_toml_special_characters(self, monkeypatch, capsys):
         monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
         terms = ('say "hi"', 'back\\slash')
-        _mod._maybe_save_terms(_refine_result(terms=terms))
+        _mod._maybe_save_config(_refine_result(terms=terms))
         out = capsys.readouterr().out
         snippet = out[out.index('[races.backfill]'):]
         data = tomllib.loads(snippet)
@@ -1162,7 +1163,7 @@ class TestMaybeSaveTerms:
         cfg.write_text('')
         monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
         monkeypatch.setattr('builtins.input', lambda *_: 'y')
-        _mod._maybe_save_terms(_refine_result(terms=('a',)))
+        _mod._maybe_save_config(_refine_result(terms=('a',)))
         data = tomllib.loads(cfg.read_text())
         assert data['races']['backfill']['search_terms'] == ['a']
 
@@ -1171,7 +1172,7 @@ class TestMaybeSaveTerms:
         cfg.write_text('')
         monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
         monkeypatch.setattr('builtins.input', lambda *_: '')
-        _mod._maybe_save_terms(_refine_result())
+        _mod._maybe_save_config(_refine_result())
         assert cfg.read_text() == ''
 
     def test_eof_on_prompt_treated_as_no(self, monkeypatch, tmp_path):
@@ -1182,11 +1183,92 @@ class TestMaybeSaveTerms:
         def _eof(*_):
             raise EOFError
         monkeypatch.setattr('builtins.input', _eof)
-        _mod._maybe_save_terms(_refine_result())
+        _mod._maybe_save_config(_refine_result())
         assert cfg.read_text() == ''
 
     def test_failed_save_falls_back_to_snippet(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setenv('LEMONGRASS_CONFIG', str(tmp_path / 'nope' / 'x.toml'))
         monkeypatch.setattr('builtins.input', lambda *_: 'y')
-        _mod._maybe_save_terms(_refine_result(terms=('a',)))
+        _mod._maybe_save_config(_refine_result(terms=('a',)))
         assert '[races.backfill]' in capsys.readouterr().out
+
+    def _default_terms(self):
+        from lemongrass._config import BackfillConfig
+        return BackfillConfig().search_terms
+
+    def test_series_changed_prompts_and_saves(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        prompts = []
+
+        def _answer(prompt):
+            prompts.append(prompt)
+            return 'y' if 'series_id' in prompt else 'n'
+        monkeypatch.setattr('builtins.input', _answer)
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=False, series_id=1234, series_changed=True))
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['series_id'] == 1234
+        assert 'search_terms' not in data['races']['backfill']
+        assert any('series_id=1234' in p for p in prompts)
+
+    def test_series_save_with_default_terms_offers_clear(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: 'y')
+        _mod._maybe_save_config(_refine_result(
+            terms=self._default_terms(), changed=False,
+            series_id=1234, series_changed=True))
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['series_id'] == 1234
+        assert data['races']['backfill']['search_terms'] == []
+
+    def test_clear_declined_leaves_terms_alone(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        answers = iter(['y', 'n'])  # save series: yes; clear terms: no
+        monkeypatch.setattr('builtins.input', lambda *_: next(answers))
+        _mod._maybe_save_config(_refine_result(
+            terms=self._default_terms(), changed=False,
+            series_id=1234, series_changed=True))
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['series_id'] == 1234
+        assert 'search_terms' not in data['races']['backfill']
+
+    def test_no_clear_offer_when_terms_customized(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        prompts = []
+
+        def _yes(prompt):
+            prompts.append(prompt)
+            return 'y'
+        monkeypatch.setattr('builtins.input', _yes)
+        _mod._maybe_save_config(_refine_result(
+            terms=('custom',), changed=True, series_id=1234, series_changed=True))
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['series_id'] == 1234
+        assert data['races']['backfill']['search_terms'] == ['custom']
+        assert not any('redundant' in p for p in prompts)
+
+    def test_series_snippet_printed_without_config(self, monkeypatch, capsys):
+        monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=False, series_id=1234, series_changed=True))
+        out = capsys.readouterr().out
+        assert '[races.backfill]' in out
+        assert 'series_id = 1234' in out
+        assert 'search_terms' not in out
+
+    def test_series_declined_writes_nothing(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: '')
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=False, series_id=1234, series_changed=True))
+        assert cfg.read_text() == ''
