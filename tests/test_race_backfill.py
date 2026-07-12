@@ -1255,6 +1255,24 @@ class TestMaybeSaveConfig:
         _mod._maybe_save_config(_refine_result(terms=('a',)))
         assert '[races.backfill]' in capsys.readouterr().out
 
+    def test_partial_save_snippet_omits_already_saved_key(
+            self, monkeypatch, tmp_path, capsys):
+        # series_id saves but the terms save fails: the snippet must advertise
+        # only search_terms, else pasting it duplicates the written series_id
+        # key and breaks TOML parsing on the next load.
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: 'y')
+        monkeypatch.setattr(_mod, '_save_search_terms', lambda *_: False)
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=True, series_id=1234, series_changed=True))
+        assert tomllib.loads(cfg.read_text())['races']['backfill'][
+            'series_id'] == 1234
+        out = capsys.readouterr().out
+        assert 'search_terms' in out
+        assert 'series_id' not in out
+
     def test_series_changed_prompts_and_saves(self, monkeypatch, tmp_path):
         cfg = tmp_path / 'lemongrass.toml'
         cfg.write_text('')

@@ -360,17 +360,24 @@ class SeriesSearchModal(ModalScreen):
         self._status(f'resolving series for "{race["Name"]}"…')
         self._resolve(race['ID'])
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def _resolve(self, race_id):
         """race.details → SeriesID → enumerate_series; dismiss with the pin.
 
         Two-plus rate-limited calls, so runs off the UI thread. A KeyError
         covers a malformed details payload (Beta-adjacent defensiveness).
+        Exclusive so a second hit selection cancels the first resolve rather
+        than racing to dismiss an already-popped modal.
         """
         worker = get_current_worker()
         try:
             details = self.client.race.details(race_id)
             series_id = details['Race']['SeriesID']
+            if not series_id:
+                # past_races treats series_id=0 as "return all races"; it is
+                # also the disabled sentinel, so pinning it is never intended.
+                raise RaceMonitorError(
+                    f'race {race_id} is not part of a series')
             races = enumerate_series(self.client, series_id, self.model.start_epoc)
         except (KeyError, RaceMonitorError) as exc:
             if worker.is_cancelled:

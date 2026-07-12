@@ -588,6 +588,20 @@ class TestSeriesSearchModal:
         assert app.model.series is None
 
     @pytest.mark.asyncio
+    async def test_series_id_zero_rejected(self):
+        # A race with SeriesID=0 (not in a series) must not pin: past_races
+        # treats 0 as "return all", and 0 is the disabled sentinel.
+        hit = {'ID': 55, 'Name': 'a lemons race', 'StartDateEpoc': 100}
+        client = self._client(hits=[hit], series_id=0)
+        app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
+        async with app.run_test() as pilot:
+            await self._search(pilot, app, 'gp')
+            await self._pick_first_hit(pilot, app)
+            assert isinstance(app.screen, SeriesSearchModal)
+        client.common.past_races.assert_not_called()
+        assert app.model.series is None
+
+    @pytest.mark.asyncio
     async def test_details_error_keeps_modal_open(self):
         hit = {'ID': 55, 'Name': 'a lemons race', 'StartDateEpoc': 100}
         client = self._client(hits=[hit], details_error=RaceMonitorError('boom'))

@@ -131,7 +131,7 @@ def filter_races_by_terms(races, terms):
         return list(races)
     lowered = [t.lower() for t in terms]
     return [r for r in races
-            if any(t in r['Name'].lower() for t in lowered)]
+            if any(t in r.get('Name', '').lower() for t in lowered)]
 
 
 def merge_races(races_by_term):
@@ -484,12 +484,17 @@ def _save_search_terms(path, terms):
     return _save_backfill_value(path, 'search_terms', list(terms))
 
 
-def _print_config_snippet(result):
-    """Print the TOML snippet that persists the session's config changes."""
+def _print_config_snippet(result, *, series, terms):
+    """Print the TOML snippet for changes not persisted to the config file.
+
+    `series`/`terms` select which keys to advertise: a key already written to
+    the file must be excluded, otherwise pasting the snippet duplicates it and
+    breaks TOML parsing on the next load.
+    """
     lines = ['[races.backfill]']
-    if result.series_changed:
+    if series:
         lines.append(f'series_id = {result.series_id}')
-    if result.terms_changed:
+    if terms:
         array = tomlkit.item(list(result.terms)).as_string()
         lines.append(f'search_terms = {array}')
     print("To persist these settings, add to the TOML file named by "
@@ -517,18 +522,23 @@ def _maybe_save_config(result):
         return
     path = os.environ.get('LEMONGRASS_CONFIG')
     if not path:
-        _print_config_snippet(result)
+        _print_config_snippet(result, series=result.series_changed,
+                              terms=result.terms_changed)
         return
-    snippet_needed = False
+    # A changed key still needs the snippet if it was declined or its save
+    # failed; a key written to the file is dropped so the snippet can't
+    # re-advertise (and duplicate) it.
+    series_unsaved = result.series_changed
+    terms_unsaved = result.terms_changed
     if result.series_changed and _ask_yes(
             f"Save series_id={result.series_id} to {path}? [y/N] "):
-        snippet_needed |= not _save_backfill_value(path, 'series_id',
-                                                   result.series_id)
+        series_unsaved = not _save_backfill_value(path, 'series_id',
+                                                  result.series_id)
     if result.terms_changed and _ask_yes(
             f"Save updated search terms to {path}? [y/N] "):
-        snippet_needed |= not _save_search_terms(path, result.terms)
-    if snippet_needed:
-        _print_config_snippet(result)
+        terms_unsaved = not _save_search_terms(path, result.terms)
+    if series_unsaved or terms_unsaved:
+        _print_config_snippet(result, series=series_unsaved, terms=terms_unsaved)
 
 
 def main():
