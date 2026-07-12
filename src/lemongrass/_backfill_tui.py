@@ -7,6 +7,9 @@ every piece of state and all merge/dedup logic, with no UI imports, so the
 behavior is unit-testable without Textual.
 """
 
+import logging
+from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -16,9 +19,20 @@ from textual import work
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Input, Label, ListItem, ListView, SelectionList
+from textual.screen import ModalScreen
+from textual.widgets import (
+    Footer,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    RichLog,
+    SelectionList,
+)
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
+
+from lemongrass.race_backfill import enumerate_series, filter_races_by_terms
 
 
 @dataclass(frozen=True)
@@ -27,32 +41,100 @@ class RefineResult:
 
     races is the checked subset (date-sorted race dicts); terms the final
     search terms in display order; terms_changed whether they differ from the
-    terms the session started with.
+    terms the session started with. series_id is the pinned series (0 if
+    none); series_changed whether it differs from the config-seeded one.
     """
 
     races: list
     terms: tuple
     terms_changed: bool
+    series_id: int = 0
+    series_changed: bool = False
+
+
+class _TuiLogHandler(logging.Handler):
+    """Buffer formatted log records for the TUI's log pane.
+
+    emit() only appends to a deque, so it is safe from any thread — the
+    worker threads' httpx and rate-limiter records included. BackfillApp
+    drains the buffer into the RichLog widget on a timer; nothing here may
+    touch Textual.
+    """
+
+    def __init__(self):
+        super().__init__(level=logging.INFO)
+        self.lines = deque(maxlen=200)
+        self.setFormatter(logging.Formatter(
+            '%(asctime)s %(levelname)s %(message)s', datefmt='%H:%M:%S'))
+
+    def emit(self, record):
+        """Append the formatted record to the bounded buffer."""
+        self.lines.append(self.format(record))
+
+
+@contextmanager
+def _logging_to(handler):
+    """Route root logging exclusively to handler for the duration.
+
+    The terminal handlers would corrupt the Textual display; they are
+    restored on exit even if the app crashes, so post-TUI logging prints
+    normally.
+    """
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    for existing in saved:
+        root.removeHandler(existing)
+    root.addHandler(handler)
+    try:
+        yield
+    finally:
+        root.removeHandler(handler)
+        for existing in saved:
+            root.addHandler(existing)
+
+
+# Cache key for the pinned-series source. An object sentinel, not a string:
+# it can never collide with a user-typed search term.
+_SERIES_KEY = object()
 
 
 class RaceListModel:
-    """State for the refinement UI: active terms, cached results, checked IDs.
+    """State for the refinement UI: sources, cached results, checked IDs.
 
-    The per-term cache outlives term removal, so re-adding a removed term costs
-    no API call. races() derives the visible list on demand: dedup by race ID
-    across active terms, filter to StartDateEpoc >= start_epoc, sort by date.
+    Pinned (a series is set): the series is the only candidate set and the
+    active terms filter it by race name — empty terms means the whole
+    series. Unpinned: terms are search sources, unioned and deduped by race
+    ID. The per-term cache outlives removal, so re-adding a removed term in
+    unpinned mode costs no API call. races() derives the visible list on
+    demand, filtered to StartDateEpoc >= start_epoc and date-sorted.
     """
 
-    def __init__(self, terms, races_by_term, start_epoc):
-        """Seed with the initial terms and their (already fetched) results."""
+    def __init__(self, terms, races_by_term, start_epoc, series=None):
+        """Seed with initial terms/results and an optional pinned series.
+
+        series is (series_id, series_name, races) from the config-driven
+        enumeration, or None when no series is configured.
+        """
         self.start_epoc = start_epoc
         self._initial_terms = tuple(terms)
         self.terms = list(terms)
         self._cache = {term: list(races_by_term.get(term, [])) for term in terms}
+        self._series = None
+        self._initial_series_id = series[0] if series else 0
+        if series:
+            series_id, series_name, races = series
+            self._series = (series_id, series_name)
+            self._cache[_SERIES_KEY] = list(races)
         self.checked = {race['ID'] for race in self.races()}
 
     def races(self):
-        """Return visible races: deduped, date-filtered, date-sorted."""
+        """Return visible races, date-filtered and date-sorted (see class
+        docstring for pinned vs unpinned semantics)."""
+        if self._series:
+            races = [r for r in self._cache.get(_SERIES_KEY, [])
+                     if r['StartDateEpoc'] >= self.start_epoc]
+            return sorted(filter_races_by_terms(races, self.terms),
+                          key=lambda r: r['StartDateEpoc'])
         seen = {}
         for term in self.terms:
             for race in self._cache.get(term, []):
@@ -60,34 +142,85 @@ class RaceListModel:
                     seen[race['ID']] = race
         return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
 
+    def _rebalance_checked(self, before):
+        """Re-derive checked after a visibility change: newly visible races
+        become checked, hidden races drop out, and the user's choices on
+        still-visible races are preserved."""
+        visible = {race['ID'] for race in self.races()}
+        self.checked = (self.checked & visible) | (visible - before)
+
+    def set_series(self, series_id, series_name, races):
+        """Pin (or replace) the series source and re-derive the view."""
+        before = {race['ID'] for race in self.races()}
+        self._series = (series_id, series_name)
+        self._cache[_SERIES_KEY] = list(races)
+        self._rebalance_checked(before)
+
+    def cache_results(self, term, results):
+        """Session-cache a term's raw results without activating the term
+        (used by the series modal so its searches double as term cache)."""
+        self._cache.setdefault(term, list(results))
+
+    @property
+    def series(self):
+        """(series_id, series_name, matched, total), or None if unpinned.
+
+        matched counts series races passing the date and term filters; total
+        counts date-filtered only (what clearing every term would show).
+        """
+        if self._series is None:
+            return None
+        series_id, series_name = self._series
+        dated = [r for r in self._cache.get(_SERIES_KEY, [])
+                 if r['StartDateEpoc'] >= self.start_epoc]
+        return (series_id, series_name,
+                len(filter_races_by_terms(dated, self.terms)), len(dated))
+
+    @property
+    def series_id(self):
+        """The pinned series' ID, or 0 when no series is pinned."""
+        return self._series[0] if self._series else 0
+
+    @property
+    def series_changed(self):
+        """True if the pinned series differs from the config-seeded one."""
+        return self.series_id != self._initial_series_id
+
     def has_cached(self, term):
         """True if term already has session-cached search results."""
         return term in self._cache
 
-    def add_term(self, term, results=None):
-        """Activate a term; newly visible races become checked.
+    def cached(self, term):
+        """Return term's session-cached search results (KeyError if absent)."""
+        return self._cache[term]
 
-        results is the term's raw search-result list, required unless the term
-        is already cached from earlier in the session. Blank and already-active
-        terms are ignored.
+    def add_term(self, term, results=None):
+        """Activate a term and re-derive the visible set.
+
+        Unpinned, results is the term's raw search-result list, required
+        unless the term is already session-cached. Pinned, terms are local
+        name filters and need no results. Blank and already-active terms are
+        ignored.
         """
         term = term.strip()
         if not term or term in self.terms:
             return
         if results is not None:
             self._cache[term] = list(results)
-        elif term not in self._cache:
+        elif not self._series and term not in self._cache:
             raise ValueError(f"no cached results for {term!r}; pass results")
         before = {race['ID'] for race in self.races()}
         self.terms.append(term)
-        self.checked |= {race['ID'] for race in self.races()} - before
+        self._rebalance_checked(before)
 
     def remove_term(self, term):
-        """Deactivate a term; races matched only by it drop from the list."""
+        """Deactivate a term and re-derive the visible set (pinned mode can
+        broaden: removing the last term shows the whole series)."""
         if term not in self.terms:
             return
+        before = {race['ID'] for race in self.races()}
         self.terms.remove(term)
-        self.checked &= {race['ID'] for race in self.races()}
+        self._rebalance_checked(before)
 
     def toggle(self, race_id):
         """Flip one race's checked state."""
@@ -120,6 +253,144 @@ def _race_label(race):
     return f"{day}  {race['Name']}  (#{race['ID']})"
 
 
+class SeriesSearchModal(ModalScreen):
+    """Find a series: search race names, pick a race, pin its series.
+
+    Flow: query → results.search_results (hits listed) → pick a hit →
+    race.details reveals its SeriesID → enumerate_series fetches the full
+    series. Dismisses with (series_id, series_name, races), or None on
+    escape. Every RaceMonitor call runs off-thread (each may block ~10s
+    under the shared rate limiter). Errors notify and leave the modal open
+    for retry. Search hits are session-cached in the model's term cache, so
+    a later term search for the same string is free.
+    """
+
+    CSS = """
+    SeriesSearchModal { align: center middle; }
+    #series-modal { width: 72; height: 20; border: round $primary; padding: 0 1; }
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('escape', 'cancel', 'Cancel', priority=True),
+    ]
+
+    def __init__(self, client, model):
+        """client is the shared RaceMonitorClient; model the app's RaceListModel
+        (for start_epoc filtering and search-result caching)."""
+        super().__init__()
+        self.client = client
+        self.model = model
+        self._hits = []
+
+    def compose(self):
+        """Lay out the query input, hit list, and status line."""
+        with Vertical(id='series-modal'):
+            yield Label('Find series — search by race name, pick a race')
+            yield Input(placeholder='race name…', id='series-query')
+            yield ListView(id='series-hits')
+            yield Label('', id='series-status')
+
+    def on_mount(self):
+        """Focus the query input."""
+        self.query_one('#series-query', Input).focus()
+
+    def action_cancel(self):
+        """Dismiss without pinning."""
+        self.dismiss(None)
+
+    def _status(self, text):
+        """Update the status line."""
+        self.query_one('#series-status', Label).update(text)
+
+    def on_input_submitted(self, event):
+        """Kick off an off-thread race-name search.
+
+        Stops the event so it doesn't bubble past this modal to
+        BackfillApp.on_input_submitted (its '#new-term' fallback path), which
+        would otherwise also fire for the same keypress.
+        """
+        event.stop()
+        term = event.value.strip()
+        if not term:
+            return
+        if self.model.has_cached(term):
+            self._show_hits(term, self.model.cached(term))
+            return
+        self._status(f'searching "{term}"…')
+        self._search(term)
+
+    @work(thread=True, exclusive=True)
+    def _search(self, term):
+        """Fetch search hits off the UI thread; report errors via notify."""
+        worker = get_current_worker()
+        try:
+            resp = self.client.results.search_results(term)
+        except RaceMonitorError as exc:
+            if worker.is_cancelled:
+                return
+            self.app.call_from_thread(
+                self._fail, f'search "{term}" failed: {exc}')
+            return
+        if worker.is_cancelled:
+            return
+        self.app.call_from_thread(self._show_hits, term, resp.get('Races', []))
+
+    def _fail(self, message):
+        """Clear the status line and surface an error notification."""
+        self._status('')
+        self.app.notify(message, severity='error')
+
+    def _show_hits(self, term, races):
+        """Render search hits and cache them for the term pane."""
+        self.model.cache_results(term, races)
+        self._hits = list(races)
+        view = self.query_one('#series-hits', ListView)
+        view.clear()
+        for race in self._hits:
+            view.append(ListItem(Label(_race_label(race))))
+        self._status(f'{len(self._hits)} races — pick one to pin its series'
+                     if self._hits else 'no races found')
+
+    def on_list_view_selected(self, event):
+        """Resolve the picked race's series off-thread."""
+        index = self.query_one('#series-hits', ListView).index
+        if index is None or not self._hits:
+            return
+        race = self._hits[index]
+        self._status(f'resolving series for "{race["Name"]}"…')
+        self._resolve(race['ID'])
+
+    @work(thread=True, exclusive=True)
+    def _resolve(self, race_id):
+        """race.details → SeriesID → enumerate_series; dismiss with the pin.
+
+        Two-plus rate-limited calls, so runs off the UI thread. A KeyError
+        covers a malformed details payload (Beta-adjacent defensiveness).
+        Exclusive so a second hit selection cancels the first resolve rather
+        than racing to dismiss an already-popped modal.
+        """
+        worker = get_current_worker()
+        try:
+            details = self.client.race.details(race_id)
+            series_id = details['Race']['SeriesID']
+            if not series_id:
+                # past_races treats series_id=0 as "return all races"; it is
+                # also the disabled sentinel, so pinning it is never intended.
+                raise RaceMonitorError(
+                    f'race {race_id} is not part of a series')
+            races = enumerate_series(self.client, series_id, self.model.start_epoc)
+        except (KeyError, RaceMonitorError) as exc:
+            if worker.is_cancelled:
+                return
+            self.app.call_from_thread(
+                self._fail, f'series lookup failed: {exc!r}')
+            return
+        if worker.is_cancelled:
+            return
+        name = (races[0].get('SeriesName') if races else None) or f'series {series_id}'
+        self.app.call_from_thread(self.dismiss, (series_id, name, races))
+
+
 class BackfillApp(App):
     """Two-pane refinement UI; exit value is a RefineResult, or None on cancel.
 
@@ -131,6 +402,7 @@ class BackfillApp(App):
     CSS = """
     #terms-pane { width: 36; }
     #terms-pane, #races-pane { border: round $primary; padding: 0 1; }
+    #log { height: 4; }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -138,32 +410,47 @@ class BackfillApp(App):
         Binding('a', 'select_all', 'All'),
         Binding('i', 'invert', 'Invert'),
         Binding('d', 'remove_term', 'Remove term'),
+        Binding('s', 'find_series', 'Series'),
         Binding('escape', 'cancel', 'Cancel'),
         Binding('q', 'cancel', 'Cancel', show=False),
         Binding('ctrl+c', 'cancel', 'Cancel', show=False, priority=True),
     ]
 
-    def __init__(self, client, model):
-        """client is the shared RaceMonitorClient; model a seeded RaceListModel."""
+    def __init__(self, client, model, series_error=None):
+        """client is the shared RaceMonitorClient; model a seeded RaceListModel.
+        series_error, when set, is the exception from a failed config-driven
+        series enumeration, surfaced as an error state in the Series pane."""
         super().__init__()
         self.client = client
         self.model = model
+        self.series_error = series_error
+        self._main_screen = None
+        self.log_handler = _TuiLogHandler()
 
     def compose(self):
-        """Lay out the terms pane, races checklist, and footer."""
+        """Lay out the series section, terms pane, races checklist, and footer."""
         with Horizontal():
             with Vertical(id='terms-pane'):
+                yield Label('Series')
+                yield Label('', id='series')
                 yield Label('Search terms')
                 yield ListView(id='terms')
                 yield Input(placeholder='add search term…', id='new-term')
             with Vertical(id='races-pane'):
                 yield Label(id='count')
                 yield SelectionList(id='races')
+        yield RichLog(id='log')
         yield Footer()
 
     def on_mount(self):
         """Populate both panes from the model and focus the checklist."""
+        self._main_screen = self.screen
         self._refresh_all()
+        if self.series_error is not None:
+            self.notify(
+                f'series enumeration failed — showing term matches only: '
+                f'{self.series_error}', severity='error')
+        self.set_interval(0.25, self._drain_log)
         self.query_one('#races', SelectionList).focus()
 
     def _refresh_all(self):
@@ -178,12 +465,31 @@ class BackfillApp(App):
             races_view.add_option(Selection(
                 _race_label(race), race['ID'], race['ID'] in self.model.checked))
         self._update_count()
+        self._update_series()
+
+    def _update_series(self):
+        """Refresh the Series section: pin, error state, or how-to hint."""
+        series = self.model.series
+        label = self.query_one('#series', Label)
+        if series is not None:
+            _series_id, name, matched, total = series
+            label.update(f'📌 {name} ({matched} of {total} races)')
+        elif self.series_error is not None:
+            label.update('⚠ series enumeration failed')
+        else:
+            label.update('none — press s to find')
 
     def _update_count(self):
         """Refresh the 'N of M selected' header above the checklist."""
         total = len(self.model.races())
         self.query_one('#count', Label).update(
             f'Races — {len(self.model.checked)} of {total} selected')
+
+    def _drain_log(self):
+        """Move buffered log lines into the log pane."""
+        log_view = self.query_one('#log', RichLog)
+        while self.log_handler.lines:
+            log_view.write(self.log_handler.lines.popleft())
 
     def on_selection_list_selection_toggled(self, event):
         """Mirror a checkbox toggle into the model."""
@@ -200,6 +506,18 @@ class BackfillApp(App):
         self.model.invert()
         self._refresh_all()
 
+    def check_action(self, action, parameters):
+        """Disable 'confirm' while a modal (e.g. SeriesSearchModal) is on top.
+
+        'enter' is a priority binding, which — unlike regular bindings — is
+        not confined to the active screen's modal boundary: Textual checks it
+        against the whole focus chain, App included, before the focused
+        widget ever sees the key. Without this guard, pressing enter inside
+        the series-search modal's Input/ListView would exit the whole app
+        instead of submitting the search or picking a hit.
+        """
+        return not (action == 'confirm' and self.screen is not self._main_screen)
+
     def action_confirm(self):
         """Exit with the confirmed selection.
 
@@ -213,11 +531,23 @@ class BackfillApp(App):
             return
         self.exit(RefineResult(races=self.model.selected(),
                                terms=tuple(self.model.terms),
-                               terms_changed=self.model.terms_changed))
+                               terms_changed=self.model.terms_changed,
+                               series_id=self.model.series_id,
+                               series_changed=self.model.series_changed))
 
     def action_cancel(self):
         """Exit without a selection."""
         self.exit(None)
+
+    def action_find_series(self):
+        """Open the series-search modal; pin its result into the model."""
+        def _pinned(result):
+            if result is None:
+                return
+            series_id, series_name, races = result
+            self.model.set_series(series_id, series_name, races)
+            self._refresh_all()
+        self.push_screen(SeriesSearchModal(self.client, self.model), _pinned)
 
     def action_remove_term(self):
         """Remove the term highlighted in the terms pane."""
@@ -232,12 +562,13 @@ class BackfillApp(App):
         self._submit_term(event.value)
 
     def _submit_term(self, value):
-        """Add a term: from the session cache if present, else a live search."""
+        """Add a term: a local name filter when a series is pinned, else from
+        the session cache or a live search."""
         term = value.strip()
         self.query_one('#new-term', Input).value = ''
         if not term or term in self.model.terms:
             return
-        if self.model.has_cached(term):
+        if self.model.series_id or self.model.has_cached(term):
             self.model.add_term(term)
             self._refresh_all()
             return
@@ -270,17 +601,23 @@ class BackfillApp(App):
         self._refresh_all()
 
 
-def refine_races(client, terms, races_by_term, start_epoc):
+def refine_races(client, terms, races_by_term, start_epoc, series=None,
+                 series_error=None):
     """Run the refinement app; return a RefineResult, or None if cancelled.
 
     client is the already-open RaceMonitorClient from the initial search (its
-    rate-limiter window is shared with in-app term searches). races_by_term is
-    the per-term output of search_races_by_term(); start_epoc filters in-app
-    search results the same way --start-date filtered the initial ones.
+    rate-limiter window is shared with in-app searches). races_by_term is the
+    per-term output of search_races_by_term(); series the config-driven
+    (series_id, series_name, races) enumeration or None; series_error the
+    exception from a failed enumeration (shown as an in-app error state).
+    start_epoc filters in-app search results the same way --start-date
+    filtered the initial ones. While the app runs, root logging is routed
+    into the in-app log pane and restored afterwards.
     """
-    model = RaceListModel(terms, races_by_term, start_epoc)
-    app = BackfillApp(client, model)
+    model = RaceListModel(terms, races_by_term, start_epoc, series=series)
+    app = BackfillApp(client, model, series_error=series_error)
     try:
-        return app.run()
+        with _logging_to(app.log_handler):
+            return app.run()
     except KeyboardInterrupt:
         return None

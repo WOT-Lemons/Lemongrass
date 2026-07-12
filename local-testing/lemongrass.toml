@@ -3,3 +3,8 @@
 [influx]
 url = "http://localhost:8086"
 org = "lemongrass"
+
+[races.backfill]
+# Pin discovery to a RaceMonitor series (0 = disabled; find it with the
+# race-backfill TUI's 's' key, which offers to save it here).
+# series_id = 0

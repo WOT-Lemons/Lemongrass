@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 """Discover and backfill historical 24 Hours of Lemons lap data.
 
-Searches the RaceMonitor API for past Real Hoopties, GP du Lac, and Halloween
-Hoop races and writes fieldwide lap data to the laps/races InfluxDB buckets. Each
-race is backfilled in-process through a single shared RaceMonitorClient, so the
-rate-limiter window carries across the whole run and requests stay paced under
-the server's per-token budget.
+Discovers past Lemons races — by series enumeration when
+races.backfill.series_id is configured (the search terms then select which
+of the series' races to include by name; no terms means the whole series),
+otherwise by name-based search terms alone — and writes fieldwide lap data
+to the laps/races InfluxDB buckets. In a terminal, an interactive checklist
+refines the selection first; press 's' there to find and pin the series by
+searching for any known race. Each race is backfilled in-process through a
+single shared RaceMonitorClient, so the rate-limiter window carries across
+the whole run and requests stay paced under the server's per-token budget.
 
 If running from the repo, prefix commands with `uv run`
 (e.g. `uv run lemongrass race-backfill`).
@@ -61,6 +65,7 @@ from lemongrass._env import resolve_tokens
 
 _backfill_cfg = _config.load_config().races.backfill
 LEMONS_SEARCH_TERMS = _backfill_cfg.search_terms
+LEMONS_SERIES_ID = _backfill_cfg.series_id
 DEFAULT_START_DATE = _backfill_cfg.default_start_date
 EPOCH_START = '1970-01-01T00:00:00Z'
 
@@ -116,6 +121,19 @@ def search_races_by_term(client, terms, start_epoc):
     return by_term
 
 
+def filter_races_by_terms(races, terms):
+    """Keep races whose Name contains any term (case-insensitive substring).
+
+    Empty terms keeps everything — a pinned series with no terms means the
+    whole series. Order preserved.
+    """
+    if not terms:
+        return list(races)
+    lowered = [t.lower() for t in terms]
+    return [r for r in races
+            if any(t in r.get('Name', '').lower() for t in lowered)]
+
+
 def merge_races(races_by_term):
     """Merge per-term search results: dedup by race ID, sort by start date."""
     seen = {}
@@ -125,12 +143,50 @@ def merge_races(races_by_term):
     return sorted(seen.values(), key=lambda r: r['StartDateEpoc'])
 
 
+# The server ignores past_races' firstResult offset (verified 2026-07-11:
+# every "page" returns the same first rows), so offset pagination can never
+# terminate on a series of 100+ races. One request with a generous cap
+# fetches the whole series instead (~267 Lemons races as of 2026).
+_SERIES_MAX_RESULTS = 1000
+
+
+def enumerate_series(client, series_id, start_epoc):
+    """Enumerate a series' past races via common.past_races (Beta endpoint).
+
+    Makes a single request capped at _SERIES_MAX_RESULTS — the endpoint's
+    firstResult offset is ignored server-side, so pagination is impossible;
+    a result at the cap is logged as possibly truncated. Keeps races with
+    results (HasResults) starting at or after start_epoc — a race with no
+    results cannot be backfilled. Raises RaceMonitorError on an unsuccessful
+    or malformed response so callers have a single failure seam for the Beta
+    endpoint's "subject to change without notice" risk.
+    """
+    resp = client.common.past_races(
+        series_id=series_id, first_result=0, max_results=_SERIES_MAX_RESULTS)
+    if not resp.get('Successful') or not isinstance(resp.get('Races'), list):
+        raise RaceMonitorError(
+            f"past_races returned an unsuccessful response for series {series_id}")
+    races = resp['Races']
+    if len(races) >= _SERIES_MAX_RESULTS:
+        logging.warning(
+            "series %d returned %d races (the request cap); results may be "
+            "truncated", series_id, len(races))
+    try:
+        return [r for r in races
+                if r.get('HasResults') and r['StartDateEpoc'] >= start_epoc]
+    except (KeyError, TypeError) as exc:
+        raise RaceMonitorError(
+            f"past_races returned a malformed race row for series {series_id}"
+        ) from exc
+
+
 def find_matching_races(client, start_epoc):
     """Search for matching Lemons races at or after start_epoc.
 
     Makes one API call per search term and deduplicates by race ID.
     """
-    return merge_races(search_races_by_term(client, LEMONS_SEARCH_TERMS, start_epoc))
+    return merge_races(search_races_by_term(client, LEMONS_SEARCH_TERMS,
+                                            start_epoc))
 
 
 def validate_backfill(race_ids, query_api):
@@ -390,8 +446,8 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     return failures
 
 
-def _save_search_terms(path, terms):
-    """Rewrite races.backfill.search_terms in the TOML file at path.
+def _save_backfill_value(path, key, value):
+    """Rewrite one races.backfill key in the TOML file at path.
 
     tomlkit preserves the rest of the document — comments, formatting, and
     unrelated keys. Returns True on success; logs a warning and returns False
@@ -404,7 +460,7 @@ def _save_search_terms(path, terms):
             doc['races'] = tomlkit.table()
         if 'backfill' not in doc['races']:
             doc['races']['backfill'] = tomlkit.table()
-        doc['races']['backfill']['search_terms'] = list(terms)
+        doc['races']['backfill'][key] = value
         # Write-then-rename so a crash mid-write can't truncate the config.
         fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or '.',
                                         suffix='.tmp')
@@ -419,40 +475,70 @@ def _save_search_terms(path, terms):
             raise
         return True
     except (OSError, tomlkit.exceptions.TOMLKitError) as exc:
-        logging.warning("could not save search terms to %s: %s", path, exc)
+        logging.warning("could not save %s to %s: %s", key, path, exc)
         return False
 
 
-def _print_terms_snippet(terms):
-    """Print the TOML snippet that persists terms, for manual pasting."""
-    array = tomlkit.item(list(terms)).as_string()
-    print("To persist these search terms, add to the TOML file named by "
-          "LEMONGRASS_CONFIG:\n\n"
-          "[races.backfill]\n"
-          f"search_terms = {array}\n")
+def _save_search_terms(path, terms):
+    """Rewrite races.backfill.search_terms in the TOML file at path."""
+    return _save_backfill_value(path, 'search_terms', list(terms))
 
 
-def _maybe_save_terms(result):
-    """Offer to persist changed search terms after an interactive confirm.
+def _print_config_snippet(result, *, series, terms):
+    """Print the TOML snippet for changes not persisted to the config file.
 
-    With LEMONGRASS_CONFIG set, a y/N prompt gates a format-preserving rewrite
-    of races.backfill.search_terms; a failed save falls back to printing the
-    snippet. Without it no file is written — config loading has no default
-    path, so a written file would be silently ignored — and the snippet is
-    printed instead. Never blocks the run.
+    `series`/`terms` select which keys to advertise: a key already written to
+    the file must be excluded, otherwise pasting the snippet duplicates it and
+    breaks TOML parsing on the next load.
     """
-    if not result.terms_changed:
+    lines = ['[races.backfill]']
+    if series:
+        lines.append(f'series_id = {result.series_id}')
+    if terms:
+        array = tomlkit.item(list(result.terms)).as_string()
+        lines.append(f'search_terms = {array}')
+    print("To persist these settings, add to the TOML file named by "
+          "LEMONGRASS_CONFIG:\n\n" + '\n'.join(lines) + '\n')
+
+
+def _ask_yes(prompt):
+    """One y/N prompt; EOF (stdin closed mid-run) counts as no."""
+    try:
+        return input(prompt).strip().lower() in ('y', 'yes')
+    except EOFError:
+        return False
+
+
+def _maybe_save_config(result):
+    """Offer to persist changed search terms / pinned series after the TUI.
+
+    With LEMONGRASS_CONFIG set, y/N prompts gate format-preserving rewrites of
+    races.backfill keys; a failed save falls back to printing the snippet.
+    Without it no file is written — config loading has no default path, so a
+    written file would be silently ignored — and the snippet is printed
+    instead. Never blocks the run.
+    """
+    if not (result.terms_changed or result.series_changed):
         return
     path = os.environ.get('LEMONGRASS_CONFIG')
     if not path:
-        _print_terms_snippet(result.terms)
+        _print_config_snippet(result, series=result.series_changed,
+                              terms=result.terms_changed)
         return
-    try:
-        answer = input(f"Save updated search terms to {path}? [y/N] ")
-    except EOFError:
-        return
-    if answer.strip().lower() in ('y', 'yes') and not _save_search_terms(path, result.terms):
-        _print_terms_snippet(result.terms)
+    # A changed key still needs the snippet if it was declined or its save
+    # failed; a key written to the file is dropped so the snippet can't
+    # re-advertise (and duplicate) it.
+    series_unsaved = result.series_changed
+    terms_unsaved = result.terms_changed
+    if result.series_changed and _ask_yes(
+            f"Save series_id={result.series_id} to {path}? [y/N] "):
+        series_unsaved = not _save_backfill_value(path, 'series_id',
+                                                  result.series_id)
+    if result.terms_changed and _ask_yes(
+            f"Save updated search terms to {path}? [y/N] "):
+        terms_unsaved = not _save_search_terms(path, result.terms)
+    if series_unsaved or terms_unsaved:
+        _print_config_snippet(result, series=series_unsaved, terms=terms_unsaved)
 
 
 def main():
@@ -486,26 +572,63 @@ def main():
         sys.exit(1)
 
     start_epoc = _parse_start_date(args.start_date)
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     try:
         with RaceMonitorClient(api_token=tokens) as client:
-            races_by_term = search_races_by_term(
-                client, LEMONS_SEARCH_TERMS, start_epoc)
-            races = merge_races(races_by_term)
+            series = None
+            series_error = None
+            races_by_term = {}
+            if LEMONS_SERIES_ID:
+                try:
+                    series_races = enumerate_series(client, LEMONS_SERIES_ID,
+                                                    start_epoc)
+                except RaceMonitorError as exc:
+                    # Beta endpoint: degrade per the resilience rule. TTY runs
+                    # surface the error inside the TUI; non-TTY runs fall back
+                    # to terms when configured, else nothing remains to run.
+                    series_error = exc
+                    if not tty:
+                        if LEMONS_SEARCH_TERMS:
+                            logging.warning(
+                                "series enumeration failed (%s); continuing "
+                                "with search terms only", exc)
+                        else:
+                            logging.error(
+                                "series enumeration failed (%s) and no search "
+                                "terms configured", exc)
+                            sys.exit(1)
+                else:
+                    series_name = ((series_races[0].get('SeriesName')
+                                    if series_races else None)
+                                   or f'series {LEMONS_SERIES_ID}')
+                    series = (LEMONS_SERIES_ID, series_name, series_races)
+
+            if series:
+                # Terms select events within the series locally; no per-term
+                # API calls needed.
+                races = sorted(
+                    filter_races_by_terms(series[2], LEMONS_SEARCH_TERMS),
+                    key=lambda r: r['StartDateEpoc'])
+            else:
+                races_by_term = search_races_by_term(
+                    client, LEMONS_SEARCH_TERMS, start_epoc)
+                races = merge_races(races_by_term)
             logging.info("Found %d matching races", len(races))
 
-            if sys.stdin.isatty() and sys.stdout.isatty():
+            if tty:
                 # Imported lazily: non-interactive runs (cron, pipes) never pay
                 # the textual import.
                 from lemongrass._backfill_tui import refine_races
                 result = refine_races(
-                    client, LEMONS_SEARCH_TERMS, races_by_term, start_epoc)
+                    client, LEMONS_SEARCH_TERMS, races_by_term, start_epoc,
+                    series=series, series_error=series_error)
                 if result is None:
                     logging.info("Cancelled, nothing done.")
                     sys.exit(0)
                 logging.info("Selected %d of %d races", len(result.races), len(races))
                 races = result.races
-                _maybe_save_terms(result)
+                _maybe_save_config(result)
 
             if args.validate:
                 race_ids = [str(r['ID']) for r in races]

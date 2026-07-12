@@ -10,6 +10,7 @@ from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
+from race_monitor import RaceMonitorError
 
 import lemongrass.race_backfill as _mod
 from lemongrass.laps import SCHEMA_VERSION
@@ -148,6 +149,108 @@ class TestMergeRaces:
         }
         merged = _mod.merge_races(by_term)
         assert [r['ID'] for r in merged] == [1, 2]
+
+
+class TestFilterRacesByTerms:
+    def test_case_insensitive_substring(self):
+        races = [_make_race(1, 'The Real Hoopties of NJ', EPOC_2022),
+                 _make_race(2, 'GP du Lac 2024', EPOC_2022)]
+        assert [r['ID'] for r in
+                _mod.filter_races_by_terms(races, ('hoopties',))] == [1]
+
+    def test_multiple_terms_match_any(self):
+        races = [_make_race(1, 'Hoopties', EPOC_2022),
+                 _make_race(2, 'GP du Lac', EPOC_2022),
+                 _make_race(3, 'Doing Time in Joliet', EPOC_2022)]
+        assert [r['ID'] for r in _mod.filter_races_by_terms(
+            races, ('hoop', 'lac'))] == [1, 2]
+
+    def test_empty_terms_keep_everything(self):
+        races = [_make_race(1, 'anything', EPOC_2022)]
+        assert _mod.filter_races_by_terms(races, ()) == races
+
+    def test_order_preserved(self):
+        races = [_make_race(2, 'b hoop', EPOC_2022),
+                 _make_race(1, 'a hoop', EPOC_2021)]
+        assert [r['ID'] for r in
+                _mod.filter_races_by_terms(races, ('hoop',))] == [2, 1]
+
+
+def _series_race(id, start_epoc, has_results=True):
+    return {'ID': id, 'Name': f'race-{id}', 'StartDateEpoc': start_epoc,
+            'HasResults': has_results, 'SeriesName': '24 Hours of Lemons'}
+
+
+class TestEnumerateSeries:
+    def _client(self, responses):
+        client = MagicMock()
+        client.common.past_races.side_effect = responses
+        return client
+
+    def test_filters_has_results_and_start_epoc(self):
+        client = self._client([{'Successful': True, 'Races': [
+            _series_race(1, EPOC_2020),                      # too old
+            _series_race(2, EPOC_2022),                      # kept
+            _series_race(3, EPOC_2023, has_results=False),   # no results
+        ]}])
+        races = _mod.enumerate_series(client, 1234, EPOC_2021)
+        assert [r['ID'] for r in races] == [2]
+
+    def test_single_call_with_generous_cap(self):
+        client = self._client([{'Successful': True,
+                                'Races': [_series_race(1, EPOC_2022)]}])
+        _mod.enumerate_series(client, 1234, 0)
+        client.common.past_races.assert_called_once_with(
+            series_id=1234, first_result=0, max_results=1000)
+
+    def test_hundred_plus_races_still_one_call(self):
+        # Regression: the Beta endpoint ignores first_result, so offset
+        # pagination re-fetched the same full page forever. A response at
+        # or above the old 100-per-page size must not trigger a second call.
+        races = [_series_race(i, EPOC_2022) for i in range(267)]
+        client = self._client([{'Successful': True, 'Races': races}])
+        result = _mod.enumerate_series(client, 1234, 0)
+        assert len(result) == 267
+        assert client.common.past_races.call_count == 1
+
+    def test_result_at_cap_warns_of_truncation(self, caplog):
+        races = [_series_race(i, EPOC_2022) for i in range(1000)]
+        client = self._client([{'Successful': True, 'Races': races}])
+        with caplog.at_level(logging.WARNING):
+            result = _mod.enumerate_series(client, 1234, 0)
+        assert len(result) == 1000
+        assert any('truncated' in r.message for r in caplog.records)
+
+    def test_result_below_cap_does_not_warn(self, caplog):
+        client = self._client([{'Successful': True,
+                                'Races': [_series_race(1, EPOC_2022)]}])
+        with caplog.at_level(logging.WARNING):
+            _mod.enumerate_series(client, 1234, 0)
+        assert not caplog.records
+
+    def test_unsuccessful_response_raises(self):
+        client = self._client([{'Successful': False, 'Races': []}])
+        with pytest.raises(RaceMonitorError):
+            _mod.enumerate_series(client, 1234, 0)
+
+    def test_missing_races_key_raises(self):
+        client = self._client([{'Successful': True}])
+        with pytest.raises(RaceMonitorError):
+            _mod.enumerate_series(client, 1234, 0)
+
+    def test_races_none_raises(self):
+        client = self._client([{'Successful': True, 'Races': None}])
+        with pytest.raises(RaceMonitorError):
+            _mod.enumerate_series(client, 1234, 0)
+
+    def test_race_row_missing_start_epoc_raises(self):
+        # A per-row malformed entry (HasResults but no StartDateEpoc) must
+        # surface as RaceMonitorError, not a bare KeyError, per the docstring.
+        client = self._client([{'Successful': True, 'Races': [
+            {'ID': 1, 'Name': 'race-1', 'HasResults': True},
+        ]}])
+        with pytest.raises(RaceMonitorError):
+            _mod.enumerate_series(client, 1234, 0)
 
 
 class TestRunBackfill:
@@ -769,6 +872,102 @@ class TestMainInteractive:
         assert val.call_args.args[0] == ['1']
 
 
+class TestMainSeriesDiscovery:
+    TERM_RACES: ClassVar[list] = [_make_race(1, 'term-race t1', EPOC_2022)]
+    SERIES_RACES: ClassVar[list] = [
+        {'ID': 9, 'Name': 'series t1 race', 'StartDateEpoc': EPOC_2023,
+         'HasResults': True, 'SeriesName': '24 Hours of Lemons'},
+        {'ID': 8, 'Name': 'unrelated event', 'StartDateEpoc': EPOC_2023,
+         'HasResults': True, 'SeriesName': '24 Hours of Lemons'}]
+
+    @contextmanager
+    def _harness(self, tty, series_id=1234, terms=('t1',), enumerate_error=None):
+        """Run main() with discovery stubbed; yields (backfill, refine,
+        enumerate, search)."""
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        by_term = {t: list(self.TERM_RACES) for t in terms}
+        enum_kwargs = ({'side_effect': enumerate_error} if enumerate_error
+                       else {'return_value': list(self.SERIES_RACES)})
+        with patch.object(_mod, 'RaceMonitorClient', return_value=client), \
+             patch.object(_mod, 'resolve_tokens', return_value=['tok']), \
+             patch.object(_mod, 'LEMONS_SERIES_ID', series_id), \
+             patch.object(_mod, 'LEMONS_SEARCH_TERMS', tuple(terms)), \
+             patch.object(_mod, 'search_races_by_term',
+                          return_value=by_term) as search, \
+             patch.object(_mod, 'enumerate_series', **enum_kwargs) as enumerate_mock, \
+             patch.object(_mod, 'run_backfill', return_value=[]) as backfill, \
+             patch.object(_mod.sys.stdin, 'isatty', return_value=tty), \
+             patch.object(_mod.sys.stdout, 'isatty', return_value=tty), \
+             patch('lemongrass._backfill_tui.refine_races') as refine:
+            refine.return_value = None  # TTY tests: cancel unless overridden
+            with patch.object(sys, 'argv', ['race-backfill']):
+                yield backfill, refine, enumerate_mock, search
+
+    def test_non_tty_series_filtered_by_terms_no_term_search(self):
+        with self._harness(tty=False) as (backfill, _, enumerate_mock, search):
+            _mod.main()
+        enumerate_mock.assert_called_once()
+        search.assert_not_called()
+        assert [r['ID'] for r in backfill.call_args.args[0]] == [9]
+
+    def test_non_tty_empty_terms_backfills_whole_series(self):
+        with self._harness(tty=False, terms=()) as (backfill, _, _2, search):
+            _mod.main()
+        search.assert_not_called()
+        assert [r['ID'] for r in backfill.call_args.args[0]] == [9, 8]
+
+    def test_series_id_zero_falls_back_to_term_search(self):
+        with self._harness(tty=False, series_id=0) as \
+                (backfill, _, enumerate_mock, search):
+            _mod.main()
+        enumerate_mock.assert_not_called()
+        search.assert_called_once()
+        assert [r['ID'] for r in backfill.call_args.args[0]] == [1]
+
+    def test_non_tty_enum_failure_with_terms_warns_and_continues(self, caplog):
+        err = RaceMonitorError('beta broke')
+        with self._harness(tty=False, enumerate_error=err) as \
+                (backfill, _, _2, search):
+            with caplog.at_level(logging.WARNING):
+                _mod.main()
+        assert any('series enumeration failed' in r.message
+                   for r in caplog.records)
+        search.assert_called_once()
+        assert [r['ID'] for r in backfill.call_args.args[0]] == [1]
+
+    def test_non_tty_enum_failure_without_terms_exits_1(self, caplog):
+        err = RaceMonitorError('beta broke')
+        with self._harness(tty=False, terms=(), enumerate_error=err) as \
+                (backfill, _, _2, _3):
+            with caplog.at_level(logging.ERROR):
+                with pytest.raises(SystemExit) as exc:
+                    _mod.main()
+        assert exc.value.code == 1
+        backfill.assert_not_called()
+
+    def test_tty_passes_series_and_empty_term_results_to_refine(self):
+        with self._harness(tty=True) as (_, refine, _2, search):
+            with pytest.raises(SystemExit):  # refine returns None -> cancel
+                _mod.main()
+        search.assert_not_called()
+        kwargs = refine.call_args.kwargs
+        assert kwargs['series'] == (1234, '24 Hours of Lemons', self.SERIES_RACES)
+        assert kwargs['series_error'] is None
+        assert refine.call_args.args[2] == {}
+
+    def test_tty_enum_failure_passes_error_and_term_results_to_refine(self):
+        err = RaceMonitorError('beta broke')
+        with self._harness(tty=True, enumerate_error=err) as (_, refine, _2, _3):
+            with pytest.raises(SystemExit):
+                _mod.main()
+        kwargs = refine.call_args.kwargs
+        assert kwargs['series'] is None
+        assert kwargs['series_error'] is err
+        assert refine.call_args.args[2] == {'t1': self.TERM_RACES}
+
+
 class TestMain:
     """main() control flow: dispatch, exit codes, and interrupt handling."""
 
@@ -932,9 +1131,10 @@ def test_backfill_defaults_come_from_config(monkeypatch, tmp_path):
         importlib.reload(race_backfill)  # restore default module state
 
 
-def _refine_result(terms=('a', 'b'), changed=True):
+def _refine_result(terms=('a', 'b'), changed=True, series_id=0, series_changed=False):
     from lemongrass._backfill_tui import RefineResult
-    return RefineResult(races=[], terms=tuple(terms), terms_changed=changed)
+    return RefineResult(races=[], terms=tuple(terms), terms_changed=changed,
+                        series_id=series_id, series_changed=series_changed)
 
 
 class TestSaveSearchTerms:
@@ -995,19 +1195,19 @@ class TestSaveSearchTerms:
         assert data['races']['backfill']['search_terms'] == ['a']
 
 
-class TestMaybeSaveTerms:
+class TestMaybeSaveConfig:
     def test_unchanged_terms_never_prompt(self, monkeypatch, capsys):
         monkeypatch.setenv('LEMONGRASS_CONFIG', '/some/path.toml')
         monkeypatch.setattr('builtins.input',
                             lambda *_: pytest.fail('should not prompt'))
-        _mod._maybe_save_terms(_refine_result(changed=False))
+        _mod._maybe_save_config(_refine_result(changed=False))
         assert capsys.readouterr().out == ''
 
     def test_no_config_prints_snippet_without_prompt(self, monkeypatch, capsys):
         monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
         monkeypatch.setattr('builtins.input',
                             lambda *_: pytest.fail('should not prompt'))
-        _mod._maybe_save_terms(_refine_result(terms=('a', 'b')))
+        _mod._maybe_save_config(_refine_result(terms=('a', 'b')))
         out = capsys.readouterr().out
         assert '[races.backfill]' in out
         assert 'search_terms = ["a", "b"]' in out
@@ -1015,7 +1215,7 @@ class TestMaybeSaveTerms:
     def test_snippet_escapes_toml_special_characters(self, monkeypatch, capsys):
         monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
         terms = ('say "hi"', 'back\\slash')
-        _mod._maybe_save_terms(_refine_result(terms=terms))
+        _mod._maybe_save_config(_refine_result(terms=terms))
         out = capsys.readouterr().out
         snippet = out[out.index('[races.backfill]'):]
         data = tomllib.loads(snippet)
@@ -1026,7 +1226,7 @@ class TestMaybeSaveTerms:
         cfg.write_text('')
         monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
         monkeypatch.setattr('builtins.input', lambda *_: 'y')
-        _mod._maybe_save_terms(_refine_result(terms=('a',)))
+        _mod._maybe_save_config(_refine_result(terms=('a',)))
         data = tomllib.loads(cfg.read_text())
         assert data['races']['backfill']['search_terms'] == ['a']
 
@@ -1035,7 +1235,7 @@ class TestMaybeSaveTerms:
         cfg.write_text('')
         monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
         monkeypatch.setattr('builtins.input', lambda *_: '')
-        _mod._maybe_save_terms(_refine_result())
+        _mod._maybe_save_config(_refine_result())
         assert cfg.read_text() == ''
 
     def test_eof_on_prompt_treated_as_no(self, monkeypatch, tmp_path):
@@ -1046,11 +1246,99 @@ class TestMaybeSaveTerms:
         def _eof(*_):
             raise EOFError
         monkeypatch.setattr('builtins.input', _eof)
-        _mod._maybe_save_terms(_refine_result())
+        _mod._maybe_save_config(_refine_result())
         assert cfg.read_text() == ''
 
     def test_failed_save_falls_back_to_snippet(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setenv('LEMONGRASS_CONFIG', str(tmp_path / 'nope' / 'x.toml'))
         monkeypatch.setattr('builtins.input', lambda *_: 'y')
-        _mod._maybe_save_terms(_refine_result(terms=('a',)))
+        _mod._maybe_save_config(_refine_result(terms=('a',)))
         assert '[races.backfill]' in capsys.readouterr().out
+
+    def test_partial_save_snippet_omits_already_saved_key(
+            self, monkeypatch, tmp_path, capsys):
+        # series_id saves but the terms save fails: the snippet must advertise
+        # only search_terms, else pasting it duplicates the written series_id
+        # key and breaks TOML parsing on the next load.
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: 'y')
+        monkeypatch.setattr(_mod, '_save_search_terms', lambda *_: False)
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=True, series_id=1234, series_changed=True))
+        assert tomllib.loads(cfg.read_text())['races']['backfill'][
+            'series_id'] == 1234
+        out = capsys.readouterr().out
+        assert 'search_terms' in out
+        assert 'series_id' not in out
+
+    def test_series_changed_prompts_and_saves(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        prompts = []
+
+        def _answer(prompt):
+            prompts.append(prompt)
+            return 'y' if 'series_id' in prompt else 'n'
+        monkeypatch.setattr('builtins.input', _answer)
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=False, series_id=1234, series_changed=True))
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['series_id'] == 1234
+        assert 'search_terms' not in data['races']['backfill']
+        assert any('series_id=1234' in p for p in prompts)
+
+    def test_no_clear_offer_when_terms_customized(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        prompts = []
+
+        def _yes(prompt):
+            prompts.append(prompt)
+            return 'y'
+        monkeypatch.setattr('builtins.input', _yes)
+        _mod._maybe_save_config(_refine_result(
+            terms=('custom',), changed=True, series_id=1234, series_changed=True))
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['series_id'] == 1234
+        assert data['races']['backfill']['search_terms'] == ['custom']
+        assert not any('redundant' in p for p in prompts)
+
+    def test_series_only_save_asks_single_prompt(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        prompts = []
+
+        def _yes(prompt):
+            prompts.append(prompt)
+            return 'y'
+        monkeypatch.setattr('builtins.input', _yes)
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=False, series_id=1234, series_changed=True))
+        assert len(prompts) == 1
+        assert 'series_id=1234' in prompts[0]
+        data = tomllib.loads(cfg.read_text())
+        assert data['races']['backfill']['series_id'] == 1234
+        assert 'search_terms' not in data['races']['backfill']
+
+    def test_series_snippet_printed_without_config(self, monkeypatch, capsys):
+        monkeypatch.delenv('LEMONGRASS_CONFIG', raising=False)
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=False, series_id=1234, series_changed=True))
+        out = capsys.readouterr().out
+        assert '[races.backfill]' in out
+        assert 'series_id = 1234' in out
+        assert 'search_terms' not in out
+
+    def test_series_declined_writes_nothing(self, monkeypatch, tmp_path):
+        cfg = tmp_path / 'lemongrass.toml'
+        cfg.write_text('')
+        monkeypatch.setenv('LEMONGRASS_CONFIG', str(cfg))
+        monkeypatch.setattr('builtins.input', lambda *_: '')
+        _mod._maybe_save_config(_refine_result(
+            terms=('a',), changed=False, series_id=1234, series_changed=True))
+        assert cfg.read_text() == ''

@@ -97,10 +97,11 @@ class InfluxConfig:
 
 @dataclass(frozen=True)
 class BackfillConfig:
-    """Race-history backfill: event search terms and the default start date."""
+    """Race-history backfill: event search terms, default start date, series pin."""
 
     search_terms: tuple = ('Real Hoopties', 'GP du Lac', 'Halloween Hoop')
     default_start_date: str = '2017-01-01'
+    series_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -267,13 +268,15 @@ def _build_races(d):
     """Build RacesConfig, including nested BackfillConfig, from the [races] table."""
     _reject_unknown(d, {'backfill'}, 'races')
     bf = d.get('backfill', {})
-    _reject_unknown(bf, {'search_terms', 'default_start_date'}, 'races.backfill')
+    _reject_unknown(bf, {'search_terms', 'default_start_date', 'series_id'},
+                    'races.backfill')
     dflt = BackfillConfig()
     return RacesConfig(backfill=BackfillConfig(
         search_terms=_typed(bf, 'search_terms', dflt.search_terms, tuple,
                             'races.backfill'),
         default_start_date=_typed(bf, 'default_start_date', dflt.default_start_date,
                                   str, 'races.backfill'),
+        series_id=_typed(bf, 'series_id', dflt.series_id, int, 'races.backfill'),
     ))
 
 
