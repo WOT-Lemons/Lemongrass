@@ -1,5 +1,23 @@
 # Changelog
 
+## [5.1.0](https://github.com/WOT-Lemons/Lemongrass/compare/v5.0.1...v5.1.0) (2026-07-18)
+
+
+### Features
+
+* **race-backfill:** interactive race selection with live search-term refinement ([#206](https://github.com/WOT-Lemons/Lemongrass/issues/206)) ([23d5b9e](https://github.com/WOT-Lemons/Lemongrass/commit/23d5b9ebccff0b32ef4f1473edaa53d0e0c99e00))
+* **race-backfill:** pin discovery to a RaceMonitor series ([#207](https://github.com/WOT-Lemons/Lemongrass/issues/207)) ([738259a](https://github.com/WOT-Lemons/Lemongrass/commit/738259a04f84d9da6dec824fdcf88d3802b97074))
+
+
+### Bug Fixes
+
+* **race-backfill:** show progress logs and sort upgrade-stored by numeric race id ([#202](https://github.com/WOT-Lemons/Lemongrass/issues/202)) ([b634fff](https://github.com/WOT-Lemons/Lemongrass/commit/b634fff1f1b6c155761fc8655b0cfc2bab30f953))
+
+
+### Dependencies
+
+* update python:3.14-slim-trixie docker digest to cea0e60 ([#209](https://github.com/WOT-Lemons/Lemongrass/issues/209)) ([d783e6a](https://github.com/WOT-Lemons/Lemongrass/commit/d783e6a8e0c54a61b4ca30d320c57fad062fe48a))
+
 ## [5.0.1](https://github.com/WOT-Lemons/Lemongrass/compare/v5.0.0...v5.0.1) (2026-07-09)
 
 
