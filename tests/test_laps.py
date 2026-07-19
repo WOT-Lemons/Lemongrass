@@ -1226,6 +1226,26 @@ class TestLiveRace:
         assert mock_csv.call_args.args[0] == 'Jane Doe-999'
 
 
+class TestLiveRaceObserver:
+    def test_live_race_emits_detail_and_laps_to_observer(self):
+        obs = MagicMock()
+        client = MagicMock()
+        client.live.get_session.return_value = {'Successful': True, 'Session': {
+            'ID': 's1', 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
+        client.live.get_racer.return_value = {'Successful': True, 'Details': {
+            'Laps': [{'Lap': '1', 'LapTime': '1:47', 'TotalTime': '9:00',
+                      'Position': '3'}],
+            'Competitor': {'FirstName': 'Jo', 'LastName': 'X', 'Number': '7',
+                           'Transponder': 'T', 'BestPosition': 3, 'Position': 4,
+                           'Laps': 1, 'BestLap': 1, 'BestLapTime': '1:47',
+                           'TotalTime': '9:00'}}}
+        ctx = _mod.RaceContext('42', '7', client, None, 0)
+        opts = _mod.RaceOptions(network_mode=False, monitor_mode=False)
+        _mod.live_race(ctx, opts, observer=obs)
+        assert obs.on_live_detail.called
+        assert obs.on_laps.called
+
+
 class TestLiveRaceStandingsWrite:
     def test_standings_written_at_startup_in_network_mode(self):
         ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000)

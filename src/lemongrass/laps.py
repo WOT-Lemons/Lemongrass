@@ -319,7 +319,7 @@ def main():
         sys.exit(130)
 
 
-def backfill_race(race_id, car_number, client, opts):
+def backfill_race(race_id, car_number, client, opts, observer=None):
     """Fetch and process one race using an already-open RaceMonitorClient.
 
     Extracted from main() so a batch caller (race-backfill --upgrade-stored) can
@@ -370,12 +370,12 @@ def backfill_race(race_id, car_number, client, opts):
     if not opts.network_mode:
         return _run_race(
             RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
-            opts, response)
+            opts, response, observer=observer)
 
     if opts.dry_run:
         return _run_race(
             RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
-            opts, response)
+            opts, response, observer=observer)
 
     with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
@@ -384,10 +384,10 @@ def backfill_race(race_id, car_number, client, opts):
         return _run_race(
             RaceContext(race_id, car_number, client, write_api, start_epoc,
                         metadata=metadata, delete_api=delete_api,
-                        query_api=query_api), opts, response)
+                        query_api=query_api), opts, response, observer=observer)
 
 
-def _run_race(ctx, opts, response):
+def _run_race(ctx, opts, response, observer=None):
     """Dispatch to live_race or old_race based on race status."""
     try:
         if response['IsLive'] is not True:
@@ -401,7 +401,7 @@ def _run_race(ctx, opts, response):
                 logging.error(
                     "--dry-run is historical-only; race %s is live", ctx.race_id)
                 return 1
-            result = live_race(ctx, opts)
+            result = live_race(ctx, opts, observer=observer)
             if result is MonitorStatus.INTERRUPTED:
                 sys.exit(130)
             if result is MonitorStatus.NO_LIVE_DATA:
@@ -414,10 +414,13 @@ def _run_race(ctx, opts, response):
         sys.exit(130)
 
 
-def live_race(ctx, opts):
+def live_race(ctx, opts, observer=None):
     """Handle a live race: fetch the current session, print rankings and racer detail,
     optionally write lap points to InfluxDB, and optionally launch monitor_routine
     to poll for new laps until the race ends or the user interrupts."""
+    if observer is None:
+        observer = _StdoutObserver()
+
     session_response = ctx.client.live.get_session(ctx.race_id)
 
     live_session_id = None
@@ -426,7 +429,7 @@ def live_race(ctx, opts):
         live_session_id = session_response['Session'].get('ID')
         live_session_name = session_response['Session'].get('Name')
 
-    print_rankings([], True, opts.selected_class, {})
+    observer.on_rankings([], True, opts.selected_class, {})
 
     # Get lap times from live racer
     logging.debug("Getting lap times for %s from race %s.", ctx.car_number, ctx.race_id)
@@ -448,29 +451,10 @@ def live_race(ctx, opts):
     car_info = competitor_details.get('AdditionalData') or None
     class_name, class_position = _resolve_class_live(session_response, ctx.car_number)
 
-    print(UNDERLINE)
-    # Print competitor detail block
-    print(
-        f"Team: {competitor_details['Name']:<6} "
-        f"Car Number: {competitor_details['Number']:<4} "
-        f"Class: {class_name} "
-        f"Transponder: {competitor_details['Transponder']}"
-    )
-    print(
-        f"Best Position:\t{competitor_details['BestPosition']:>}\n"
-        f"Final Position:\t{competitor_details['Position']:>}\n"
-        f"Final Class Position:\t{class_position if class_position is not None else 'N/A':>}\n"
-        f"Total Laps:\t{competitor_details['Laps']:>}\n"
-        f"Best Lap:\t{competitor_details['BestLap']:>}\n"
-        f"Best Lap Time:\t{competitor_details['BestLapTime']:>}\n"
-        f"Total Time:\t{competitor_details['TotalTime']:>}"
-    )
-    print(UNDERLINE)
+    observer.on_live_detail(competitor_details, class_name, class_position)
 
-    # Create pandas dataframe and print without index to remove row numbers
-    lap_time_df = pandas.json_normalize(laps)
-    print(lap_time_df.to_string(index=False))
-    print(UNDERLINE)
+    observer.on_laps(laps)
+    observer.on_status(UNDERLINE)
 
     race_meta_written = True
     if opts.network_mode:
@@ -486,6 +470,7 @@ def live_race(ctx, opts):
             push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
                         class_name=class_name, class_positions=None, session_id=live_session_id)
         push_influx_standings_live(ctx, session_response, live_session_id)
+        observer.on_standings(session_response)
 
     if opts.save_file:
         # Create filename and call function to write to CSV
@@ -494,7 +479,8 @@ def live_race(ctx, opts):
 
     if opts.monitor_mode:
         return monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
-                               session_id=live_session_id, race_meta_written=race_meta_written)
+                               session_id=live_session_id, race_meta_written=race_meta_written,
+                               observer=observer)
 
     if opts.network_mode and not race_meta_written:
         # No monitor loop to retry in; signal a failed run so a rerun restores
