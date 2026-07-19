@@ -97,17 +97,14 @@ def main():
         if not tokens:
             print(f"{_env.tokens_env_hint()} not set", file=sys.stderr)
             sys.exit(1)
-            return  # pragma: no cover — sys.exit above never returns in production
         from lemongrass._home_tui import run_home_tui
         with RaceMonitorClient(api_token=tokens) as client:
             sys.exit(run_home_tui(client))
-        return  # pragma: no cover — sys.exit above never returns in production
 
     if len(sys.argv) < 2 or sys.argv[1] not in _COMMANDS:
         print("Usage: lemongrass <command> [args]")
         print(f"Commands: {', '.join(_COMMANDS)}")
         sys.exit(1)
-        return  # pragma: no cover — sys.exit above never returns in production
 
     cmd = sys.argv.pop(1)
     sys.argv[0] = f"lemongrass-{cmd}"

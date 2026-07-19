@@ -63,16 +63,18 @@ class TestDispatcher:
         with patch('lemongrass._env.resolve_tokens', return_value='tok'), \
              patch('lemongrass._home_tui.run_home_tui', return_value=0) as run, \
              patch('race_monitor.RaceMonitorClient'):
-            with patch.object(cli.sys, 'exit') as exit_:
-                cli.main()
+            with patch.object(cli.sys, 'exit', side_effect=SystemExit) as exit_:
+                with pytest.raises(SystemExit):
+                    cli.main()
         run.assert_called_once()
         exit_.assert_called_with(0)
 
     def test_bare_non_tty_prints_usage(self, monkeypatch, capsys):
         monkeypatch.setattr(cli.sys, 'argv', ['lemongrass'])
         monkeypatch.setattr(cli.sys.stdin, 'isatty', lambda: False)
-        with patch.object(cli.sys, 'exit') as exit_:
-            cli.main()
+        with patch.object(cli.sys, 'exit', side_effect=SystemExit) as exit_:
+            with pytest.raises(SystemExit):
+                cli.main()
         assert 'Usage:' in capsys.readouterr().out
         exit_.assert_called_with(1)
 
