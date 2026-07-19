@@ -1,4 +1,19 @@
-from lemongrass._laps_tui import LapBoardModel
+from unittest.mock import MagicMock
+
+import pytest
+from textual.widgets import Input, ListView
+
+from lemongrass._laps_tui import LapBoardModel, LapsApp
+
+
+def _client_with_race(is_live=False):
+    client = MagicMock()
+    client.race.details.return_value = {
+        'Successful': True, 'Race': {'Name': 'Sears Pointless', 'Track': 'Sears'}}
+    client.race.is_live.return_value = {'Successful': True, 'IsLive': is_live}
+    client.results.search_results.return_value = {'Races': [
+        {'ID': 42, 'Name': 'Sears Pointless', 'StartDateEpoc': 0}]}
+    return client
 
 
 def _lap(no, lt='1:47.0', pos='3'):
@@ -51,3 +66,32 @@ class TestLapBoardModel:
         assert len(rows) == 1
         assert rows[0][0] == 1
         assert rows[0][1] == '5'
+
+
+class TestPickerScreen:
+    @pytest.mark.asyncio
+    async def test_numeric_id_resolves_directly(self):
+        client = _client_with_race(is_live=True)
+        app = LapsApp(client)  # on_mount pushes PickerScreen automatically
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.screen.query_one('#query', Input).value = '42'
+            await pilot.press('enter')
+            await app.workers.wait_for_complete()  # deterministic: await the resolve worker
+            await pilot.pause()
+        client.race.details.assert_called_with(42)
+        assert app.picked is not None
+        assert app.picked[1] is True  # is_live
+
+    @pytest.mark.asyncio
+    async def test_name_query_lists_hits(self):
+        client = _client_with_race()
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.screen.query_one('#query', Input).value = 'sears'
+            await pilot.press('enter')
+            await app.workers.wait_for_complete()  # deterministic: await the search worker
+            await pilot.pause()
+            hits = app.screen.query_one('#hits', ListView)
+            assert len(hits.children) == 1
