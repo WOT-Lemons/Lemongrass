@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.2.0](https://github.com/WOT-Lemons/Lemongrass/compare/v5.1.0...v5.2.0) (2026-07-19)
+
+
+### Features
+
+* **laps:** interactive live-monitoring & import TUI ([7ac7426](https://github.com/WOT-Lemons/Lemongrass/commit/7ac74265b46815205ebae5f06da6aaed5b49e627))
+
 ## [5.1.0](https://github.com/WOT-Lemons/Lemongrass/compare/v5.0.1...v5.1.0) (2026-07-18)
 
 
