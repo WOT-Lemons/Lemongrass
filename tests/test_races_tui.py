@@ -4,9 +4,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from textual.app import App
-from textual.widgets import SelectionList
+from textual.widgets import Input, Label, SelectionList
 
-from lemongrass._races_tui import RacesBrowserScreen, _row_label
+from lemongrass._races_tui import (
+    DiagnoseCarScreen,
+    DiagnoseOutputScreen,
+    RacesBrowserScreen,
+    _row_label,
+    distinct_car_numbers,
+)
 from lemongrass._tui import _TuiLogHandler
 
 
@@ -72,3 +78,36 @@ async def test_browser_loads_rows_into_selection_list():
             await pilot.pause()
             sl = app.screen.query_one('#races', SelectionList)
             assert len(sl._options) == 2
+
+
+def test_distinct_car_numbers_extracts_values():
+    rec = MagicMock()
+    rec.get_value.return_value = '252'
+    table = MagicMock()
+    table.records = [rec]
+    api = MagicMock()
+    api.query.return_value = [table]
+    assert distinct_car_numbers(api, '144185') == ['252']
+
+
+@pytest.mark.asyncio
+async def test_diagnose_car_rejects_invalid_number():
+    app = _Host(MagicMock())
+    with patch('lemongrass._races_tui._influx.connect') as connect:
+        connect.return_value.__enter__.return_value = MagicMock()
+        with patch('lemongrass._races_tui.distinct_car_numbers', return_value=[]):
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                screen = DiagnoseCarScreen('144185', 'Sears')
+                app.push_screen(screen)
+                await pilot.pause()
+                car_input = screen.query_one('#car', Input)
+                car_input.focus()  # ListView auto-focuses on mount; Input needs it explicitly
+                await pilot.pause()
+                car_input.value = 'bad;id'
+                await pilot.press('enter')
+                await pilot.pause()
+                # invalid car number must not push a DiagnoseOutputScreen
+                assert not isinstance(app.screen, DiagnoseOutputScreen)
+                status = str(screen.query_one('#status', Label).render())
+                assert 'invalid car number' in status

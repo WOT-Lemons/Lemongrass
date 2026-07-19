@@ -9,7 +9,7 @@ from textual import work
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Footer, Label, RichLog, SelectionList
+from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, SelectionList
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
@@ -28,6 +28,22 @@ def _row_label(row):
         schema = f'stale {row["current"]}/{row["total"]}'
     return (f"{row['date']}  {row['name'][:32]:<32}  (#{row['race_id']})  "
             f"{row['total']:>4} laps  {schema}")
+
+
+EPOCH_START = '1970-01-01T00:00:00Z'
+
+
+def distinct_car_numbers(query_api, race_id):
+    """Distinct car_number tag values stored for a race (cheap; not rate-limited)."""
+    tables = query_api.query(
+        f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
+        f'  |> range(start: {EPOCH_START})\n'
+        f'  |> filter(fn: (r) => r._measurement == "lap" and r.race_id == "{race_id}"\n'
+        f'      and r._field == "lap_no")\n'
+        f'  |> keep(columns: ["car_number"])\n'
+        f'  |> group()\n'
+        f'  |> distinct(column: "car_number")')
+    return [r.get_value() for t in tables for r in t.records]
 
 
 class PruneConfirmModal(ModalScreen):
@@ -62,6 +78,70 @@ class PruneConfirmModal(ModalScreen):
     def action_no(self):
         """Cancel the prune."""
         self.dismiss(False)
+
+
+class DiagnoseCarScreen(Screen):
+    """Pick the car to diagnose: quick-pick stored car numbers or type any number."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('escape', 'app.pop_screen', 'Back'),
+    ]
+
+    def __init__(self, race_id, race_name):
+        """Store the race being diagnosed."""
+        super().__init__()
+        self.race_id = race_id
+        self.race_name = race_name
+
+    def compose(self):
+        """Render the title, quick-pick list, type-any input, and status line."""
+        yield Label(f'Diagnose {self.race_name} (#{self.race_id}) — pick a car')
+        yield ListView(id='cars')
+        yield Input(placeholder='…or type a car number', id='car')
+        yield Label('', id='status')
+        yield Footer()
+
+    def on_mount(self):
+        """Load the distinct stored car numbers for this race off-thread."""
+        self._load()
+
+    @work(thread=True, exclusive=True)
+    def _load(self):
+        worker = get_current_worker()
+        try:
+            with _influx.connect() as client:
+                cars = distinct_car_numbers(client.query_api(), self.race_id)
+        except Exception:  # surface, never crash the app
+            logging.exception('car list load failed')
+            return
+        if not worker.is_cancelled:
+            self.app.call_from_thread(self._show, cars)
+
+    def _show(self, cars):
+        view = self.query_one('#cars', ListView)
+        view.clear()
+        for car in cars:
+            view.append(ListItem(Label(f'#{car}')))
+        self._cars = cars
+
+    def on_list_view_selected(self, event):
+        """Diagnose the car under the chosen quick-pick row."""
+        index = self.query_one('#cars', ListView).index
+        if index is not None and getattr(self, '_cars', None):
+            self._go(self._cars[index])
+
+    def on_input_submitted(self, event):
+        """Diagnose the typed car number."""
+        event.stop()
+        self._go(event.value.strip())
+
+    def _go(self, car_number):
+        if not car_number:
+            return
+        if _influx.invalid_flux_ids([car_number]):
+            self.query_one('#status', Label).update(f'invalid car number: {car_number!r}')
+            return
+        self.app.push_screen(DiagnoseOutputScreen(self.race_id, car_number))
 
 
 class RacesBrowserScreen(LogPaneScreen, Screen):
@@ -196,10 +276,25 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         self.app.call_from_thread(self._load)  # reload the list
 
     def action_diagnose(self):
-        """Diagnose the highlighted race. Stub — implemented in Task 6."""
+        """Diagnose the highlighted race. Stub — implemented in Task 7."""
 
     def action_reimport(self):
         """Re-import the highlighted race. Stub — implemented in Task 11."""
 
     def action_backfill(self):
         """Backfill the highlighted race. Stub — implemented in Task 11."""
+
+
+class DiagnoseOutputScreen(Screen):
+    """Temporary stub so `DiagnoseCarScreen` can push a real screen; Task 7 fleshes
+    this out into the streaming diagnose-output view (api + influx checks)."""
+
+    def __init__(self, race_id, car_number):
+        """Store the race/car being diagnosed."""
+        super().__init__()
+        self.race_id = race_id
+        self.car_number = car_number
+
+    def compose(self):
+        """Render a placeholder body (replaced in Task 7)."""
+        yield Label('')
