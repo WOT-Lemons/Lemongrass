@@ -31,11 +31,6 @@ def launch_tui(run_fn):
     with RaceMonitorClient(api_token=tokens) as client:
         sys.exit(run_fn(client))
 
-# Guards contextlib.redirect_stdout, which mutates process-global sys.stdout. The
-# import / diagnose / backfill workers all redirect; serialize so concurrent workers
-# can't clobber each other's restore and leak print() to the real terminal.
-_STDOUT_LOCK = threading.Lock()
-
 
 class _LogSink:
     """A screen-private bounded line buffer. Its worker's print() (line-buffered via
@@ -170,45 +165,6 @@ def _routed_output():
         for existing in saved:
             root.addHandler(existing)
         root.setLevel(saved_level)
-
-
-class _TuiLogHandler(logging.Handler):
-    """Buffer formatted log records for a TUI log pane.
-
-    emit() only appends to a deque, so it is safe from any thread — worker
-    threads' httpx and rate-limiter records included. The app drains the buffer
-    into a RichLog on a timer; nothing here may touch Textual.
-    """
-
-    def __init__(self):
-        super().__init__(level=logging.INFO)
-        self.lines = deque(maxlen=200)
-        self.setFormatter(logging.Formatter(
-            '%(asctime)s %(levelname)s %(message)s', datefmt='%H:%M:%S'))
-
-    def emit(self, record):
-        """Append the formatted record to the bounded buffer."""
-        self.lines.append(self.format(record))
-
-
-@contextmanager
-def _logging_to(handler):
-    """Route root logging exclusively to handler for the duration.
-
-    The terminal handlers would corrupt the Textual display; they are restored
-    on exit even if the app crashes, so post-TUI logging prints normally.
-    """
-    root = logging.getLogger()
-    saved = root.handlers[:]
-    for existing in saved:
-        root.removeHandler(existing)
-    root.addHandler(handler)
-    try:
-        yield
-    finally:
-        root.removeHandler(handler)
-        for existing in saved:
-            root.addHandler(existing)
 
 
 class LogPaneScreen:

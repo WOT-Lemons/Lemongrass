@@ -30,31 +30,6 @@ from textual.worker import get_current_worker
 from lemongrass._tui import _LogSink, _race_label, _routed_output, _sink_bound
 
 
-class _StdoutToLines:
-    """File-like sink: buffers writes and appends complete lines to a deque.
-
-    Used to redirect backfill_race's raw print() output into the TUI log pane
-    (the same deque MonitorScreen/ImportScreen drain on a timer) so it never
-    reaches the real terminal and corrupts the Textual display. deque.append is
-    atomic, so this is safe to feed from the import worker thread.
-    """
-
-    def __init__(self, lines):
-        self._lines = lines
-        self._buf = ''
-
-    def write(self, text):
-        self._buf += text
-        while '\n' in self._buf:
-            line, self._buf = self._buf.split('\n', 1)
-            self._lines.append(line)
-
-    def flush(self):
-        if self._buf:
-            self._lines.append(self._buf)
-            self._buf = ''
-
-
 def _as_int(value):
     """int(value) or None."""
     try:
