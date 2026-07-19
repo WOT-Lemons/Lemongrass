@@ -271,4 +271,11 @@ class CarSelectScreen(Screen):
 
 
 class ImportConfirmScreen(Screen):
-    """Placeholder — implemented in Task 9."""
+    """Placeholder — implemented in Task 9. Accepts the real constructor args so the
+    non-live path can push it without crashing."""
+
+    def __init__(self, client, race_id, race_name):
+        super().__init__()
+        self.client = client
+        self.race_id = race_id
+        self.race_name = race_name

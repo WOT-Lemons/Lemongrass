@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from textual.widgets import Input, ListView
 
-from lemongrass._laps_tui import CarSelectScreen, LapBoardModel, LapsApp
+from lemongrass._laps_tui import CarSelectScreen, ImportConfirmScreen, LapBoardModel, LapsApp
 
 
 def _client_with_race(is_live=False):
@@ -82,6 +82,19 @@ class TestPickerScreen:
         client.race.details.assert_called_with(42)
         assert app.picked is not None
         assert app.picked[1] is True  # is_live
+
+    @pytest.mark.asyncio
+    async def test_non_live_race_pushes_import_confirm_screen(self):
+        client = _client_with_race(is_live=False)
+        app = LapsApp(client)  # on_mount pushes PickerScreen automatically
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.screen.query_one('#query', Input).value = '42'
+            await pilot.press('enter')
+            await app.workers.wait_for_complete()  # deterministic: await the resolve worker
+            await pilot.pause()
+            assert isinstance(app.screen, ImportConfirmScreen)
+        client.race.details.assert_called_with(42)
 
     @pytest.mark.asyncio
     async def test_name_query_lists_hits(self):
