@@ -25,13 +25,29 @@ class TestLapBoardModel:
                   'FirstName': 'Jo', 'LastName': 'X', 'BestLapTime': '1:47.0'},
             'b': {'Number': '9', 'Position': '1', 'Laps': '100',
                   'FirstName': 'Al', 'LastName': 'Y', 'BestLapTime': '1:46.0'},
+            'c': {'Number': '10', 'Position': '10', 'Laps': '98',
+                  'FirstName': 'Bo', 'LastName': 'Z', 'BestLapTime': '1:48.0'},
         }}}
         m.set_standings(session)
         rows = m.leaderboard_rows()
-        assert [r[0] for r in rows] == [1, 2]
+        assert [r[0] for r in rows] == [1, 2, 10]
         assert rows[0][1] == '9'
 
     def test_set_standings_ignores_unsuccessful(self):
         m = LapBoardModel()
         m.set_standings({'Successful': False})
         assert m.leaderboard_rows() == []
+
+    def test_set_standings_skips_non_numeric_position(self):
+        m = LapBoardModel()
+        session = {'Successful': True, 'Session': {'Competitors': {
+            'a': {'Number': '5', 'Position': '1', 'Laps': '100',
+                  'FirstName': 'Bo', 'LastName': 'A', 'BestLapTime': '1:46.0'},
+            'b': {'Number': '8', 'Position': 'DNF', 'Laps': '95',
+                  'FirstName': 'Jo', 'LastName': 'B', 'BestLapTime': '1:47.5'},
+        }}}
+        m.set_standings(session)
+        rows = m.leaderboard_rows()
+        assert len(rows) == 1
+        assert rows[0][0] == 1
+        assert rows[0][1] == '5'
