@@ -7,6 +7,7 @@ from textual.widgets import DataTable, Input, ListView, RichLog
 from lemongrass._laps_tui import (
     CarSelectScreen,
     ImportConfirmScreen,
+    ImportScreen,
     LapBoardModel,
     LapsApp,
     MonitorScreen,
@@ -218,3 +219,31 @@ class TestMonitorScreen:
         assert ctx.query_api is influx.query_api.return_value
         assert ctx.metadata is not None
         assert ctx.start_epoc == 111
+
+
+class TestImportFlow:
+    @pytest.mark.asyncio
+    async def test_confirm_starts_import(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        # The pushed ImportScreen's worker runs backfill_race; patch it so no
+        # real import launches against the mock client.
+        with patch('lemongrass.laps.backfill_race', return_value=0):
+            async with app.run_test() as pilot:
+                app.push_screen(ImportConfirmScreen(client, 42, 'Sears'))
+                await pilot.pause()
+                await pilot.press('enter')
+                await pilot.pause()
+                assert isinstance(app.screen, ImportScreen)
+
+    @pytest.mark.asyncio
+    async def test_import_runs_backfill_and_reports(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.backfill_race', return_value=0) as bf:
+            async with app.run_test() as pilot:
+                app.push_screen(ImportScreen(client, 42, 'Sears'))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+        bf.assert_called_once()
+        assert bf.call_args.args[0] == '42'

@@ -109,11 +109,14 @@ class LapsApp(App):
         if is_live:
             self.push_screen(CarSelectScreen(self.client, race_id, name))
         else:
-            self.push_screen(ImportConfirmScreen(self.client, race_id, name))  # Task 9
+            self.push_screen(ImportConfirmScreen(self.client, race_id, name))
 
     def _start_monitor(self, race_id, car_number, network, interval):
         self.monitor_args = (race_id, car_number, network, interval)
         self.push_screen(MonitorScreen(self.client, race_id, car_number, network, interval))
+
+    def _start_import(self, race_id, race_name):
+        self.push_screen(ImportScreen(self.client, race_id, race_name))
 
 
 class PickerScreen(Screen):
@@ -456,11 +459,70 @@ class MonitorScreen(Screen):
 
 
 class ImportConfirmScreen(Screen):
-    """Placeholder — implemented in Task 9. Accepts the real constructor args so the
-    non-live path can push it without crashing."""
+    """Confirm a fieldwide import of a completed race."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('enter', 'confirm', 'Import', priority=True),
+        Binding('escape', 'app.pop_screen', 'Back'),
+    ]
 
     def __init__(self, client, race_id, race_name):
         super().__init__()
         self.client = client
         self.race_id = race_id
         self.race_name = race_name
+
+    def compose(self):
+        yield Label(f'{self.race_name} (#{self.race_id}) is completed.')
+        yield Label('Press Enter to import all lap data into InfluxDB.')
+        yield Footer()
+
+    def action_confirm(self):
+        self.app._start_import(self.race_id, self.race_name)
+
+
+class ImportScreen(Screen):
+    """Run the fieldwide import in a worker; stream logs + a final summary."""
+
+    CSS = "#log { height: 1fr; }"
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('q', 'app.pop_screen', 'Back'),
+    ]
+
+    def __init__(self, client, race_id, race_name):
+        super().__init__()
+        self.client = client
+        self.race_id = race_id
+        self.race_name = race_name
+
+    def compose(self):
+        yield Label(f'Importing {self.race_name} (#{self.race_id})…', id='title')
+        yield RichLog(id='log')
+        yield Footer()
+
+    def on_mount(self):
+        self.set_interval(0.25, self._drain_log)
+        self._run()
+
+    def _drain_log(self):
+        log_view = self.query_one('#log', RichLog)
+        while self.app.log_handler.lines:
+            log_view.write(self.app.log_handler.lines.popleft())
+
+    @work(thread=True)
+    def _run(self):
+        from lemongrass import laps as laps_mod
+        opts = laps_mod.RaceOptions(network_mode=True)
+        with _logging_to(self.app.log_handler):
+            try:
+                rc = laps_mod.backfill_race(str(self.race_id), None, self.client, opts)
+            except RaceMonitorError as exc:
+                self.app.call_from_thread(self._done, f'import failed: {exc}')
+                return
+        summary = 'Import complete.' if rc == 0 else f'Import failed (exit {rc}).'
+        self.app.call_from_thread(self._done, summary)
+
+    def _done(self, message):
+        self.query_one('#title', Label).update(message)
+        self.query_one('#log', RichLog).write(message)
