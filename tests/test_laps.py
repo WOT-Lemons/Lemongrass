@@ -62,6 +62,16 @@ def _capture_lap_points():
     return captured, cm
 
 
+def _monitor_ctx():
+    """RaceContext with a fake client whose live.get_session returns a
+    Successful session, for monitor_routine observer tests."""
+    ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+    ctx.client.live.get_session.return_value = {
+        'Successful': True, 'Session': {
+            'ID': 's1', 'Name': 'S1', 'Competitors': {}, 'Classes': {}}}
+    return ctx
+
+
 class TestResolveTokens:
     def test_multi_tokens_returns_list(self):
         with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN1,TOKEN2'}, clear=True):
@@ -482,6 +492,26 @@ class TestMonitorRoutine:
                 result = _mod.monitor_routine(ctx, [], opts)
         assert ctx.client.race.is_live.called  # the check fired and raised
         assert result is None  # loop exited via stop, not a crash or RACE_ENDED
+
+
+class TestMonitorRoutineObserver:
+    def test_emits_new_lap_and_standings_and_ended(self):
+        obs = MagicMock()
+        stop = threading.Event()
+        # refresh_competitor returns a new lap on the first poll, then stop.
+        new_lap = {'Lap': '5', 'LapTime': '1:47.0', 'TotalTime': '9:00.0', 'Position': '3'}
+
+        def fake_refresh(ctx):
+            stop.set()  # exit after this poll
+            return [new_lap]
+
+        ctx = _monitor_ctx()  # fake client; get_session returns Successful session
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            _mod.monitor_routine(ctx, [], opts, _stop_event=stop, observer=obs)
+        assert obs.on_lap.call_args_list[0].args[0] == new_lap
+        assert obs.on_laps.called          # initial seed
+        assert obs.on_standings.called     # once per poll
 
 
 class TestWriteCSV:

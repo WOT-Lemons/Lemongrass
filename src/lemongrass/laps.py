@@ -786,8 +786,10 @@ def write_csv(filename, competitor_lap_times):
 
 
 def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
-                    session_id=None, race_meta_written=True) -> MonitorStatus | None:
-    """Poll for new laps during a live race, printing and optionally pushing each to InfluxDB.
+                    session_id=None, race_meta_written=True,
+                    observer=None) -> MonitorStatus | None:
+    """Poll for new laps during a live race, displaying and optionally pushing each
+    to InfluxDB via the given observer (defaults to _StdoutObserver).
 
     Returns MonitorStatus.RACE_ENDED when the race ends naturally, or
     MonitorStatus.INTERRUPTED on KeyboardInterrupt (caller should exit 130).
@@ -801,12 +803,12 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     write is retried each poll until it lands, so a transient delete/write
     failure self-heals without aborting lap capture.
     """
+    if observer is None:
+        observer = _StdoutObserver()
     logging.info("Monitoring car %s...", ctx.car_number)
-    print(UNDERLINE)
 
-    # Create pandas dataframe and print without index to remove row numbers
-    lap_time_df = pandas.json_normalize(laps)
-    print(lap_time_df.to_string(index=False))
+    observer.on_status(UNDERLINE)
+    observer.on_laps(laps)
 
     stop = _stop_event if _stop_event is not None else threading.Event()
     poll_count = 0
@@ -850,7 +852,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             if session_response.get('Successful'):
                 new_session_id = session_response['Session'].get('ID')
                 if new_session_id and new_session_id != session_id:
-                    print(f"\nNew session: {session_response['Session'].get('Name', '')}")
+                    observer.on_session_change(session_response['Session'].get('Name', ''))
                     session_id = new_session_id
                     prev_standings = {}
                     if opts.network_mode:
@@ -862,12 +864,13 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             if opts.network_mode:
                 prev_standings = push_influx_standings_live(
                     ctx, session_response, session_id, prev_standings)
+            observer.on_standings(session_response)
 
             if poll_count % _LIVE_CHECK_INTERVAL == 0:
                 try:
                     live_response = ctx.client.race.is_live(ctx.race_id)
                     if live_response.get('Successful') and not live_response.get('IsLive'):
-                        print("Race has ended.")
+                        observer.on_race_ended()
                         return MonitorStatus.RACE_ENDED
                 except Exception:
                     logging.debug("is_live check failed; skipping")
@@ -882,8 +885,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
 
             for lap in current_competitor_lap_times:
                 if lap not in laps:
-                    current_competitor_lap_time_df = pandas.json_normalize(lap)
-                    print(current_competitor_lap_time_df.to_string(index=False, header=False))
+                    observer.on_lap(lap)
                     laps.append(lap)
                     if opts.network_mode:
                         class_name, class_position = _resolve_class_live(
@@ -904,7 +906,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                             class_name=class_name, class_positions=class_positions,
                             session_id=session_id)
     except KeyboardInterrupt:
-        print("\nMonitoring stopped.")
+        observer.on_status("\nMonitoring stopped.")
         return MonitorStatus.INTERRUPTED
 
 
