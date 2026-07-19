@@ -1,12 +1,35 @@
 """Shared Textual helpers used by the backfill and laps TUIs."""
 
 import logging
+import sys
 import threading
 from collections import deque
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from textual.widgets import RichLog
+
+
+def launch_tui(run_fn):
+    """Shared bootstrap for the bare-`lemongrass` / `races` / `laps` TTY entry
+    points: configure INFO logging, resolve the API token (exit with a hint if
+    unset), open a RaceMonitorClient, and hand it to run_fn (a TUI runner
+    returning an exit code). Always raises SystemExit — never returns.
+
+    Callers gate this behind their own TTY check so basicConfig stays scoped to
+    the interactive branch and never disturbs the argument-parsed paths."""
+    from race_monitor import RaceMonitorClient
+
+    from lemongrass import _env
+    from lemongrass._env import resolve_tokens
+
+    logging.basicConfig(level=logging.INFO)
+    tokens = resolve_tokens()
+    if not tokens:
+        print(f"{_env.tokens_env_hint()} not set", file=sys.stderr)
+        sys.exit(1)
+    with RaceMonitorClient(api_token=tokens) as client:
+        sys.exit(run_fn(client))
 
 # Guards contextlib.redirect_stdout, which mutates process-global sys.stdout. The
 # import / diagnose / backfill workers all redirect; serialize so concurrent workers

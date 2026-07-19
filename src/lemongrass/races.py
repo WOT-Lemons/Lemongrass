@@ -22,19 +22,8 @@ def main():
     subcommand handler (list, prune, backfill, diagnose) based on the first
     argument."""
     if len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty():
-        import logging
-
-        from race_monitor import RaceMonitorClient
-
-        from lemongrass import _env
-        from lemongrass._env import resolve_tokens
-        logging.basicConfig(level=logging.INFO)
-        tokens = resolve_tokens()
-        if not tokens:
-            print(f"{_env.tokens_env_hint()} not set", file=sys.stderr)
-            sys.exit(1)
-        with RaceMonitorClient(api_token=tokens) as client:
-            sys.exit(run_races_tui(client))
+        from lemongrass._tui import launch_tui
+        launch_tui(run_races_tui)
 
     if len(sys.argv) < 2 or sys.argv[1] not in _SUBCOMMANDS:
         print("Usage: lemongrass races <subcommand> [args]")

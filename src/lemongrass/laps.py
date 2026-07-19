@@ -264,14 +264,9 @@ def main():
     # scripted path's log format. The textual import stays lazy for
     # non-interactive runs.
     if len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty():
-        logging.basicConfig(level=logging.INFO)
-        tokens = resolve_tokens()
-        if not tokens:
-            logging.error("%s environment variable not set", _env.tokens_env_hint())
-            sys.exit(1)
         from lemongrass._laps_tui import run_laps_tui
-        with RaceMonitorClient(api_token=tokens) as client:
-            sys.exit(run_laps_tui(client))
+        from lemongrass._tui import launch_tui
+        launch_tui(run_laps_tui)
 
     args = _build_parser().parse_args()
 

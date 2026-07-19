@@ -116,8 +116,12 @@ class DiagnoseCarScreen(Screen):
         try:
             with _influx.connect() as client:
                 cars = distinct_car_numbers(client.query_api(), self.race_id)
-        except Exception:  # surface, never crash the app
+        except Exception as exc:  # surface, never crash the app
             logging.exception('car list load failed')
+            if not worker.is_cancelled:
+                self.app.call_from_thread(
+                    self.query_one('#status', Label).update,
+                    f'car list load failed: {exc}')
             return
         if not worker.is_cancelled:
             self.app.call_from_thread(self._show, cars)
@@ -162,12 +166,24 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         Binding('d', 'diagnose', 'Diagnose'),
         Binding('r', 'reimport', 'Re-import'),
         Binding('b', 'backfill', 'Backfill'),
-        Binding('escape', 'app.pop_screen', 'Back'),
+        Binding('escape', 'back', 'Back'),
     ]
 
     def __init__(self):
         super().__init__()
         self._rows = []
+
+    def action_back(self):
+        """Return to the previous screen, or exit if this browser is the root.
+
+        Opened via the Home menu there is a screen beneath to pop back to;
+        opened directly (bare `races`) the only thing beneath is the app's blank
+        default screen, so popping would strand the user with no bindings —
+        exit cleanly instead. (screen_stack[0] is always the default screen.)"""
+        if len(self.app.screen_stack) > 2:
+            self.app.pop_screen()
+        else:
+            self.app.exit()
 
     def compose(self):
         """Build the screen: title, checklist, status line, log pane, footer."""
@@ -393,15 +409,21 @@ class BackfillRunScreen(LogPaneScreen, Screen):
         worker = get_current_worker()
         writer = _StdoutToLines(self.app.log_handler.lines)
         failures = None
+        crashed = False
         try:
             with _STDOUT_LOCK, contextlib.redirect_stdout(writer):
                 failures = run_backfill(self._races, dry_run=False, force=False)
         except Exception as exc:
+            crashed = True
             logging.exception('backfill run failed')
             self.app.log_handler.lines.append(f'backfill failed: {exc}')
         finally:
             writer.flush()
         if not worker.is_cancelled:
-            msg = ('Backfill complete.' if not failures
-                   else f'Backfill finished with {len(failures)} failure(s).')
+            if crashed:
+                msg = 'Backfill failed — see log.'
+            elif failures:
+                msg = f'Backfill finished with {len(failures)} failure(s).'
+            else:
+                msg = 'Backfill complete.'
             self.app.call_from_thread(self.query_one('#title', Label).update, msg)
