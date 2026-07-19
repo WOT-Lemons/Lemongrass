@@ -35,6 +35,31 @@ def test_row_label_marks_stale_and_current():
 
 
 @pytest.mark.asyncio
+async def test_prune_deletes_checked_and_reloads():
+    app = _Host(MagicMock())
+    delete_api = MagicMock()
+    fake_influx = MagicMock()
+    fake_influx.delete_api.return_value = delete_api
+    with patch('lemongrass._races_tui._influx.influx_token_present', return_value=True), \
+         patch('lemongrass._races_tui.fetch_race_rows', return_value=_rows()), \
+         patch('lemongrass._races_tui._influx.connect') as connect:
+        connect.return_value.__enter__.return_value = fake_influx
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            app.screen.query_one('#races', SelectionList).select(0)  # check race 144185
+            await pilot.pause()
+            await pilot.press('p')                                   # open modal
+            await pilot.pause()
+            await pilot.press('y')                                   # confirm
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+    # prune deleted across buckets for the checked race
+    assert delete_api.delete.called
+
+
+@pytest.mark.asyncio
 async def test_browser_loads_rows_into_selection_list():
     app = _Host(MagicMock())
     with patch('lemongrass._races_tui._influx.influx_token_present', return_value=True), \

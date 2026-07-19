@@ -7,14 +7,15 @@ from typing import ClassVar
 
 from textual import work
 from textual.binding import Binding, BindingType
-from textual.screen import Screen
+from textual.containers import Vertical
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Label, RichLog, SelectionList
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
 from lemongrass import _influx
 from lemongrass._tui import LogPaneScreen
-from lemongrass.races import fetch_race_rows
+from lemongrass.races import fetch_race_rows, prune_races
 
 
 def _row_label(row):
@@ -27,6 +28,40 @@ def _row_label(row):
         schema = f'stale {row["current"]}/{row["total"]}'
     return (f"{row['date']}  {row['name'][:32]:<32}  (#{row['race_id']})  "
             f"{row['total']:>4} laps  {schema}")
+
+
+class PruneConfirmModal(ModalScreen):
+    """Confirm deleting the checked races. Dismisses True on 'y', False otherwise."""
+
+    CSS = ("PruneConfirmModal { align: center middle; } "
+           "#box { width: 60; border: round $error; padding: 1; }")
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('y', 'yes', 'Delete'),
+        Binding('n', 'no', 'Cancel'),
+        Binding('escape', 'no', 'Cancel', show=False),
+    ]
+
+    def __init__(self, rows):
+        """Store the checked rows to render in the confirmation prompt."""
+        super().__init__()
+        self._rows = rows
+
+    def compose(self):
+        """Render the race list and yes/no footer."""
+        with Vertical(id='box'):
+            yield Label(f'Delete ALL data for {len(self._rows)} race(s)?')
+            for row in self._rows:
+                yield Label(f'  #{row["race_id"]}  {row["name"]}')
+            yield Footer()
+
+    def action_yes(self):
+        """Confirm the prune."""
+        self.dismiss(True)
+
+    def action_no(self):
+        """Cancel the prune."""
+        self.dismiss(False)
 
 
 class RacesBrowserScreen(LogPaneScreen, Screen):
@@ -126,7 +161,39 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         self._update_status()
 
     def action_prune(self):
-        """Prune the checked races. Stub — implemented in Task 5."""
+        """Confirm, then prune the checked races."""
+        sl = self.query_one('#races', SelectionList)
+        rows = [self._rows[i] for i in sl.selected]
+        if not rows:
+            self.app.notify('no races checked', severity='warning')
+            return
+
+        def _confirmed(ok):
+            if ok:
+                self._run_prune([r['race_id'] for r in rows])
+
+        self.app.push_screen(PruneConfirmModal(rows), _confirmed)
+
+    @work(thread=True, exclusive=True)
+    def _run_prune(self, race_ids):
+        worker = get_current_worker()
+        try:
+            with _influx.connect() as client:
+                failed = prune_races(
+                    client.delete_api(), race_ids,
+                    on_progress=lambda m: self.app.log_handler.lines.append(m))
+        except Exception as exc:  # surface, never crash the app
+            logging.exception('prune failed')
+            if not worker.is_cancelled:
+                self.app.call_from_thread(self.app.notify, f'prune failed: {exc}',
+                                           severity='error')
+            return
+        if worker.is_cancelled:
+            return
+        if failed:
+            self.app.call_from_thread(
+                self.app.notify, f'failed: {", ".join(failed)}', severity='error')
+        self.app.call_from_thread(self._load)  # reload the list
 
     def action_diagnose(self):
         """Diagnose the highlighted race. Stub — implemented in Task 6."""
