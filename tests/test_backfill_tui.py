@@ -3,13 +3,16 @@ from unittest.mock import MagicMock
 
 import pytest
 from race_monitor import RaceMonitorError
+from textual.app import App
 from textual.widgets import Input, Label, ListView, RichLog, SelectionList
 
 from lemongrass._backfill_tui import (
     BackfillApp,
     RaceListModel,
+    RefineScreen,
     SeriesSearchModal,
 )
+from lemongrass._tui import _TuiLogHandler
 
 
 def _race(id, name, start_epoc):
@@ -39,6 +42,35 @@ class TestBackfillAppLogPane:
             app.log_handler.emit(_info_record('sleeping 9.77s'))
             await pilot.pause(0.4)  # past the 0.25s drain interval
             log_view = app.query_one('#log', RichLog)
+            assert len(log_view.lines) >= 1
+
+
+class _RefineHostApp(App):
+    """Minimal stand-in for LemongrassApp: an app-level log_handler (like
+    LapsFlowMixin provides) hosting a pushed RefineScreen. Proves RefineScreen
+    drains whatever deque `self.app.log_handler` resolves to for its *host*
+    app, not just its own screen-local handler (the unified-TUI regression)."""
+
+    def __init__(self, refine_screen):
+        super().__init__()
+        self.log_handler = _TuiLogHandler()
+        self._refine_screen = refine_screen
+
+    def on_mount(self):
+        self.push_screen(self._refine_screen)
+
+
+class TestRefineScreenUnifiedLogPane:
+    @pytest.mark.asyncio
+    async def test_drains_host_app_level_log_handler(self):
+        model = _model({'t1': [_race(1, 'one', 100)]})
+        screen = RefineScreen(MagicMock(), model)
+        app = _RefineHostApp(screen)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.log_handler.lines.append('unified-line')
+            await pilot.pause(0.4)  # past the 0.25s drain interval
+            log_view = screen.query_one('#log', RichLog)
             assert len(log_view.lines) >= 1
 
 

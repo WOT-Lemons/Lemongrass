@@ -28,7 +28,7 @@ from textual.widgets import (
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
-from lemongrass._tui import _logging_to, _race_label, _TuiLogHandler
+from lemongrass._tui import LogPaneScreen, _logging_to, _race_label, _TuiLogHandler
 from lemongrass.race_backfill import enumerate_series, filter_races_by_terms
 
 
@@ -341,7 +341,7 @@ class SeriesSearchModal(ModalScreen):
         self.app.call_from_thread(self.dismiss, (series_id, name, races))
 
 
-class RefineScreen(Screen):
+class RefineScreen(LogPaneScreen, Screen):
     """Two-pane refinement UI; dismisses with a RefineResult, or None on cancel.
 
     All state changes are delegated to the RaceListModel; widgets are rebuilt
@@ -432,12 +432,6 @@ class RefineScreen(Screen):
         total = len(self.model.races())
         self.query_one('#count', Label).update(
             f'Races — {len(self.model.checked)} of {total} selected')
-
-    def _drain_log(self):
-        """Move buffered log lines into the log pane."""
-        log_view = self.query_one('#log', RichLog)
-        while self.log_handler.lines:
-            log_view.write(self.log_handler.lines.popleft())
 
     def on_selection_list_selection_toggled(self, event):
         """Mirror a checkbox toggle into the model."""
