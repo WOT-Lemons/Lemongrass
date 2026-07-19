@@ -30,5 +30,10 @@
   ],
   "pep621": {
     "enabled": true
+  },
+  "lockFileMaintenance": {
+    "description": "Renovate's pep621 manager only re-locks when a pyproject.toml constraint changes, so versions that already satisfy our ranges (transitive deps especially) freeze in uv.lock between constraint bumps. Lock file maintenance runs a periodic full re-resolve (the automated equivalent of 'uv lock --upgrade') and opens a PR, gated by the existing 'uv lock --check' + pytest matrix. Locked versions pin only our dev/CI environment, not what the published wheel resolves for downstream users, so these refreshes stay a non-releasable 'chore'.",
+    "enabled": true,
+    "schedule": ["before 5am on monday"]
   }
 }
