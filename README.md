@@ -58,6 +58,9 @@ the authoritative final import.
 The scripted forms are unchanged: `lemongrass laps <race_id> [car_number]
 [-m] [-n] …` behave exactly as before and are what cron and race-backfill use.
 
+This Laps TUI is also reachable from the Home menu opened by running bare
+`lemongrass` (see [Race Management](#race-management)).
+
 ### Live Race
 
 **Docker** — pass your credentials via an env file (see `.env.sample`). To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass`.
@@ -300,6 +303,28 @@ The `races` subcommand provides tools for inspecting and managing race data stor
 ```shell
 lemongrass races <subcommand> [args]
 ```
+
+### Interactive TUI
+
+Run bare `lemongrass` with no arguments in a terminal to open a **Home menu**
+that routes to the Laps and Races tools. Run `lemongrass races` with no
+subcommand in a terminal to jump straight into the **races browser**: a
+checklist of stored races.
+
+| Key | Action |
+| --- | --- |
+| `a` | Select all races |
+| `i` | Invert the current selection |
+| `p` | Prune (delete) all checked races |
+| `d` | Diagnose the highlighted race — pick a car to compare RaceMonitor vs. InfluxDB lap counts |
+| `r` | Re-import the highlighted race |
+| `b` | Backfill — search RaceMonitor by terms and import a race |
+| `esc` | Back |
+
+Both interactive entry points require an interactive TTY (`stdin`/`stdout`
+attached to a terminal); non-interactively, or when a subcommand is given,
+`lemongrass races <subcommand>` behaves exactly as documented below.
+`telem` and `pisugar-monitor` remain CLI-only and have no TUI.
 
 | Subcommand | Description |
 | ------------ | ------------- |

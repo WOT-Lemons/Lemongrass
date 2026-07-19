@@ -4168,11 +4168,11 @@ class TestMainTuiLaunch:
         monkeypatch.setattr(sys, 'argv', ['lemongrass-laps'])
         monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
         monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
-        monkeypatch.setattr(_mod, 'resolve_tokens', lambda: 'tok')
+        monkeypatch.setattr('lemongrass._env.resolve_tokens', lambda: 'tok')
 
         called = {}
         fake_client = MagicMock()
-        monkeypatch.setattr(_mod, 'RaceMonitorClient',
+        monkeypatch.setattr('race_monitor.RaceMonitorClient',
                             lambda api_token: _cm(fake_client))
 
         def fake_run(client):

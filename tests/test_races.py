@@ -5,6 +5,42 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import lemongrass.races as _mod
+from lemongrass.races import fetch_race_rows, prune_races
+
+
+class TestFetchRaceRows:
+    def _query_api(self):
+        """Fake query_api: three queries in order — races meta, total laps, current-schema laps."""
+        def _rec(values, value=None, time=None):
+            rec = MagicMock()
+            rec.values = values
+            rec.get_value.return_value = value
+            rec.get_time.return_value = time
+            return rec
+
+        def _table(records):
+            t = MagicMock()
+            t.records = records
+            return t
+
+        meta = _table([_rec(
+            {'race_id': '144185', 'race_name': 'Sears Pointless'},
+            time=datetime(2026, 6, 1, tzinfo=UTC))])
+        totals = _table([_rec({'race_id': '144185'}, value=100)])
+        current = _table([_rec({'race_id': '144185'}, value=100)])
+
+        api = MagicMock()
+        api.query.side_effect = [[meta], [totals], [current]]
+        return api
+
+    def test_returns_row_with_counts(self):
+        rows = fetch_race_rows(self._query_api())
+        assert len(rows) == 1
+        assert rows[0]['race_id'] == '144185'
+        assert rows[0]['name'] == 'Sears Pointless'
+        assert rows[0]['date'] == '2026-06-01'
+        assert rows[0]['total'] == 100
+        assert rows[0]['current'] == 100
 
 
 class TestDispatch:
@@ -16,8 +52,9 @@ class TestDispatch:
 
     def test_no_args_exits_nonzero(self):
         with patch.object(sys, 'argv', ['lemongrass-races']):
-            with pytest.raises(SystemExit) as exc:
-                _mod.main()
+            with patch.object(sys.stdin, 'isatty', return_value=False):
+                with pytest.raises(SystemExit) as exc:
+                    _mod.main()
         assert exc.value.code != 0
 
     def test_routes_to_list(self):
@@ -45,6 +82,46 @@ class TestDispatch:
                 _mod.main()
         assert 'list' not in captured['argv']
         assert captured['argv'][0] == 'lemongrass-races-list'
+
+
+class TestPruneRaces:
+    def test_deletes_metadata_last_and_reports_progress(self):
+        delete_api = MagicMock()
+        progress = []
+        failed = prune_races(delete_api, ['144185'], on_progress=progress.append)
+        assert failed == []
+        # metadata (race measurement) delete is the last call
+        preds = [c.kwargs['predicate'] for c in delete_api.delete.call_args_list]
+        assert preds[-1].startswith('_measurement="race"')
+        assert len(progress) == 4
+
+    def test_failure_is_collected_not_raised(self):
+        delete_api = MagicMock()
+        delete_api.delete.side_effect = RuntimeError('boom')
+        failed = prune_races(delete_api, ['144185'])
+        assert failed == ['144185']
+
+    def test_failure_reported_via_on_error_when_provided(self):
+        delete_api = MagicMock()
+        delete_api.delete.side_effect = RuntimeError('boom')
+        progress = []
+        errors = []
+        failed = prune_races(delete_api, ['144185'],
+                             on_progress=progress.append, on_error=errors.append)
+        assert failed == ['144185']
+        assert len(errors) == 1
+        assert 'error pruning race 144185' in errors[0]
+        assert 'boom' in errors[0]
+        # the error line must not also be duplicated onto on_progress
+        assert not any('error pruning race' in m for m in progress)
+
+    def test_failure_falls_back_to_on_progress_when_no_on_error(self):
+        delete_api = MagicMock()
+        delete_api.delete.side_effect = RuntimeError('boom')
+        progress = []
+        failed = prune_races(delete_api, ['144185'], on_progress=progress.append)
+        assert failed == ['144185']
+        assert any('error pruning race 144185' in m for m in progress)
 
 
 class TestHandlePrune:
@@ -252,9 +329,12 @@ class TestHandlePrune:
                     with pytest.raises(SystemExit) as exc:
                         _mod._handle_prune()
         assert exc.value.code == 1
-        err = capsys.readouterr().err
-        assert 'failed to prune' in err
-        assert '12345' in err
+        captured = capsys.readouterr()
+        assert 'failed to prune' in captured.err
+        assert '12345' in captured.err
+        # the per-race error line must go to stderr, not stdout
+        assert 'error pruning race 12345' in captured.err
+        assert 'error pruning race 12345' not in captured.out
 
 
 class TestHandleBackfill:
@@ -459,3 +539,23 @@ class TestHandleDiagnose:
             with patch('lemongrass.race_diagnose.main', mock_main):
                 _mod.main()
         mock_main.assert_called_once()
+
+
+class TestRacesTuiEntry:
+    def test_bare_tty_launches_browser(self, monkeypatch):
+        monkeypatch.setattr(_mod.sys, 'argv', ['lemongrass-races'])
+        monkeypatch.setattr(_mod.sys.stdin, 'isatty', lambda: True)
+        monkeypatch.setattr(_mod.sys.stdout, 'isatty', lambda: True)
+        with patch('lemongrass._env.resolve_tokens', return_value='tok'), \
+             patch('race_monitor.RaceMonitorClient'), \
+             patch('lemongrass.races.run_races_tui', return_value=0) as run:
+            with pytest.raises(SystemExit):
+                _mod.main()
+        run.assert_called_once()
+
+    def test_unknown_subcommand_still_usage(self, monkeypatch):
+        monkeypatch.setattr(_mod.sys, 'argv', ['lemongrass-races', 'typo'])
+        monkeypatch.setattr(_mod.sys.stdin, 'isatty', lambda: True)
+        monkeypatch.setattr(_mod.sys.stdout, 'isatty', lambda: True)
+        with pytest.raises(SystemExit):
+            _mod.main()

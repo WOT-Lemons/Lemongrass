@@ -80,6 +80,16 @@ def connect(timeout=None, retries=INFLUX_RETRIES):
     return InfluxDBClient(**kwargs)
 
 
+def influx_token_present():
+    """True iff the configured Influx token env var is set.
+
+    Cheap check (no connect, no sys.exit) so a TUI can validate up front and
+    surface a clean error instead of a worker-thread SystemExit from connect().
+    """
+    token_env = _config.load_config().influx.token_env
+    return bool(os.environ.get(token_env))
+
+
 # Lap timestamps are session-anchored and Flux `stop` is exclusive, so laps can
 # legitimately fall outside the nominal race bounds; pad the window instead of
 # trusting Start/EndDateEpoc exactly. The race_id tag filter stays the exact selector.

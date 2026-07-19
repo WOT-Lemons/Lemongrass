@@ -28,7 +28,7 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
-from lemongrass._tui import _logging_to, _race_label, _TuiLogHandler
+from lemongrass._tui import _STDOUT_LOCK, _logging_to, _race_label, _TuiLogHandler
 
 
 class _StdoutToLines:
@@ -113,19 +113,19 @@ class LapBoardModel:
         return list(self._standings)
 
 
-class LapsApp(App):
-    """Laps TUI root. Owns the shared client and the routed-log handler; the
-    exit value is unused (screens perform their own work in place)."""
+class LapsFlowMixin:
+    """App-level coordination for the laps flow, shared by the standalone LapsApp and
+    the unified LemongrassApp. Both hold a RaceMonitorClient + routed log handler and
+    push the laps screens; the screens only ever reach these methods via self.app."""
 
-    def __init__(self, client):
-        super().__init__()
+    def _init_laps_flow(self, client):
         self.client = client
         self.log_handler = _TuiLogHandler()
         self.picked = None  # (race_details, is_live) once a race is chosen
         self.monitor_args = None   # set by CarSelectScreen
 
-    def on_mount(self):
-        """Open on the picker."""
+    def start_laps(self):
+        """Enter the laps flow at the race picker."""
         self.push_screen(PickerScreen(self.client))
 
     def _on_race_resolved(self, details, is_live, race_id):
@@ -152,6 +152,20 @@ class LapsApp(App):
                 self._start_import(race_id, str(race_id))
         self.push_screen(_ConfirmModal(
             'Race ended — run authoritative final import now? [y/n]'), _answer)
+
+
+class LapsApp(LapsFlowMixin, App):
+    """Laps TUI root (standalone `lemongrass laps` path). Owns the shared client
+    and the routed-log handler; the exit value is unused (screens perform their
+    own work in place)."""
+
+    def __init__(self, client):
+        super().__init__()
+        self._init_laps_flow(client)
+
+    def on_mount(self):
+        """Open on the picker."""
+        self.start_laps()
 
 
 def run_laps_tui(client):
@@ -615,7 +629,7 @@ class ImportScreen(Screen):
         # Root logging is already routed to app.log_handler by run_laps_tui for the
         # whole app lifetime, so no per-worker _logging_to is needed here.
         try:
-            with contextlib.redirect_stdout(writer):
+            with _STDOUT_LOCK, contextlib.redirect_stdout(writer):
                 rc = laps_mod.backfill_race(str(self.race_id), None, self.client, opts)
             summary = 'Import complete.' if rc == 0 else f'Import failed (exit {rc}).'
         except RaceMonitorError as exc:

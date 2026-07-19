@@ -36,6 +36,7 @@ class TestConfigErrorHandling:
 class TestDispatcher:
     def test_warns_about_dropped_env_vars_at_startup(self, monkeypatch, capsys):
         monkeypatch.setenv("OBD_PORT", "/dev/ttyUSB0")
+        monkeypatch.setattr(cli.sys.stdin, 'isatty', lambda: False)
         with patch.object(sys, 'argv', ['lemongrass']):
             with pytest.raises(SystemExit):
                 cli.main()
@@ -45,11 +46,37 @@ class TestDispatcher:
         ['lemongrass'],                    # no command
         ['lemongrass', 'notacommand'],     # unknown command
     ])
-    def test_missing_or_unknown_command_exits_nonzero(self, argv):
+    def test_missing_or_unknown_command_exits_nonzero(self, argv, monkeypatch):
+        # A bare invocation only launches the home TUI on a TTY (see
+        # test_bare_tty_launches_home); force non-TTY here so this exercises
+        # the usage/exit-1 path regardless of how tests are run.
+        monkeypatch.setattr(cli.sys.stdin, 'isatty', lambda: False)
         with patch.object(sys, 'argv', argv):
             with pytest.raises(SystemExit) as exc:
                 cli.main()
         assert exc.value.code != 0
+
+    def test_bare_tty_launches_home(self, monkeypatch):
+        monkeypatch.setattr(cli.sys, 'argv', ['lemongrass'])
+        monkeypatch.setattr(cli.sys.stdin, 'isatty', lambda: True)
+        monkeypatch.setattr(cli.sys.stdout, 'isatty', lambda: True)
+        with patch('lemongrass._env.resolve_tokens', return_value='tok'), \
+             patch('lemongrass._home_tui.run_home_tui', return_value=0) as run, \
+             patch('race_monitor.RaceMonitorClient'):
+            with patch.object(cli.sys, 'exit', side_effect=SystemExit) as exit_:
+                with pytest.raises(SystemExit):
+                    cli.main()
+        run.assert_called_once()
+        exit_.assert_called_with(0)
+
+    def test_bare_non_tty_prints_usage(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli.sys, 'argv', ['lemongrass'])
+        monkeypatch.setattr(cli.sys.stdin, 'isatty', lambda: False)
+        with patch.object(cli.sys, 'exit', side_effect=SystemExit) as exit_:
+            with pytest.raises(SystemExit):
+                cli.main()
+        assert 'Usage:' in capsys.readouterr().out
+        exit_.assert_called_with(1)
 
     def test_routes_to_laps(self):
         mock_main = MagicMock(return_value=None)
