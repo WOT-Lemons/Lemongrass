@@ -130,6 +130,85 @@ class RaceOptions:
     dry_run: bool = False
 
 
+class RaceObserver:
+    """Sink for live-race display events.
+
+    The live path (live_race / monitor_routine) calls these instead of printing
+    directly, so a front-end can render however it likes. The base class is an
+    inert default (every method a no-op); _StdoutObserver reproduces the
+    terminal output, and the TUI supplies its own widget-driving observer.
+    """
+
+    def on_rankings(self, sorted_competitors, race_live, selected_class, categories):
+        """The one-time rankings header shown at live-race start."""
+
+    def on_live_detail(self, competitor_details, class_name, class_position):
+        """The tracked competitor's detail block."""
+
+    def on_laps(self, laps):
+        """Display a full lap list (initial seed / reseed)."""
+
+    def on_lap(self, lap):
+        """A single newly-arrived lap for the tracked car."""
+
+    def on_session_change(self, session_name):
+        """The live session changed."""
+
+    def on_standings(self, session_response):
+        """A refreshed live-session response for the whole field."""
+
+    def on_status(self, text):
+        """A human-readable status line/block."""
+
+    def on_race_ended(self):
+        """The race ended naturally."""
+
+
+class _StdoutObserver(RaceObserver):
+    """Default observer: reproduces the historical terminal output."""
+
+    def on_rankings(self, sorted_competitors, race_live, selected_class, categories):
+        print_rankings(sorted_competitors, race_live, selected_class, categories)
+
+    def on_live_detail(self, competitor_details, class_name, class_position):
+        print(UNDERLINE)
+        print(
+            f"Team: {competitor_details['Name']:<6} "
+            f"Car Number: {competitor_details['Number']:<4} "
+            f"Class: {class_name} "
+            f"Transponder: {competitor_details['Transponder']}"
+        )
+        print(
+            f"Best Position:\t{competitor_details['BestPosition']:>}\n"
+            f"Final Position:\t{competitor_details['Position']:>}\n"
+            f"Final Class Position:\t"
+            f"{class_position if class_position is not None else 'N/A':>}\n"
+            f"Total Laps:\t{competitor_details['Laps']:>}\n"
+            f"Best Lap:\t{competitor_details['BestLap']:>}\n"
+            f"Best Lap Time:\t{competitor_details['BestLapTime']:>}\n"
+            f"Total Time:\t{competitor_details['TotalTime']:>}"
+        )
+        print(UNDERLINE)
+
+    def on_laps(self, laps):
+        # Table only — each call site emits its own UNDERLINE (live_race prints
+        # it after the table, monitor_routine before), so one shared method can
+        # match both call sites exactly.
+        print(pandas.json_normalize(laps).to_string(index=False))
+
+    def on_lap(self, lap):
+        print(pandas.json_normalize(lap).to_string(index=False, header=False))
+
+    def on_session_change(self, session_name):
+        print(f"\nNew session: {session_name}")
+
+    def on_status(self, text):
+        print(text)
+
+    def on_race_ended(self):
+        print("Race has ended.")
+
+
 def _build_parser():
     """Build and return the argument parser."""
     parser = argparse.ArgumentParser(description='Interact with lap data')

@@ -4041,3 +4041,39 @@ class TestBackfillRace:
         assert result == 0
         ctx = mock_run_race.call_args.args[0]
         assert ctx.client is client
+
+
+class TestStdoutObserver:
+    def test_on_live_detail_prints_class(self, capsys):
+        obs = _mod._StdoutObserver()
+        details = {'Name': 'WOT', 'Number': '7', 'Transponder': 'T1',
+                   'BestPosition': 3, 'Position': 4, 'Laps': 100,
+                   'BestLap': 42, 'BestLapTime': '1:47.0', 'TotalTime': '2:00:00'}
+        obs.on_live_detail(details, 'A', 2)
+        out = capsys.readouterr().out
+        assert 'Class: A' in out
+        assert 'Car Number: 7' in out
+
+    def test_on_session_change_prints(self, capsys):
+        _mod._StdoutObserver().on_session_change('Race Session 2')
+        assert 'New session: Race Session 2' in capsys.readouterr().out
+
+    def test_on_race_ended_prints(self, capsys):
+        _mod._StdoutObserver().on_race_ended()
+        assert 'Race has ended.' in capsys.readouterr().out
+
+    def test_on_standings_is_silent(self, capsys):
+        _mod._StdoutObserver().on_standings({'Successful': True, 'Session': {}})
+        assert capsys.readouterr().out == ''
+
+    def test_on_laps_prints_table_without_underline(self, capsys):
+        _mod._StdoutObserver().on_laps([{'Lap': '1', 'LapTime': '1:47'}])
+        out = capsys.readouterr().out
+        assert 'Lap' in out
+        assert '-' * 80 not in out  # the call site owns the underline, not on_laps
+
+    def test_base_observer_methods_are_noops(self):
+        obs = _mod.RaceObserver()
+        obs.on_lap({'Lap': 1})
+        obs.on_status('x')
+        obs.on_race_ended()  # must not raise
