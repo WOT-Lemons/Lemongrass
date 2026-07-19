@@ -561,3 +561,17 @@ class TestSeriesSearchModal:
             await self._pick_first_hit(pilot, app)
             assert isinstance(app.screen, SeriesSearchModal)
         assert app.model.series is None
+
+
+@pytest.mark.asyncio
+async def test_enter_in_series_modal_does_not_confirm_app():
+    # RefineScreen's 'enter' binding is a priority binding, but Textual only
+    # consults a priority binding against the *active* screen's chain — with
+    # SeriesSearchModal on top, RefineScreen.action_confirm must not fire.
+    app = _app({'t1': [_race(1, 'one', 100)]})
+    async with app.run_test() as pilot:
+        await pilot.press('s')            # open SeriesSearchModal
+        await pilot.pause()
+        await pilot.press('enter')        # must submit the modal search, not exit app
+        await pilot.pause()
+        assert app.return_value is None   # app has not exited with a RefineResult
