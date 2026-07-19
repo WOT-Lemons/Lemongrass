@@ -414,7 +414,7 @@ def _run_race(ctx, opts, response, observer=None):
         sys.exit(130)
 
 
-def live_race(ctx, opts, observer=None):
+def live_race(ctx, opts, observer=None, _stop_event=None):
     """Handle a live race: fetch the current session, print rankings and racer detail,
     optionally write lap points to InfluxDB, and optionally launch monitor_routine
     to poll for new laps until the race ends or the user interrupts."""
@@ -480,7 +480,7 @@ def live_race(ctx, opts, observer=None):
     if opts.monitor_mode:
         return monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
                                session_id=live_session_id, race_meta_written=race_meta_written,
-                               observer=observer)
+                               observer=observer, _stop_event=_stop_event)
 
     if opts.network_mode and not race_meta_written:
         # No monitor loop to retry in; signal a failed run so a rerun restores

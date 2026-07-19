@@ -1,9 +1,15 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from textual.widgets import Input, ListView
+from textual.widgets import DataTable, Input, ListView
 
-from lemongrass._laps_tui import CarSelectScreen, ImportConfirmScreen, LapBoardModel, LapsApp
+from lemongrass._laps_tui import (
+    CarSelectScreen,
+    ImportConfirmScreen,
+    LapBoardModel,
+    LapsApp,
+    MonitorScreen,
+)
 
 
 def _client_with_race(is_live=False):
@@ -135,8 +141,12 @@ class TestCarSelectScreen:
         client = _client_live_session()
         app = LapsApp(client)
         # _start_monitor pushes MonitorScreen (Task 8), whose worker would launch
-        # a real live_race against the mock — patch it out.
-        with patch('lemongrass.laps.live_race', return_value=None):
+        # a real live_race against the mock — patch it out. The default 'Write to
+        # InfluxDB' checkbox is on, so the worker also opens a real _influx.connect()
+        # before live_race; patch that too so the worker thread never touches the
+        # network or requires INFLUX_TELEMETRY_TOKEN to be set.
+        with patch('lemongrass.laps.live_race', return_value=None), \
+                patch('lemongrass._influx.connect'):
             async with app.run_test() as pilot:
                 app.push_screen(CarSelectScreen(client, 42, 'Sears'))
                 await app.workers.wait_for_complete()
@@ -147,3 +157,43 @@ class TestCarSelectScreen:
                 await pilot.press('enter')
                 await pilot.pause()
         assert app.monitor_args == (42, '7', True, 30)
+
+
+class TestMonitorScreen:
+    @pytest.mark.asyncio
+    async def test_observer_updates_lap_table(self):
+        client = MagicMock()
+        app = LapsApp(client)
+
+        # Stub live_race so no real polling happens; drive the observer directly.
+        # The signature MUST include _stop_event — MonitorScreen._run passes it,
+        # and patch forwards all kwargs to the side_effect (a missing param would
+        # raise TypeError before the body runs, leaving the table empty).
+        def fake_live_race(ctx, opts, observer=None, _stop_event=None):
+            observer.on_laps([{'Lap': '1', 'LapTime': '1:47', 'Position': '3'}])
+            observer.on_lap({'Lap': '2', 'LapTime': '1:46', 'Position': '2'})
+            return None
+
+        async with app.run_test() as pilot:
+            with patch('lemongrass.laps.live_race', side_effect=fake_live_race):
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                table = app.screen.query_one('#laps', DataTable)
+                assert table.row_count == 2
+
+    def test_network_ctx_populates_write_handles(self):
+        # Finding: network mode must build a write-enabled ctx (write/delete/query
+        # handles + metadata), else every InfluxDB write silently no-ops.
+        client = MagicMock()
+        client.race.details.return_value = {'Successful': True, 'Race': {
+            'Name': 'R', 'Track': 'T', 'StartDateEpoc': 111}}
+        from lemongrass import laps as laps_mod
+        screen = MonitorScreen(client, 42, '7', True, 0)
+        influx = MagicMock()
+        ctx = screen._network_ctx(laps_mod, influx)
+        assert ctx.write_api is influx.write_api.return_value
+        assert ctx.delete_api is influx.delete_api.return_value
+        assert ctx.query_api is influx.query_api.return_value
+        assert ctx.metadata is not None
+        assert ctx.start_epoc == 111

@@ -5,24 +5,28 @@ with no Textual imports, so the rendering logic is unit-testable. The screens
 below drive it from a background worker via _TuiObserver.
 """
 
+import threading
 from typing import ClassVar
 
 from race_monitor import RaceMonitorError
 from textual import work
 from textual.app import App
 from textual.binding import Binding, BindingType
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import (
     Checkbox,
+    DataTable,
     Footer,
     Input,
     Label,
     ListItem,
     ListView,
+    RichLog,
 )
 from textual.worker import get_current_worker
 
-from lemongrass._tui import _race_label, _TuiLogHandler
+from lemongrass._tui import _logging_to, _race_label, _TuiLogHandler
 
 
 def _as_int(value):
@@ -109,6 +113,7 @@ class LapsApp(App):
 
     def _start_monitor(self, race_id, car_number, network, interval):
         self.monitor_args = (race_id, car_number, network, interval)
+        self.push_screen(MonitorScreen(self.client, race_id, car_number, network, interval))
 
 
 class PickerScreen(Screen):
@@ -268,6 +273,185 @@ class CarSelectScreen(Screen):
         network = self.query_one('#write', Checkbox).value
         interval = _as_int(self.query_one('#interval', Input).value) or 30
         self.app._start_monitor(self.race_id, car_number, network, interval)
+
+
+class _TuiObserver:
+    """laps.RaceObserver that marshals live events onto MonitorScreen.
+
+    Not a subclass import to avoid a circular import at module load; laps
+    accepts any object with these methods (duck-typed observer).
+    """
+
+    def __init__(self, screen):
+        self._screen = screen
+
+    def _call(self, fn, *args):
+        # Runs on the monitor worker thread. Skip marshalling into a torn-down
+        # event loop if the worker was cancelled (app exit not routed through
+        # action_quit_monitor).
+        if get_current_worker().is_cancelled:
+            return
+        self._screen.app.call_from_thread(fn, *args)
+
+    def on_rankings(self, sorted_competitors, race_live, selected_class, categories):
+        pass  # the TUI renders its own leaderboard from on_standings
+
+    def on_live_detail(self, competitor_details, class_name, class_position):
+        name = competitor_details.get('Name', '')
+        self._call(self._screen.set_header,
+                   f"#{competitor_details.get('Number', '?')} {name} — class {class_name}")
+
+    def on_laps(self, laps):
+        self._call(self._screen.set_laps, laps)
+
+    def on_lap(self, lap):
+        self._call(self._screen.add_lap, lap)
+
+    def on_session_change(self, session_name):
+        self._call(self._screen.log_line, f'New session: {session_name}')
+
+    def on_standings(self, session_response):
+        self._call(self._screen.set_standings, session_response)
+
+    def on_status(self, text):
+        # Drop the 80-dash separator lines the terminal path emits — they are
+        # noise in the log pane.
+        if text.strip('-\n'):
+            self._call(self._screen.log_line, text)
+
+    def on_race_ended(self):
+        self._call(self._screen.on_race_ended)
+
+
+class MonitorScreen(Screen):
+    """Live dashboard: tracked-car laps, field leaderboard, log pane."""
+
+    CSS = """
+    #laps { height: 1fr; }
+    #board { height: 1fr; }
+    #log { height: 6; }
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('q', 'quit_monitor', 'Quit'),
+    ]
+
+    def __init__(self, client, race_id, car_number, network, interval):
+        super().__init__()
+        self.client = client
+        self.race_id = race_id
+        self.car_number = car_number
+        self.network = network
+        self.interval = interval
+        self.board = LapBoardModel()
+        self._stop = threading.Event()
+
+    def compose(self):
+        yield Label('', id='header')
+        with Horizontal():
+            with Vertical():
+                yield Label('Laps')
+                yield DataTable(id='laps')
+            with Vertical():
+                yield Label('Leaderboard')
+                yield DataTable(id='board')
+        yield RichLog(id='log')
+        yield Footer()
+
+    def on_mount(self):
+        self.query_one('#laps', DataTable).add_columns('Lap', 'Time', 'Pos', 'ClassPos')
+        self.query_one('#board', DataTable).add_columns('Pos', '#', 'Name', 'Laps', 'Best')
+        self.set_interval(0.25, self._drain_log)
+        self._run()
+
+    # --- observer-driven UI updates (main thread) ---
+    def set_header(self, text):
+        self.query_one('#header', Label).update(text)
+
+    def set_laps(self, laps):
+        self.board.set_laps(laps)
+        self._rebuild_laps()
+
+    def add_lap(self, lap):
+        self.board.add_lap(lap)
+        self._rebuild_laps()
+
+    def _rebuild_laps(self):
+        table = self.query_one('#laps', DataTable)
+        table.clear()
+        for row in self.board.lap_rows():
+            table.add_row(*(str(c) for c in row))
+
+    def set_standings(self, session_response):
+        self.board.set_standings(session_response)
+        table = self.query_one('#board', DataTable)
+        table.clear()
+        for row in self.board.leaderboard_rows():
+            table.add_row(*(str(c) for c in row))
+
+    def log_line(self, text):
+        self.query_one('#log', RichLog).write(text)
+
+    def on_race_ended(self):
+        self.log_line('Race has ended.')
+        self.app.offer_final_import(self.race_id)  # Task 10
+
+    def _drain_log(self):
+        log_view = self.query_one('#log', RichLog)
+        while self.app.log_handler.lines:
+            log_view.write(self.app.log_handler.lines.popleft())
+
+    # --- background monitor loop ---
+    @work(thread=True)
+    def _run(self):
+        from lemongrass import _influx
+        from lemongrass import laps as laps_mod
+        opts = laps_mod.RaceOptions(
+            network_mode=self.network, monitor_mode=True, interval=self.interval)
+        observer = _TuiObserver(self)
+        with _logging_to(self.app.log_handler):
+            try:
+                if self.network:
+                    # Writing needs a live Influx handle + resolved metadata,
+                    # exactly as laps.backfill_race sets up before live_race. The
+                    # connection stays open for the whole poll loop.
+                    with _influx.connect() as influx_client:
+                        ctx = self._network_ctx(laps_mod, influx_client)
+                        laps_mod.live_race(ctx, opts, observer=observer,
+                                           _stop_event=self._stop)
+                else:
+                    ctx = laps_mod.RaceContext(
+                        str(self.race_id), str(self.car_number), self.client, None, 0)
+                    laps_mod.live_race(ctx, opts, observer=observer,
+                                       _stop_event=self._stop)
+            except RaceMonitorError as exc:
+                self.app.call_from_thread(self.log_line, f'error: {exc}')
+
+    def _network_ctx(self, laps_mod, influx_client):
+        """Build a write-enabled RaceContext, mirroring backfill_race's live
+        setup: a SYNCHRONOUS write_api, delete/query handles, and race metadata
+        resolved from a race.details fetch (also the source of the start epoch).
+        Without this, network writes silently no-op (write_api=None)."""
+        from influxdb_client.client.write_api import SYNCHRONOUS
+        race_details = self.client.race.details(self.race_id)
+        metadata = laps_mod._resolve_race_metadata(race_details, self.client)
+        start_epoc = (race_details['Race'].get('StartDateEpoc', 0)
+                      if race_details.get('Successful') else 0)
+        return laps_mod.RaceContext(
+            str(self.race_id), str(self.car_number), self.client,
+            influx_client.write_api(write_options=SYNCHRONOUS), start_epoc,
+            metadata=metadata,
+            delete_api=influx_client.delete_api(),
+            query_api=influx_client.query_api())
+
+    def action_quit_monitor(self):
+        self._stop.set()
+        self.app.pop_screen()
+
+    def on_unmount(self):
+        # End the poll loop on ANY teardown (app exit, ctrl+c), not just `q`, so
+        # the worker never keeps polling into a torn-down event loop.
+        self._stop.set()
 
 
 class ImportConfirmScreen(Screen):
