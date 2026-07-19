@@ -127,6 +127,18 @@ class LapsApp(App):
             'Race ended — run authoritative final import now? [y/n]'), _answer)
 
 
+def run_laps_tui(client):
+    """Run the laps TUI against an already-open RaceMonitorClient.
+
+    Root logging is routed into the in-app log pane for the app's lifetime and
+    restored afterwards. Returns 0.
+    """
+    app = LapsApp(client)
+    with _logging_to(app.log_handler):
+        app.run()
+    return 0
+
+
 class _ConfirmModal(ModalScreen):
     """Tiny yes/no modal. Dismisses True on 'y', False on 'n'/escape."""
 

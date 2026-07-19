@@ -1,6 +1,8 @@
 import logging
 import os
+import sys
 import threading
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, call, mock_open, patch
@@ -9,6 +11,11 @@ import pytest
 
 import lemongrass._env as _env_mod
 import lemongrass.laps as _mod
+
+
+@contextmanager
+def _cm(obj):
+    yield obj
 
 
 def _single_car_session_details(car_number='42', category='1', category_name='A',
@@ -4147,3 +4154,32 @@ class TestStdoutObserver:
         obs.on_lap({'Lap': 1})
         obs.on_status('x')
         obs.on_race_ended()  # must not raise
+
+
+class TestMainTuiLaunch:
+    def test_no_args_tty_launches_tui(self, monkeypatch):
+        monkeypatch.setattr(sys, 'argv', ['lemongrass-laps'])
+        monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+        monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
+        monkeypatch.setattr(_mod, 'resolve_tokens', lambda: 'tok')
+
+        called = {}
+        fake_client = MagicMock()
+        monkeypatch.setattr(_mod, 'RaceMonitorClient',
+                            lambda api_token: _cm(fake_client))
+
+        def fake_run(client):
+            called['client'] = client
+            return 0
+        monkeypatch.setattr('lemongrass._laps_tui.run_laps_tui', fake_run)
+
+        with pytest.raises(SystemExit) as exc:
+            _mod.main()
+        assert exc.value.code == 0
+        assert called['client'] is fake_client
+
+    def test_no_args_non_tty_errors_as_before(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, 'argv', ['lemongrass-laps'])
+        monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
+        with pytest.raises(SystemExit):
+            _mod.main()  # argparse errors on the required race_id

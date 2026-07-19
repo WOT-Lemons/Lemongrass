@@ -249,6 +249,25 @@ def _build_parser():
 
 def main():
     """Parse arguments and orchestrate race data retrieval."""
+    # Bare `laps` on a terminal launches the interactive TUI. Any positional
+    # args (race_id …) or a non-TTY invocation fall through unaffected to the
+    # existing argument-parsed behavior below, so scripts, cron, and
+    # race-backfill's in-process calls are unaffected. logging.basicConfig is
+    # scoped to this branch only — it must not be called unconditionally here,
+    # since the later basicConfig(format=...) calls below are no-ops once the
+    # root logger already has a handler, which would silently change the
+    # scripted path's log format. The textual import stays lazy for
+    # non-interactive runs.
+    if len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty():
+        logging.basicConfig(level=logging.INFO)
+        tokens = resolve_tokens()
+        if not tokens:
+            logging.error("%s environment variable not set", _env.tokens_env_hint())
+            sys.exit(1)
+        from lemongrass._laps_tui import run_laps_tui
+        with RaceMonitorClient(api_token=tokens) as client:
+            sys.exit(run_laps_tui(client))
+
     args = _build_parser().parse_args()
 
     if args.verbose:
