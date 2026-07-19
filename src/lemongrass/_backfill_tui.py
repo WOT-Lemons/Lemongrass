@@ -374,7 +374,6 @@ class RefineScreen(LogPaneScreen, Screen):
         self.client = client
         self.model = model
         self.series_error = series_error
-        self.log_handler = _TuiLogHandler()
 
     def compose(self):
         """Lay out the series section, terms pane, races checklist, and footer."""
@@ -550,6 +549,7 @@ class BackfillApp(App):
         series_error, when set, is the exception from a failed config-driven
         series enumeration, surfaced as an error state in the Series pane."""
         super().__init__()
+        self.log_handler = _TuiLogHandler()
         self._screen = RefineScreen(client, model, series_error=series_error)
 
     def on_mount(self):
@@ -560,11 +560,6 @@ class BackfillApp(App):
     def model(self):
         """Proxy to the screen's RaceListModel (tests read app.model directly)."""
         return self._screen.model
-
-    @property
-    def log_handler(self):
-        """Proxy to the screen's log handler (refine_races' _logging_to needs it)."""
-        return self._screen.log_handler
 
     def query_one(self, *args, **kwargs):
         """Proxy to the screen (see class docstring: App.query_one() alone
