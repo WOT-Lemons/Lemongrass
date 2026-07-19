@@ -247,3 +247,18 @@ class TestImportFlow:
                 await pilot.pause()
         bf.assert_called_once()
         assert bf.call_args.args[0] == '42'
+
+
+class TestFinalImportPrompt:
+    @pytest.mark.asyncio
+    async def test_offer_then_confirm_pushes_import(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        # Confirming pushes ImportScreen, whose worker runs backfill_race — patch it.
+        with patch('lemongrass.laps.backfill_race', return_value=0):
+            async with app.run_test() as pilot:
+                app.offer_final_import(42)
+                await pilot.pause()
+                await pilot.press('y')
+                await pilot.pause()
+                assert isinstance(app.screen, ImportScreen)

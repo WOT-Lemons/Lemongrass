@@ -13,7 +13,7 @@ from textual import work
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Checkbox,
     DataTable,
@@ -117,6 +117,38 @@ class LapsApp(App):
 
     def _start_import(self, race_id, race_name):
         self.push_screen(ImportScreen(self.client, race_id, race_name))
+
+    def offer_final_import(self, race_id):
+        """After a race ends live, offer to run the authoritative import."""
+        def _answer(yes):
+            if yes:
+                self._start_import(race_id, str(race_id))
+        self.push_screen(_ConfirmModal(
+            'Race ended — run authoritative final import now? [y/n]'), _answer)
+
+
+class _ConfirmModal(ModalScreen):
+    """Tiny yes/no modal. Dismisses True on 'y', False on 'n'/escape."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('y', 'yes', 'Yes'),
+        Binding('n', 'no', 'No'),
+        Binding('escape', 'no', 'No', show=False),
+    ]
+
+    def __init__(self, prompt):
+        super().__init__()
+        self._prompt = prompt
+
+    def compose(self):
+        yield Label(self._prompt)
+        yield Footer()
+
+    def action_yes(self):
+        self.dismiss(True)
+
+    def action_no(self):
+        self.dismiss(False)
 
 
 class PickerScreen(Screen):
