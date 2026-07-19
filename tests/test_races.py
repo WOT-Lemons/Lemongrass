@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import lemongrass.races as _mod
-from lemongrass.races import fetch_race_rows
+from lemongrass.races import fetch_race_rows, prune_races
 
 
 class TestFetchRaceRows:
@@ -81,6 +81,24 @@ class TestDispatch:
                 _mod.main()
         assert 'list' not in captured['argv']
         assert captured['argv'][0] == 'lemongrass-races-list'
+
+
+class TestPruneRaces:
+    def test_deletes_metadata_last_and_reports_progress(self):
+        delete_api = MagicMock()
+        progress = []
+        failed = prune_races(delete_api, ['144185'], on_progress=progress.append)
+        assert failed == []
+        # metadata (race measurement) delete is the last call
+        preds = [c.kwargs['predicate'] for c in delete_api.delete.call_args_list]
+        assert preds[-1].startswith('_measurement="race"')
+        assert len(progress) == 4
+
+    def test_failure_is_collected_not_raised(self):
+        delete_api = MagicMock()
+        delete_api.delete.side_effect = RuntimeError('boom')
+        failed = prune_races(delete_api, ['144185'])
+        assert failed == ['144185']
 
 
 class TestHandlePrune:

@@ -101,6 +101,46 @@ def _handle_list():
                   f"{info['total']:<8} {schema_str}")
 
 
+def prune_races(delete_api, race_ids, on_progress=None):
+    """Delete all data for each race id across the session/lap/standings/race buckets.
+
+    Race metadata is deleted LAST: the caller's not-found guard keys off the race
+    measurement, so as long as it survives, a retry after a partial failure can still
+    clean up orphaned rows. on_progress(message) is called after each successful bucket
+    delete. Returns the ids that failed (each logged via on_progress too)."""
+    def _note(msg):
+        if on_progress:
+            on_progress(msg)
+
+    now = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+    failed = []
+    for rid in race_ids:
+        try:
+            delete_api.delete(start=EPOCH_START, stop=now,
+                              predicate=f'_measurement="session" AND race_id="{rid}"',
+                              bucket=_influx.BUCKET_SESSIONS)
+            _note(f"Deleted sessions for race {rid}")
+
+            delete_api.delete(start=EPOCH_START, stop=now,
+                              predicate=f'_measurement="lap" AND race_id="{rid}"',
+                              bucket=_influx.BUCKET_LAPS)
+            _note(f"Deleted laps for race {rid}")
+
+            delete_api.delete(start=EPOCH_START, stop=now,
+                              predicate=f'_measurement="standings" AND race_id="{rid}"',
+                              bucket=_influx.BUCKET_LAPS)
+            _note(f"Deleted standings for race {rid}")
+
+            delete_api.delete(start=EPOCH_START, stop=now,
+                              predicate=f'_measurement="race" AND race_id="{rid}"',
+                              bucket=_influx.BUCKET_RACES)
+            _note(f"Deleted race metadata for race {rid}")
+        except Exception as e:  # record-and-continue across races
+            _note(f"error pruning race {rid}: {e}")
+            failed.append(rid)
+    return failed
+
+
 def _handle_prune():
     """Parse args and delete all data for the specified race(s) from InfluxDB,
     prompting for confirmation unless --yes is passed."""
@@ -151,37 +191,8 @@ def _handle_prune():
                 print("Aborted.")
                 sys.exit(0)
 
-        now = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
         delete_api = client.delete_api()
-
-        failed = []
-        for rid in race_ids:
-            try:
-                # Delete race metadata LAST: the not-found guard above keys off the
-                # race measurement, so as long as it survives, a retry after a partial
-                # failure can still clean up orphaned session/lap/standings rows.
-                delete_api.delete(start=EPOCH_START, stop=now,
-                                  predicate=f'_measurement="session" AND race_id="{rid}"',
-                                  bucket=_influx.BUCKET_SESSIONS)
-                print(f"Deleted sessions for race {rid}")
-
-                delete_api.delete(start=EPOCH_START, stop=now,
-                                  predicate=f'_measurement="lap" AND race_id="{rid}"',
-                                  bucket=_influx.BUCKET_LAPS)
-                print(f"Deleted laps for race {rid}")
-
-                delete_api.delete(start=EPOCH_START, stop=now,
-                                  predicate=f'_measurement="standings" AND race_id="{rid}"',
-                                  bucket=_influx.BUCKET_LAPS)
-                print(f"Deleted standings for race {rid}")
-
-                delete_api.delete(start=EPOCH_START, stop=now,
-                                  predicate=f'_measurement="race" AND race_id="{rid}"',
-                                  bucket=_influx.BUCKET_RACES)
-                print(f"Deleted race metadata for race {rid}")
-            except Exception as e:
-                print(f"error pruning race {rid}: {e}", file=sys.stderr)
-                failed.append(rid)
+        failed = prune_races(delete_api, race_ids, on_progress=print)
         if failed:
             print("failed to prune:", " ".join(failed), file=sys.stderr)
             sys.exit(1)
