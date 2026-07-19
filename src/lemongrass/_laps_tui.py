@@ -425,7 +425,8 @@ class MonitorScreen(Screen):
                     laps_mod.live_race(ctx, opts, observer=observer,
                                        _stop_event=self._stop)
             except RaceMonitorError as exc:
-                self.app.call_from_thread(self.log_line, f'error: {exc}')
+                if not get_current_worker().is_cancelled:
+                    self.app.call_from_thread(self.log_line, f'error: {exc}')
 
     def _network_ctx(self, laps_mod, influx_client):
         """Build a write-enabled RaceContext, mirroring backfill_race's live

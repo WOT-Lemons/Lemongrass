@@ -1,7 +1,8 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from textual.widgets import DataTable, Input, ListView
+from race_monitor import RaceMonitorError
+from textual.widgets import DataTable, Input, ListView, RichLog
 
 from lemongrass._laps_tui import (
     CarSelectScreen,
@@ -181,6 +182,26 @@ class TestMonitorScreen:
                 await pilot.pause()
                 table = app.screen.query_one('#laps', DataTable)
                 assert table.row_count == 2
+
+    @pytest.mark.asyncio
+    async def test_run_logs_race_monitor_error_when_not_cancelled(self):
+        # Guards the normal (not-cancelled) error path: MonitorScreen._run's
+        # except RaceMonitorError guards call_from_thread with
+        # get_current_worker().is_cancelled (mirroring _TuiObserver._call) so a
+        # 429-style error mid-teardown doesn't crash the app. This test confirms
+        # the guard doesn't also suppress error reporting in the common case
+        # where the worker is still running.
+        client = MagicMock()
+        app = LapsApp(client)
+
+        async with app.run_test() as pilot:
+            with patch('lemongrass.laps.live_race', side_effect=RaceMonitorError('boom')):
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                log = app.screen.query_one('#log', RichLog)
+                text = '\n'.join(str(line) for line in log.lines)
+                assert 'boom' in text
 
     def test_network_ctx_populates_write_handles(self):
         # Finding: network mode must build a write-enabled ctx (write/delete/query
