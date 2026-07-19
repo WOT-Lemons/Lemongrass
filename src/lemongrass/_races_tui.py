@@ -2,6 +2,7 @@
 re-import them. The race table (the `list` view) is the hub; keys act on the checked
 batch (prune) or the highlighted row (diagnose / re-import)."""
 
+import contextlib
 import logging
 from typing import ClassVar
 
@@ -14,7 +15,9 @@ from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
 from lemongrass import _influx
-from lemongrass._tui import LogPaneScreen
+from lemongrass._laps_tui import _StdoutToLines
+from lemongrass._tui import _STDOUT_LOCK, LogPaneScreen
+from lemongrass.race_diagnose import diagnose_api, diagnose_influx
 from lemongrass.races import fetch_race_rows, prune_races
 
 
@@ -276,7 +279,12 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         self.app.call_from_thread(self._load)  # reload the list
 
     def action_diagnose(self):
-        """Diagnose the highlighted race. Stub — implemented in Task 7."""
+        """Diagnose the highlighted race: pick a car, then stream diagnose output."""
+        row = self.row_for_highlight()
+        if row is None:
+            self.app.notify('highlight a race first', severity='warning')
+            return
+        self.app.push_screen(DiagnoseCarScreen(row['race_id'], row['name']))
 
     def action_reimport(self):
         """Re-import the highlighted race. Stub — implemented in Task 11."""
@@ -285,9 +293,16 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         """Backfill the highlighted race. Stub — implemented in Task 11."""
 
 
-class DiagnoseOutputScreen(Screen):
-    """Temporary stub so `DiagnoseCarScreen` can push a real screen; Task 7 fleshes
-    this out into the streaming diagnose-output view (api + influx checks)."""
+class DiagnoseOutputScreen(LogPaneScreen, Screen):
+    """Run diagnose_api + diagnose_influx for one race/car, streaming their print()
+    output into a scrollable log pane."""
+
+    CSS = "#log { height: 1fr; }"
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('escape', 'app.pop_screen', 'Back'),
+        Binding('q', 'app.pop_screen', 'Back', show=False),
+    ]
 
     def __init__(self, race_id, car_number):
         """Store the race/car being diagnosed."""
@@ -296,5 +311,33 @@ class DiagnoseOutputScreen(Screen):
         self.car_number = car_number
 
     def compose(self):
-        """Render a placeholder body (replaced in Task 7)."""
-        yield Label('')
+        """Render the title, log pane, and footer."""
+        yield Label(f'Diagnose #{self.race_id} car {self.car_number}', id='title')
+        yield RichLog(id='log')
+        yield Footer()
+
+    def on_mount(self):
+        """Start the log drain timer, then kick off the diagnose worker."""
+        self.set_interval(0.25, self._drain_log)
+        self._run()
+
+    @work(thread=True, exclusive=True)
+    def _run(self):
+        worker = get_current_worker()
+        writer = _StdoutToLines(self.app.log_handler.lines)
+        try:
+            with _STDOUT_LOCK, contextlib.redirect_stdout(writer):
+                start_epoc, end_epoc = diagnose_api(
+                    self.app.client, self.race_id, self.car_number)
+                with _influx.connect() as client:
+                    diagnose_influx(client.query_api(), self.race_id,
+                                     self.car_number, start_epoc, end_epoc)
+        except Exception as exc:
+            logging.exception('diagnose failed')
+            self.app.log_handler.lines.append(f'diagnose failed: {exc}')
+        finally:
+            writer.flush()
+        if not worker.is_cancelled:
+            self.app.call_from_thread(
+                self.query_one('#title', Label).update,
+                f'Diagnose #{self.race_id} car {self.car_number} — done')

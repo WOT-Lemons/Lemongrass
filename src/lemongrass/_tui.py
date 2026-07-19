@@ -1,11 +1,17 @@
 """Shared Textual helpers used by the backfill and laps TUIs."""
 
 import logging
+import threading
 from collections import deque
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from textual.widgets import RichLog
+
+# Guards contextlib.redirect_stdout, which mutates process-global sys.stdout. The
+# import / diagnose / backfill workers all redirect; serialize so concurrent workers
+# can't clobber each other's restore and leak print() to the real terminal.
+_STDOUT_LOCK = threading.Lock()
 
 
 class _TuiLogHandler(logging.Handler):

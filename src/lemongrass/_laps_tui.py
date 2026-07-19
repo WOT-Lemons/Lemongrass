@@ -28,7 +28,7 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
-from lemongrass._tui import _logging_to, _race_label, _TuiLogHandler
+from lemongrass._tui import _STDOUT_LOCK, _logging_to, _race_label, _TuiLogHandler
 
 
 class _StdoutToLines:
@@ -615,7 +615,7 @@ class ImportScreen(Screen):
         # Root logging is already routed to app.log_handler by run_laps_tui for the
         # whole app lifetime, so no per-worker _logging_to is needed here.
         try:
-            with contextlib.redirect_stdout(writer):
+            with _STDOUT_LOCK, contextlib.redirect_stdout(writer):
                 rc = laps_mod.backfill_race(str(self.race_id), None, self.client, opts)
             summary = 'Import complete.' if rc == 0 else f'Import failed (exit {rc}).'
         except RaceMonitorError as exc:

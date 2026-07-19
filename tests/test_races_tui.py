@@ -80,6 +80,35 @@ async def test_browser_loads_rows_into_selection_list():
             assert len(sl._options) == 2
 
 
+@pytest.mark.asyncio
+async def test_diagnose_output_runs_both_and_streams():
+    client = MagicMock()
+    app = _Host(client)
+    calls = {}
+
+    def _api(c, rid, car):
+        print(f'API {rid} {car}')
+        calls['api'] = (rid, car)
+        return (0, 0)
+
+    def _influx_diag(q, rid, car, start_epoc=0, end_epoc=0):
+        print(f'INFLUX {rid} {car}')
+        calls['influx'] = (rid, car)
+
+    with patch('lemongrass._races_tui.diagnose_api', _api), \
+         patch('lemongrass._races_tui.diagnose_influx', _influx_diag), \
+         patch('lemongrass._races_tui._influx.connect') as connect:
+        connect.return_value.__enter__.return_value = MagicMock()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(DiagnoseOutputScreen('144185', '252'))
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert calls['api'] == ('144185', '252')
+            assert calls['influx'] == ('144185', '252')
+
+
 def test_distinct_car_numbers_extracts_values():
     rec = MagicMock()
     rec.get_value.return_value = '252'
