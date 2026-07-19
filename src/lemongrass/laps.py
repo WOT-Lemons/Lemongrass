@@ -130,9 +130,93 @@ class RaceOptions:
     dry_run: bool = False
 
 
+class RaceObserver:
+    """Sink for live-race display events.
+
+    The live path (live_race / monitor_routine) calls these instead of printing
+    directly, so a front-end can render however it likes. The base class is an
+    inert default (every method a no-op); _StdoutObserver reproduces the
+    terminal output, and the TUI supplies its own widget-driving observer.
+    """
+
+    def on_rankings(self, sorted_competitors, race_live, selected_class, categories):
+        """The one-time rankings header shown at live-race start."""
+
+    def on_live_detail(self, competitor_details, class_name, class_position):
+        """The tracked competitor's detail block."""
+
+    def on_laps(self, laps):
+        """Display a full lap list (initial seed / reseed)."""
+
+    def on_lap(self, lap):
+        """A single newly-arrived lap for the tracked car."""
+
+    def on_session_change(self, session_name):
+        """The live session changed."""
+
+    def on_standings(self, session_response):
+        """A refreshed live-session response for the whole field."""
+
+    def on_status(self, text):
+        """A human-readable status line/block."""
+
+    def on_race_ended(self):
+        """The race ended naturally."""
+
+
+class _StdoutObserver(RaceObserver):
+    """Default observer: reproduces the historical terminal output."""
+
+    def on_rankings(self, sorted_competitors, race_live, selected_class, categories):
+        print_rankings(sorted_competitors, race_live, selected_class, categories)
+
+    def on_live_detail(self, competitor_details, class_name, class_position):
+        print(UNDERLINE)
+        print(
+            f"Team: {competitor_details['Name']:<6} "
+            f"Car Number: {competitor_details['Number']:<4} "
+            f"Class: {class_name} "
+            f"Transponder: {competitor_details['Transponder']}"
+        )
+        print(
+            f"Best Position:\t{competitor_details['BestPosition']:>}\n"
+            f"Final Position:\t{competitor_details['Position']:>}\n"
+            f"Final Class Position:\t"
+            f"{class_position if class_position is not None else 'N/A':>}\n"
+            f"Total Laps:\t{competitor_details['Laps']:>}\n"
+            f"Best Lap:\t{competitor_details['BestLap']:>}\n"
+            f"Best Lap Time:\t{competitor_details['BestLapTime']:>}\n"
+            f"Total Time:\t{competitor_details['TotalTime']:>}"
+        )
+        print(UNDERLINE)
+
+    def on_laps(self, laps):
+        # Table only — each call site emits its own UNDERLINE (live_race prints
+        # it after the table, monitor_routine before), so one shared method can
+        # match both call sites exactly.
+        print(pandas.json_normalize(laps).to_string(index=False))
+
+    def on_lap(self, lap):
+        print(pandas.json_normalize(lap).to_string(index=False, header=False))
+
+    def on_session_change(self, session_name):
+        print(f"\nNew session: {session_name}")
+
+    def on_status(self, text):
+        print(text)
+
+    def on_race_ended(self):
+        print("Race has ended.")
+
+
 def _build_parser():
     """Build and return the argument parser."""
-    parser = argparse.ArgumentParser(description='Interact with lap data')
+    parser = argparse.ArgumentParser(
+        description='Interact with lap data',
+        epilog='Run with no arguments in a terminal to open the interactive TUI: '
+               'search for a race, then watch it live or import a completed race. '
+               'Passing a race_id (or any non-terminal invocation) uses the '
+               'scripted behavior below.')
     parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
     parser.add_argument('car_number', metavar='car_number', nargs='?', type=int, default=None)
     parser.add_argument('-c', '--class', metavar='A/B/C', dest='selected_class', nargs='?',
@@ -170,6 +254,25 @@ def _build_parser():
 
 def main():
     """Parse arguments and orchestrate race data retrieval."""
+    # Bare `laps` on a terminal launches the interactive TUI. Any positional
+    # args (race_id …) or a non-TTY invocation fall through unaffected to the
+    # existing argument-parsed behavior below, so scripts, cron, and
+    # race-backfill's in-process calls are unaffected. logging.basicConfig is
+    # scoped to this branch only — it must not be called unconditionally here,
+    # since the later basicConfig(format=...) calls below are no-ops once the
+    # root logger already has a handler, which would silently change the
+    # scripted path's log format. The textual import stays lazy for
+    # non-interactive runs.
+    if len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty():
+        logging.basicConfig(level=logging.INFO)
+        tokens = resolve_tokens()
+        if not tokens:
+            logging.error("%s environment variable not set", _env.tokens_env_hint())
+            sys.exit(1)
+        from lemongrass._laps_tui import run_laps_tui
+        with RaceMonitorClient(api_token=tokens) as client:
+            sys.exit(run_laps_tui(client))
+
     args = _build_parser().parse_args()
 
     if args.verbose:
@@ -240,7 +343,7 @@ def main():
         sys.exit(130)
 
 
-def backfill_race(race_id, car_number, client, opts):
+def backfill_race(race_id, car_number, client, opts, observer=None):
     """Fetch and process one race using an already-open RaceMonitorClient.
 
     Extracted from main() so a batch caller (race-backfill --upgrade-stored) can
@@ -291,12 +394,12 @@ def backfill_race(race_id, car_number, client, opts):
     if not opts.network_mode:
         return _run_race(
             RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
-            opts, response)
+            opts, response, observer=observer)
 
     if opts.dry_run:
         return _run_race(
             RaceContext(race_id, car_number, client, None, start_epoc, metadata=metadata),
-            opts, response)
+            opts, response, observer=observer)
 
     with _influx.connect() as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
@@ -305,10 +408,10 @@ def backfill_race(race_id, car_number, client, opts):
         return _run_race(
             RaceContext(race_id, car_number, client, write_api, start_epoc,
                         metadata=metadata, delete_api=delete_api,
-                        query_api=query_api), opts, response)
+                        query_api=query_api), opts, response, observer=observer)
 
 
-def _run_race(ctx, opts, response):
+def _run_race(ctx, opts, response, observer=None):
     """Dispatch to live_race or old_race based on race status."""
     try:
         if response['IsLive'] is not True:
@@ -322,7 +425,7 @@ def _run_race(ctx, opts, response):
                 logging.error(
                     "--dry-run is historical-only; race %s is live", ctx.race_id)
                 return 1
-            result = live_race(ctx, opts)
+            result = live_race(ctx, opts, observer=observer)
             if result is MonitorStatus.INTERRUPTED:
                 sys.exit(130)
             if result is MonitorStatus.NO_LIVE_DATA:
@@ -335,10 +438,13 @@ def _run_race(ctx, opts, response):
         sys.exit(130)
 
 
-def live_race(ctx, opts):
+def live_race(ctx, opts, observer=None, _stop_event=None):
     """Handle a live race: fetch the current session, print rankings and racer detail,
     optionally write lap points to InfluxDB, and optionally launch monitor_routine
     to poll for new laps until the race ends or the user interrupts."""
+    if observer is None:
+        observer = _StdoutObserver()
+
     session_response = ctx.client.live.get_session(ctx.race_id)
 
     live_session_id = None
@@ -347,7 +453,7 @@ def live_race(ctx, opts):
         live_session_id = session_response['Session'].get('ID')
         live_session_name = session_response['Session'].get('Name')
 
-    print_rankings([], True, opts.selected_class, {})
+    observer.on_rankings([], True, opts.selected_class, {})
 
     # Get lap times from live racer
     logging.debug("Getting lap times for %s from race %s.", ctx.car_number, ctx.race_id)
@@ -369,29 +475,10 @@ def live_race(ctx, opts):
     car_info = competitor_details.get('AdditionalData') or None
     class_name, class_position = _resolve_class_live(session_response, ctx.car_number)
 
-    print(UNDERLINE)
-    # Print competitor detail block
-    print(
-        f"Team: {competitor_details['Name']:<6} "
-        f"Car Number: {competitor_details['Number']:<4} "
-        f"Class: {class_name} "
-        f"Transponder: {competitor_details['Transponder']}"
-    )
-    print(
-        f"Best Position:\t{competitor_details['BestPosition']:>}\n"
-        f"Final Position:\t{competitor_details['Position']:>}\n"
-        f"Final Class Position:\t{class_position if class_position is not None else 'N/A':>}\n"
-        f"Total Laps:\t{competitor_details['Laps']:>}\n"
-        f"Best Lap:\t{competitor_details['BestLap']:>}\n"
-        f"Best Lap Time:\t{competitor_details['BestLapTime']:>}\n"
-        f"Total Time:\t{competitor_details['TotalTime']:>}"
-    )
-    print(UNDERLINE)
+    observer.on_live_detail(competitor_details, class_name, class_position)
 
-    # Create pandas dataframe and print without index to remove row numbers
-    lap_time_df = pandas.json_normalize(laps)
-    print(lap_time_df.to_string(index=False))
-    print(UNDERLINE)
+    observer.on_laps(laps)
+    observer.on_status(UNDERLINE)
 
     race_meta_written = True
     if opts.network_mode:
@@ -408,6 +495,10 @@ def live_race(ctx, opts):
                         class_name=class_name, class_positions=None, session_id=live_session_id)
         push_influx_standings_live(ctx, session_response, live_session_id)
 
+    # Seed the leaderboard immediately regardless of network mode; otherwise a
+    # non-network run shows a blank leaderboard until monitor_routine's first poll.
+    observer.on_standings(session_response)
+
     if opts.save_file:
         # Create filename and call function to write to CSV
         filename = f"{competitor_details['Name']}-{ctx.race_id}"
@@ -415,7 +506,8 @@ def live_race(ctx, opts):
 
     if opts.monitor_mode:
         return monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
-                               session_id=live_session_id, race_meta_written=race_meta_written)
+                               session_id=live_session_id, race_meta_written=race_meta_written,
+                               observer=observer, _stop_event=_stop_event)
 
     if opts.network_mode and not race_meta_written:
         # No monitor loop to retry in; signal a failed run so a rerun restores
@@ -721,8 +813,10 @@ def write_csv(filename, competitor_lap_times):
 
 
 def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
-                    session_id=None, race_meta_written=True) -> MonitorStatus | None:
-    """Poll for new laps during a live race, printing and optionally pushing each to InfluxDB.
+                    session_id=None, race_meta_written=True,
+                    observer=None) -> MonitorStatus | None:
+    """Poll for new laps during a live race, displaying and optionally pushing each
+    to InfluxDB via the given observer (defaults to _StdoutObserver).
 
     Returns MonitorStatus.RACE_ENDED when the race ends naturally, or
     MonitorStatus.INTERRUPTED on KeyboardInterrupt (caller should exit 130).
@@ -736,12 +830,12 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     write is retried each poll until it lands, so a transient delete/write
     failure self-heals without aborting lap capture.
     """
+    if observer is None:
+        observer = _StdoutObserver()
     logging.info("Monitoring car %s...", ctx.car_number)
-    print(UNDERLINE)
 
-    # Create pandas dataframe and print without index to remove row numbers
-    lap_time_df = pandas.json_normalize(laps)
-    print(lap_time_df.to_string(index=False))
+    observer.on_status(UNDERLINE)
+    observer.on_laps(laps)
 
     stop = _stop_event if _stop_event is not None else threading.Event()
     poll_count = 0
@@ -785,7 +879,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             if session_response.get('Successful'):
                 new_session_id = session_response['Session'].get('ID')
                 if new_session_id and new_session_id != session_id:
-                    print(f"\nNew session: {session_response['Session'].get('Name', '')}")
+                    observer.on_session_change(session_response['Session'].get('Name', ''))
                     session_id = new_session_id
                     prev_standings = {}
                     if opts.network_mode:
@@ -797,12 +891,13 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             if opts.network_mode:
                 prev_standings = push_influx_standings_live(
                     ctx, session_response, session_id, prev_standings)
+            observer.on_standings(session_response)
 
             if poll_count % _LIVE_CHECK_INTERVAL == 0:
                 try:
                     live_response = ctx.client.race.is_live(ctx.race_id)
                     if live_response.get('Successful') and not live_response.get('IsLive'):
-                        print("Race has ended.")
+                        observer.on_race_ended()
                         return MonitorStatus.RACE_ENDED
                 except Exception:
                     logging.debug("is_live check failed; skipping")
@@ -817,8 +912,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
 
             for lap in current_competitor_lap_times:
                 if lap not in laps:
-                    current_competitor_lap_time_df = pandas.json_normalize(lap)
-                    print(current_competitor_lap_time_df.to_string(index=False, header=False))
+                    observer.on_lap(lap)
                     laps.append(lap)
                     if opts.network_mode:
                         class_name, class_position = _resolve_class_live(
@@ -839,7 +933,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                             class_name=class_name, class_positions=class_positions,
                             session_id=session_id)
     except KeyboardInterrupt:
-        print("\nMonitoring stopped.")
+        observer.on_status("\nMonitoring stopped.")
         return MonitorStatus.INTERRUPTED
 
 

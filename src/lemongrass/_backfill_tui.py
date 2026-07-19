@@ -7,11 +7,7 @@ every piece of state and all merge/dedup logic, with no UI imports, so the
 behavior is unit-testable without Textual.
 """
 
-import logging
-from collections import deque
-from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import ClassVar
 
 from race_monitor import RaceMonitorError
@@ -32,6 +28,7 @@ from textual.widgets import (
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
+from lemongrass._tui import _logging_to, _race_label, _TuiLogHandler
 from lemongrass.race_backfill import enumerate_series, filter_races_by_terms
 
 
@@ -50,47 +47,6 @@ class RefineResult:
     terms_changed: bool
     series_id: int = 0
     series_changed: bool = False
-
-
-class _TuiLogHandler(logging.Handler):
-    """Buffer formatted log records for the TUI's log pane.
-
-    emit() only appends to a deque, so it is safe from any thread — the
-    worker threads' httpx and rate-limiter records included. BackfillApp
-    drains the buffer into the RichLog widget on a timer; nothing here may
-    touch Textual.
-    """
-
-    def __init__(self):
-        super().__init__(level=logging.INFO)
-        self.lines = deque(maxlen=200)
-        self.setFormatter(logging.Formatter(
-            '%(asctime)s %(levelname)s %(message)s', datefmt='%H:%M:%S'))
-
-    def emit(self, record):
-        """Append the formatted record to the bounded buffer."""
-        self.lines.append(self.format(record))
-
-
-@contextmanager
-def _logging_to(handler):
-    """Route root logging exclusively to handler for the duration.
-
-    The terminal handlers would corrupt the Textual display; they are
-    restored on exit even if the app crashes, so post-TUI logging prints
-    normally.
-    """
-    root = logging.getLogger()
-    saved = root.handlers[:]
-    for existing in saved:
-        root.removeHandler(existing)
-    root.addHandler(handler)
-    try:
-        yield
-    finally:
-        root.removeHandler(handler)
-        for existing in saved:
-            root.addHandler(existing)
 
 
 # Cache key for the pinned-series source. An object sentinel, not a string:
@@ -245,12 +201,6 @@ class RaceListModel:
     def terms_changed(self):
         """True if the active terms differ from the session's initial terms."""
         return tuple(self.terms) != self._initial_terms
-
-
-def _race_label(race):
-    """One checklist row: 'YYYY-MM-DD  Name  (#id)'."""
-    day = datetime.fromtimestamp(race['StartDateEpoc'], tz=UTC).strftime('%Y-%m-%d')
-    return f"{day}  {race['Name']}  (#{race['ID']})"
 
 
 class SeriesSearchModal(ModalScreen):

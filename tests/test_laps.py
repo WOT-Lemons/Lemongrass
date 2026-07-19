@@ -1,6 +1,8 @@
 import logging
 import os
+import sys
 import threading
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, call, mock_open, patch
@@ -9,6 +11,11 @@ import pytest
 
 import lemongrass._env as _env_mod
 import lemongrass.laps as _mod
+
+
+@contextmanager
+def _cm(obj):
+    yield obj
 
 
 def _single_car_session_details(car_number='42', category='1', category_name='A',
@@ -60,6 +67,16 @@ def _capture_lap_points():
 
     cm = patch.object(_mod, '_write_points_chunked', side_effect=_cap)
     return captured, cm
+
+
+def _monitor_ctx():
+    """RaceContext with a fake client whose live.get_session returns a
+    Successful session, for monitor_routine observer tests."""
+    ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+    ctx.client.live.get_session.return_value = {
+        'Successful': True, 'Session': {
+            'ID': 's1', 'Name': 'S1', 'Competitors': {}, 'Classes': {}}}
+    return ctx
 
 
 class TestResolveTokens:
@@ -482,6 +499,26 @@ class TestMonitorRoutine:
                 result = _mod.monitor_routine(ctx, [], opts)
         assert ctx.client.race.is_live.called  # the check fired and raised
         assert result is None  # loop exited via stop, not a crash or RACE_ENDED
+
+
+class TestMonitorRoutineObserver:
+    def test_emits_new_lap_and_standings_and_ended(self):
+        obs = MagicMock()
+        stop = threading.Event()
+        # refresh_competitor returns a new lap on the first poll, then stop.
+        new_lap = {'Lap': '5', 'LapTime': '1:47.0', 'TotalTime': '9:00.0', 'Position': '3'}
+
+        def fake_refresh(ctx):
+            stop.set()  # exit after this poll
+            return [new_lap]
+
+        ctx = _monitor_ctx()  # fake client; get_session returns Successful session
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            _mod.monitor_routine(ctx, [], opts, _stop_event=stop, observer=obs)
+        assert obs.on_lap.call_args_list[0].args[0] == new_lap
+        assert obs.on_laps.called          # initial seed
+        assert obs.on_standings.called     # once per poll
 
 
 class TestWriteCSV:
@@ -1043,6 +1080,13 @@ class TestArgParserCarNumber:
         args = _mod._build_parser().parse_args(['12345'])
         assert args.car_number is None
 
+    def test_help_advertises_interactive_tui(self):
+        # `laps -h` is the primary discovery surface for the no-arg TUI mode, and
+        # argparse otherwise shows race_id as required — so the help must mention it.
+        help_text = _mod._build_parser().format_help()
+        assert 'no arguments' in help_text
+        assert 'interactive' in help_text.lower()
+
 
 class TestExistingLapCountsFieldwide:
     def _query_api(self, lap_no_count=0, current_count=0):
@@ -1224,6 +1268,46 @@ class TestLiveRace:
                 _mod.live_race(ctx, opts)
         mock_csv.assert_called_once()
         assert mock_csv.call_args.args[0] == 'Jane Doe-999'
+
+
+class TestLiveRaceObserver:
+    def test_live_race_emits_detail_and_laps_to_observer(self):
+        obs = MagicMock()
+        client = MagicMock()
+        client.live.get_session.return_value = {'Successful': True, 'Session': {
+            'ID': 's1', 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
+        client.live.get_racer.return_value = {'Successful': True, 'Details': {
+            'Laps': [{'Lap': '1', 'LapTime': '1:47', 'TotalTime': '9:00',
+                      'Position': '3'}],
+            'Competitor': {'FirstName': 'Jo', 'LastName': 'X', 'Number': '7',
+                           'Transponder': 'T', 'BestPosition': 3, 'Position': 4,
+                           'Laps': 1, 'BestLap': 1, 'BestLapTime': '1:47',
+                           'TotalTime': '9:00'}}}
+        ctx = _mod.RaceContext('42', '7', client, None, 0)
+        opts = _mod.RaceOptions(network_mode=False, monitor_mode=False)
+        _mod.live_race(ctx, opts, observer=obs)
+        assert obs.on_live_detail.called
+        assert obs.on_laps.called
+
+    def test_live_race_forwards_stop_event_to_monitor_routine(self):
+        # A pre-set stop event must make the monitor loop exit on its first
+        # stop.wait() instead of hanging, proving _stop_event is threaded through.
+        obs = MagicMock()
+        client = MagicMock()
+        client.live.get_session.return_value = {'Successful': True, 'Session': {
+            'ID': 's1', 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
+        client.live.get_racer.return_value = {'Successful': True, 'Details': {
+            'Laps': [{'Lap': '1', 'LapTime': '1:47', 'TotalTime': '9:00',
+                      'Position': '3'}],
+            'Competitor': {'FirstName': 'Jo', 'LastName': 'X', 'Number': '7',
+                           'Transponder': 'T', 'BestPosition': 3, 'Position': 4,
+                           'Laps': 1, 'BestLap': 1, 'BestLapTime': '1:47',
+                           'TotalTime': '9:00'}}}
+        ctx = _mod.RaceContext('42', '7', client, None, 0)
+        opts = _mod.RaceOptions(network_mode=False, monitor_mode=True)
+        stop = threading.Event()
+        stop.set()
+        assert _mod.live_race(ctx, opts, observer=obs, _stop_event=stop) is None
 
 
 class TestLiveRaceStandingsWrite:
@@ -4041,3 +4125,68 @@ class TestBackfillRace:
         assert result == 0
         ctx = mock_run_race.call_args.args[0]
         assert ctx.client is client
+
+
+class TestStdoutObserver:
+    def test_on_live_detail_prints_class(self, capsys):
+        obs = _mod._StdoutObserver()
+        details = {'Name': 'WOT', 'Number': '7', 'Transponder': 'T1',
+                   'BestPosition': 3, 'Position': 4, 'Laps': 100,
+                   'BestLap': 42, 'BestLapTime': '1:47.0', 'TotalTime': '2:00:00'}
+        obs.on_live_detail(details, 'A', 2)
+        out = capsys.readouterr().out
+        assert 'Class: A' in out
+        assert 'Car Number: 7' in out
+
+    def test_on_session_change_prints(self, capsys):
+        _mod._StdoutObserver().on_session_change('Race Session 2')
+        assert 'New session: Race Session 2' in capsys.readouterr().out
+
+    def test_on_race_ended_prints(self, capsys):
+        _mod._StdoutObserver().on_race_ended()
+        assert 'Race has ended.' in capsys.readouterr().out
+
+    def test_on_standings_is_silent(self, capsys):
+        _mod._StdoutObserver().on_standings({'Successful': True, 'Session': {}})
+        assert capsys.readouterr().out == ''
+
+    def test_on_laps_prints_table_without_underline(self, capsys):
+        _mod._StdoutObserver().on_laps([{'Lap': '1', 'LapTime': '1:47'}])
+        out = capsys.readouterr().out
+        assert 'Lap' in out
+        assert '-' * 80 not in out  # the call site owns the underline, not on_laps
+
+    def test_base_observer_methods_are_noops(self):
+        obs = _mod.RaceObserver()
+        obs.on_lap({'Lap': 1})
+        obs.on_status('x')
+        obs.on_race_ended()  # must not raise
+
+
+class TestMainTuiLaunch:
+    def test_no_args_tty_launches_tui(self, monkeypatch):
+        monkeypatch.setattr(sys, 'argv', ['lemongrass-laps'])
+        monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+        monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
+        monkeypatch.setattr(_mod, 'resolve_tokens', lambda: 'tok')
+
+        called = {}
+        fake_client = MagicMock()
+        monkeypatch.setattr(_mod, 'RaceMonitorClient',
+                            lambda api_token: _cm(fake_client))
+
+        def fake_run(client):
+            called['client'] = client
+            return 0
+        monkeypatch.setattr('lemongrass._laps_tui.run_laps_tui', fake_run)
+
+        with pytest.raises(SystemExit) as exc:
+            _mod.main()
+        assert exc.value.code == 0
+        assert called['client'] is fake_client
+
+    def test_no_args_non_tty_errors_as_before(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, 'argv', ['lemongrass-laps'])
+        monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
+        with pytest.raises(SystemExit):
+            _mod.main()  # argparse errors on the required race_id

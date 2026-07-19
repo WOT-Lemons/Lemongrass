@@ -47,6 +47,17 @@ Pull the latest image:
 docker pull ghcr.io/wot-lemons/lemongrass:latest
 ```
 
+### Interactive TUI
+
+Run `lemongrass laps` with no arguments in a terminal to open an interactive
+UI: search for a race by name or paste its numeric ID, then either watch it
+live (lap table, field leaderboard, and a log pane) or import a completed
+race's full field into InfluxDB. When a live race ends, the UI offers to run
+the authoritative final import.
+
+The scripted forms are unchanged: `lemongrass laps <race_id> [car_number]
+[-m] [-n] …` behave exactly as before and are what cron and race-backfill use.
+
 ### Live Race
 
 **Docker** — pass your credentials via an env file (see `.env.sample`). To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass`.
