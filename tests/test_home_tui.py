@@ -36,3 +36,20 @@ async def test_home_routes_to_laps():
         app.start_laps()
         await pilot.pause()
         assert isinstance(app.screen, PickerScreen)
+
+
+@pytest.mark.asyncio
+async def test_start_screen_opens_directly_on_races_browser():
+    app = LemongrassApp(MagicMock(), start_screen=RacesBrowserScreen())
+    with patch('lemongrass._races_tui._influx.influx_token_present', return_value=False):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, RacesBrowserScreen)
+
+
+@pytest.mark.asyncio
+async def test_default_start_screen_still_opens_on_home():
+    app = LemongrassApp(MagicMock())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, HomeScreen)

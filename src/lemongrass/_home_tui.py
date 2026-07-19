@@ -45,14 +45,21 @@ class HomeScreen(Screen):
 class LemongrassApp(LapsFlowMixin, App):
     """Root app: opens on Home, routes to the laps flow or the races browser."""
 
-    def __init__(self, client):
-        """Store the shared RaceMonitorClient and set up the laps flow state."""
+    def __init__(self, client, start_screen=None):
+        """Store the shared RaceMonitorClient and set up the laps flow state.
+
+        start_screen, if given, is pushed on mount instead of the Home menu —
+        used to open the app directly on a specific screen (e.g. the races
+        browser) while still sharing Home's app-level state and bindings.
+        """
         super().__init__()
         self._init_laps_flow(client)
+        self._start_screen = start_screen
 
     def on_mount(self):
-        """Open on the Home menu."""
-        self.push_screen(HomeScreen())
+        """Open on start_screen if given, else the Home menu."""
+        self.push_screen(self._start_screen if self._start_screen is not None
+                         else HomeScreen())
 
     def open_races(self):
         """Enter the races browser."""

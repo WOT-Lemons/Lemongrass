@@ -52,8 +52,9 @@ class TestDispatch:
 
     def test_no_args_exits_nonzero(self):
         with patch.object(sys, 'argv', ['lemongrass-races']):
-            with pytest.raises(SystemExit) as exc:
-                _mod.main()
+            with patch.object(sys.stdin, 'isatty', return_value=False):
+                with pytest.raises(SystemExit) as exc:
+                    _mod.main()
         assert exc.value.code != 0
 
     def test_routes_to_list(self):
@@ -513,3 +514,23 @@ class TestHandleDiagnose:
             with patch('lemongrass.race_diagnose.main', mock_main):
                 _mod.main()
         mock_main.assert_called_once()
+
+
+class TestRacesTuiEntry:
+    def test_bare_tty_launches_browser(self, monkeypatch):
+        monkeypatch.setattr(_mod.sys, 'argv', ['lemongrass-races'])
+        monkeypatch.setattr(_mod.sys.stdin, 'isatty', lambda: True)
+        monkeypatch.setattr(_mod.sys.stdout, 'isatty', lambda: True)
+        with patch('lemongrass._env.resolve_tokens', return_value='tok'), \
+             patch('race_monitor.RaceMonitorClient'), \
+             patch('lemongrass.races.run_races_tui', return_value=0) as run:
+            with pytest.raises(SystemExit):
+                _mod.main()
+        run.assert_called_once()
+
+    def test_unknown_subcommand_still_usage(self, monkeypatch):
+        monkeypatch.setattr(_mod.sys, 'argv', ['lemongrass-races', 'typo'])
+        monkeypatch.setattr(_mod.sys.stdin, 'isatty', lambda: True)
+        monkeypatch.setattr(_mod.sys.stdout, 'isatty', lambda: True)
+        with pytest.raises(SystemExit):
+            _mod.main()

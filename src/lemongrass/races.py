@@ -17,8 +17,25 @@ _SUBCOMMANDS = ('list', 'prune', 'backfill', 'diagnose')
 
 
 def main():
-    """Entry point for `lemongrass races`. Dispatches to the appropriate subcommand
-    handler (list, prune, backfill, diagnose) based on the first argument."""
+    """Entry point for `lemongrass races`. With no args on an interactive TTY,
+    opens the unified races browser; otherwise dispatches to the appropriate
+    subcommand handler (list, prune, backfill, diagnose) based on the first
+    argument."""
+    if len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty():
+        import logging
+
+        from race_monitor import RaceMonitorClient
+
+        from lemongrass import _env
+        from lemongrass._env import resolve_tokens
+        logging.basicConfig(level=logging.INFO)
+        tokens = resolve_tokens()
+        if not tokens:
+            print(f"{_env.tokens_env_hint()} not set", file=sys.stderr)
+            sys.exit(1)
+        with RaceMonitorClient(api_token=tokens) as client:
+            sys.exit(run_races_tui(client))
+
     if len(sys.argv) < 2 or sys.argv[1] not in _SUBCOMMANDS:
         print("Usage: lemongrass races <subcommand> [args]")
         print(f"Subcommands: {', '.join(_SUBCOMMANDS)}")
@@ -27,6 +44,18 @@ def main():
     sys.argv[0] = f'lemongrass-races-{subcmd}'
     {'list': _handle_list, 'prune': _handle_prune,
      'backfill': _handle_backfill, 'diagnose': _handle_diagnose}[subcmd]()
+
+
+def run_races_tui(client):
+    """Run the unified app opening directly on the races browser."""
+    from lemongrass._home_tui import LemongrassApp
+    from lemongrass._races_tui import RacesBrowserScreen
+    from lemongrass._tui import _logging_to
+
+    app = LemongrassApp(client, start_screen=RacesBrowserScreen())
+    with _logging_to(app.log_handler):
+        app.run()
+    return 0
 
 
 def fetch_race_rows(query_api):
