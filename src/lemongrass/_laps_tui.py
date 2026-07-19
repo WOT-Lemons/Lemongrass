@@ -5,6 +5,8 @@ with no Textual imports, so the rendering logic is unit-testable. The screens
 below drive it from a background worker via _TuiObserver.
 """
 
+import contextlib
+import logging
 import threading
 from typing import ClassVar
 
@@ -27,6 +29,31 @@ from textual.widgets import (
 from textual.worker import get_current_worker
 
 from lemongrass._tui import _logging_to, _race_label, _TuiLogHandler
+
+
+class _StdoutToLines:
+    """File-like sink: buffers writes and appends complete lines to a deque.
+
+    Used to redirect backfill_race's raw print() output into the TUI log pane
+    (the same deque MonitorScreen/ImportScreen drain on a timer) so it never
+    reaches the real terminal and corrupts the Textual display. deque.append is
+    atomic, so this is safe to feed from the import worker thread.
+    """
+
+    def __init__(self, lines):
+        self._lines = lines
+        self._buf = ''
+
+    def write(self, text):
+        self._buf += text
+        while '\n' in self._buf:
+            line, self._buf = self._buf.split('\n', 1)
+            self._lines.append(line)
+
+    def flush(self):
+        if self._buf:
+            self._lines.append(self._buf)
+            self._buf = ''
 
 
 def _as_int(value):
@@ -477,6 +504,10 @@ class MonitorScreen(Screen):
             except RaceMonitorError as exc:
                 if not get_current_worker().is_cancelled:
                     self.app.call_from_thread(self.log_line, f'error: {exc}')
+            except Exception as exc:  # last resort: a TUI worker must never crash the app
+                logging.exception("monitor worker failed")
+                if not get_current_worker().is_cancelled:
+                    self.app.call_from_thread(self.log_line, f'error: {exc}')
 
     def _network_ctx(self, laps_mod, influx_client):
         """Build a write-enabled RaceContext, mirroring backfill_race's live
@@ -561,15 +592,21 @@ class ImportScreen(Screen):
     def _run(self):
         from lemongrass import laps as laps_mod
         opts = laps_mod.RaceOptions(network_mode=True)
+        summary = None
+        writer = _StdoutToLines(self.app.log_handler.lines)
         with _logging_to(self.app.log_handler):
             try:
-                rc = laps_mod.backfill_race(str(self.race_id), None, self.client, opts)
+                with contextlib.redirect_stdout(writer):
+                    rc = laps_mod.backfill_race(str(self.race_id), None, self.client, opts)
+                summary = 'Import complete.' if rc == 0 else f'Import failed (exit {rc}).'
             except RaceMonitorError as exc:
-                if not get_current_worker().is_cancelled:
-                    self.app.call_from_thread(self._done, f'import failed: {exc}')
-                return
-        summary = 'Import complete.' if rc == 0 else f'Import failed (exit {rc}).'
-        if not get_current_worker().is_cancelled:
+                summary = f'import failed: {exc}'
+            except Exception as exc:  # last resort: a TUI worker must never crash the app
+                logging.exception("import worker failed")
+                summary = f'import failed: {exc}'
+            finally:
+                writer.flush()
+        if summary is not None and not get_current_worker().is_cancelled:
             self.app.call_from_thread(self._done, summary)
 
     def _done(self, message):

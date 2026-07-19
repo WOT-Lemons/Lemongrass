@@ -220,6 +220,25 @@ class TestMonitorScreen:
         assert ctx.metadata is not None
         assert ctx.start_epoc == 111
 
+    @pytest.mark.asyncio
+    async def test_run_survives_non_race_monitor_error(self):
+        # Finding 2: MonitorScreen._run only caught RaceMonitorError, so any other
+        # exception (e.g. a bad Influx token raising something else) would exit the
+        # whole Textual app via the worker's default exit_on_error=True instead of
+        # surfacing in the log pane.
+        client = MagicMock()
+        app = LapsApp(client)
+
+        async with app.run_test() as pilot:
+            with patch('lemongrass.laps.live_race', side_effect=ValueError('boom')):
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert app.is_running
+                log = app.screen.query_one('#log', RichLog)
+                text = '\n'.join(str(line) for line in log.lines)
+                assert 'boom' in text
+
 
 class TestImportFlow:
     @pytest.mark.asyncio
@@ -262,6 +281,51 @@ class TestImportFlow:
                 await pilot.pause()
                 title = screen.query_one('#title', Label)
                 assert str(title.render()) == 'Import complete.'
+
+    @pytest.mark.asyncio
+    async def test_backfill_stdout_is_captured_not_leaked_to_terminal(self):
+        # Finding 1: backfill_race does unconditional print() calls (race header,
+        # completed-race import path via _StdoutObserver). _logging_to only
+        # redirects logging.*, not stdout, so those prints would corrupt the
+        # Textual display. ImportScreen._run must redirect stdout into the same
+        # deque the log-pane timer drains.
+        client = MagicMock()
+        app = LapsApp(client)
+
+        def fake_backfill_race(race_id, car_number, client, opts, observer=None):
+            print('RACE HEADER LINE')
+            return 0
+
+        with patch('lemongrass.laps.backfill_race', side_effect=fake_backfill_race):
+            async with app.run_test() as pilot:
+                screen = ImportScreen(client, 42, 'Sears')
+                app.push_screen(screen)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                buffered = list(app.log_handler.lines)
+                log = screen.query_one('#log', RichLog)
+                drained_text = '\n'.join(str(line) for line in log.lines)
+                assert 'RACE HEADER LINE' in buffered or 'RACE HEADER LINE' in drained_text
+
+    @pytest.mark.asyncio
+    async def test_run_survives_non_race_monitor_error(self):
+        # Finding 2: ImportScreen._run only caught RaceMonitorError, so any other
+        # exception raised out of backfill_race (e.g. a bad Influx token) would
+        # exit the whole Textual app instead of surfacing in the UI.
+        client = MagicMock()
+        app = LapsApp(client)
+
+        with patch('lemongrass.laps.backfill_race', side_effect=ValueError('bad influx token')):
+            async with app.run_test() as pilot:
+                screen = ImportScreen(client, 42, 'Sears')
+                app.push_screen(screen)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert app.is_running
+                title = screen.query_one('#title', Label)
+                log = screen.query_one('#log', RichLog)
+                log_text = '\n'.join(str(line) for line in log.lines)
+                assert 'bad influx token' in str(title.render()) or 'bad influx token' in log_text
 
 
 class TestFinalImportPrompt:
