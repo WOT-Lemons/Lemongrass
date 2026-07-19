@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from race_monitor import RaceMonitorError
-from textual.widgets import DataTable, Input, ListView, RichLog
+from textual.widgets import DataTable, Input, Label, ListView, RichLog
 
 from lemongrass._laps_tui import (
     CarSelectScreen,
@@ -247,6 +247,21 @@ class TestImportFlow:
                 await pilot.pause()
         bf.assert_called_once()
         assert bf.call_args.args[0] == '42'
+
+    @pytest.mark.asyncio
+    async def test_uncancelled_worker_surfaces_summary(self):
+        # Guards against the is_cancelled check (added for #q-during-import) silently
+        # swallowing the summary on the normal, not-cancelled completion path.
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.backfill_race', return_value=0):
+            async with app.run_test() as pilot:
+                screen = ImportScreen(client, 42, 'Sears')
+                app.push_screen(screen)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                title = screen.query_one('#title', Label)
+                assert str(title.render()) == 'Import complete.'
 
 
 class TestFinalImportPrompt:

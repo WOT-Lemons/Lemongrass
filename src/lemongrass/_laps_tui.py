@@ -222,8 +222,11 @@ class PickerScreen(Screen):
         view.clear()
         for race in self._hits:
             view.append(ListItem(Label(_race_label(race))))
-        self._status(f'{len(self._hits)} races — pick one'
-                     if self._hits else 'no races found')
+        if self._hits:
+            noun = 'race' if len(self._hits) == 1 else 'races'
+            self._status(f'{len(self._hits)} {noun} — pick one')
+        else:
+            self._status('no races found')
 
     def on_list_view_selected(self, event):
         index = self.query_one('#hits', ListView).index
@@ -562,10 +565,12 @@ class ImportScreen(Screen):
             try:
                 rc = laps_mod.backfill_race(str(self.race_id), None, self.client, opts)
             except RaceMonitorError as exc:
-                self.app.call_from_thread(self._done, f'import failed: {exc}')
+                if not get_current_worker().is_cancelled:
+                    self.app.call_from_thread(self._done, f'import failed: {exc}')
                 return
         summary = 'Import complete.' if rc == 0 else f'Import failed (exit {rc}).'
-        self.app.call_from_thread(self._done, summary)
+        if not get_current_worker().is_cancelled:
+            self.app.call_from_thread(self._done, summary)
 
     def _done(self, message):
         self.query_one('#title', Label).update(message)
