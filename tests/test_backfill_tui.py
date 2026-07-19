@@ -6,7 +6,6 @@ from textual.app import App
 from textual.widgets import Input, Label, ListView, RichLog, SelectionList
 
 from lemongrass._backfill_tui import (
-    BackfillApp,
     RaceListModel,
     RefineScreen,
     SeriesSearchModal,
@@ -23,8 +22,27 @@ def _model(races_by_term=None, terms=('t1',), start_epoc=0, series=None):
 
 def _app(races_by_term=None, terms=('t1',), start_epoc=0, client=None,
          series=None, series_error=None):
+    from lemongrass._home_tui import LemongrassApp
+
     model = RaceListModel(terms, races_by_term or {}, start_epoc, series=series)
-    return BackfillApp(client or MagicMock(), model, series_error=series_error)
+    client = client or MagicMock()
+    screen = RefineScreen(client, model, series_error=series_error)
+    return LemongrassApp(client, start_screen=screen, exit_on_start_dismiss=True)
+
+
+@pytest.mark.asyncio
+async def test_seeded_refine_screen_dismissal_becomes_exit_value():
+    from lemongrass._backfill_tui import RaceListModel, RefineResult, RefineScreen
+    from lemongrass._home_tui import LemongrassApp
+
+    model = RaceListModel(['x'], {'x': [_race(1, 'one', 100)]}, 0)
+    screen = RefineScreen(MagicMock(), model)
+    app = LemongrassApp(MagicMock(), start_screen=screen, exit_on_start_dismiss=True)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press('enter')          # RefineScreen.action_confirm → dismiss
+        await pilot.pause()
+    assert isinstance(app.return_value, RefineResult)
 
 
 class TestBackfillAppLogPane:
@@ -34,7 +52,7 @@ class TestBackfillAppLogPane:
         async with app.run_test() as pilot:
             app.screen.sink.write_line('sleeping 9.77s')
             await pilot.pause(0.4)  # past the 0.25s drain interval
-            log_view = app.query_one('#log', RichLog)
+            log_view = app.screen.query_one('#log', RichLog)
             assert len(log_view.lines) >= 1
 
 
@@ -293,7 +311,7 @@ class TestBackfillAppSeries:
                    series=(1234, 'Lemons', [_race(9, 'series t1', 300),
                                             _race(8, 'unmatched', 200)]))
         async with app.run_test() as pilot:
-            label = str(app.query_one('#series', Label).content)
+            label = str(app.screen.query_one('#series', Label).content)
             assert 'Lemons' in label and '1 of 2 races' in label
             await pilot.press('enter')
         result = app.return_value
@@ -308,22 +326,23 @@ class TestBackfillAppSeries:
                    series=(1234, 'Lemons', [_race(8, 'gp du lac', 100),
                                             _race(9, 'hoopties', 200)]))
         async with app.run_test() as pilot:
-            app.query_one('#new-term', Input).focus()
+            app.screen.query_one('#new-term', Input).focus()
             await pilot.pause()
             for ch in 'hoop':
                 await pilot.press(ch)
             await pilot.press('enter')
             await pilot.pause()
-            label = str(app.query_one('#series', Label).content)
+            label = str(app.screen.query_one('#series', Label).content)
             assert '1 of 2 races' in label
+            terms = app.screen.model.terms
         client.results.search_results.assert_not_called()
-        assert app.model.terms == ['hoop']
+        assert terms == ['hoop']
 
     @pytest.mark.asyncio
     async def test_no_series_shows_hint(self):
         app = _app({'t1': [_race(1, 'one', 100)]})
         async with app.run_test():
-            label = str(app.query_one('#series', Label).content)
+            label = str(app.screen.query_one('#series', Label).content)
         assert 'press s' in label
 
     @pytest.mark.asyncio
@@ -332,7 +351,7 @@ class TestBackfillAppSeries:
                    series_error=RaceMonitorError('beta broke'))
         app.notify = MagicMock()
         async with app.run_test() as pilot:
-            label = str(app.query_one('#series', Label).content)
+            label = str(app.screen.query_one('#series', Label).content)
             assert 'failed' in label
             await pilot.press('enter')
         app.notify.assert_called_once()
@@ -342,7 +361,7 @@ class TestBackfillAppSeries:
 
 class TestBackfillAppTerms:
     async def _type_term(self, pilot, app, term):
-        app.query_one('#new-term', Input).focus()
+        app.screen.query_one('#new-term', Input).focus()
         await pilot.pause()
         for ch in term:
             await pilot.press(ch)
@@ -358,7 +377,7 @@ class TestBackfillAppTerms:
         app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
         async with app.run_test() as pilot:
             await self._type_term(pilot, app, 'gp')
-            app.query_one('#races', SelectionList).focus()
+            app.screen.query_one('#races', SelectionList).focus()
             await pilot.pause()
             await pilot.press('enter')
         client.results.search_results.assert_called_once_with('gp')
@@ -375,7 +394,7 @@ class TestBackfillAppTerms:
         app = _app({'t1': [_race(1, 'one', 150)]}, start_epoc=100, client=client)
         async with app.run_test() as pilot:
             await self._type_term(pilot, app, 'gp')
-            app.query_one('#races', SelectionList).focus()
+            app.screen.query_one('#races', SelectionList).focus()
             await pilot.pause()
             await pilot.press('enter')
         assert [r['ID'] for r in app.return_value.races] == [1]
@@ -387,21 +406,22 @@ class TestBackfillAppTerms:
         app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
         async with app.run_test() as pilot:
             await self._type_term(pilot, app, 'gp')
-        assert app.model.terms == ['t1']
+            terms = app.screen.model.terms
+        assert terms == ['t1']
 
     @pytest.mark.asyncio
     async def test_remove_term_key_drops_its_races(self):
         app = _app({'t1': [_race(1, 'one', 100)], 't2': [_race(2, 'two', 200)]},
                    terms=('t1', 't2'))
         async with app.run_test() as pilot:
-            app.query_one('#terms', ListView).focus()
+            app.screen.query_one('#terms', ListView).focus()
             await pilot.pause()
             # this Textual patch version starts with no highlighted row, so two
             # presses are needed to reach index 1 ('t2')
             await pilot.press('down')
             await pilot.press('down')  # highlight 't2'
             await pilot.press('d')
-            app.query_one('#races', SelectionList).focus()
+            app.screen.query_one('#races', SelectionList).focus()
             await pilot.pause()
             await pilot.press('enter')
         result = app.return_value
@@ -416,7 +436,7 @@ class TestBackfillAppTerms:
         app = _app({'t1': [_race(1, 'one', 100)]}, client=client)
         async with app.run_test() as pilot:
             await self._type_term(pilot, app, 'gp')     # live search (1 call)
-            app.query_one('#terms', ListView).focus()
+            app.screen.query_one('#terms', ListView).focus()
             await pilot.pause()
             # this Textual patch version starts with no highlighted row, so two
             # presses are needed to reach index 1 ('gp')
@@ -424,7 +444,7 @@ class TestBackfillAppTerms:
             await pilot.press('down')
             await pilot.press('d')                       # remove 'gp'
             await self._type_term(pilot, app, 'gp')     # re-add: cache hit
-            app.query_one('#races', SelectionList).focus()
+            app.screen.query_one('#races', SelectionList).focus()
             await pilot.pause()
             await pilot.press('enter')
         assert client.results.search_results.call_count == 1
@@ -478,7 +498,8 @@ class TestSeriesSearchModal:
             await pilot.press('escape')
             await pilot.pause()
             assert not isinstance(app.screen, SeriesSearchModal)
-        assert app.model.series is None
+            series = app.screen.model.series
+        assert series is None
 
     @pytest.mark.asyncio
     async def test_full_flow_pins_series(self):
@@ -491,9 +512,9 @@ class TestSeriesSearchModal:
             await self._search(pilot, app, 'gp')
             await self._pick_first_hit(pilot, app)
             assert not isinstance(app.screen, SeriesSearchModal)
-            label = str(app.query_one('#series', Label).content)
+            label = str(app.screen.query_one('#series', Label).content)
             assert '24 Hours of Lemons' in label
-            app.query_one('#races', SelectionList).focus()
+            app.screen.query_one('#races', SelectionList).focus()
             await pilot.pause()
             await pilot.press('enter')
         client.race.details.assert_called_once_with(55)
@@ -515,9 +536,9 @@ class TestSeriesSearchModal:
             await self._search(pilot, app, 'gp')
             await self._pick_first_hit(pilot, app)
             assert not isinstance(app.screen, SeriesSearchModal)
-            label = str(app.query_one('#series', Label).content)
+            label = str(app.screen.query_one('#series', Label).content)
             assert 'series 1234' in label
-            app.query_one('#races', SelectionList).focus()
+            app.screen.query_one('#races', SelectionList).focus()
             await pilot.pause()
             await pilot.press('enter')
         result = app.return_value
@@ -548,7 +569,8 @@ class TestSeriesSearchModal:
             await self._search(pilot, app, 'gp')
             await pilot.press('escape')
             await pilot.pause()
-        assert app.model.has_cached('gp')
+            has_cached = app.screen.model.has_cached('gp')
+        assert has_cached
         assert client.results.search_results.call_count == 1
 
     @pytest.mark.asyncio
@@ -558,7 +580,8 @@ class TestSeriesSearchModal:
         async with app.run_test() as pilot:
             await self._search(pilot, app, 'gp')
             assert isinstance(app.screen, SeriesSearchModal)
-        assert app.model.series is None
+            series = app.screen.model.series
+        assert series is None
 
     @pytest.mark.asyncio
     async def test_series_id_zero_rejected(self):
@@ -571,8 +594,9 @@ class TestSeriesSearchModal:
             await self._search(pilot, app, 'gp')
             await self._pick_first_hit(pilot, app)
             assert isinstance(app.screen, SeriesSearchModal)
+            series = app.screen.model.series
         client.common.past_races.assert_not_called()
-        assert app.model.series is None
+        assert series is None
 
     @pytest.mark.asyncio
     async def test_details_error_keeps_modal_open(self):
@@ -583,7 +607,8 @@ class TestSeriesSearchModal:
             await self._search(pilot, app, 'gp')
             await self._pick_first_hit(pilot, app)
             assert isinstance(app.screen, SeriesSearchModal)
-        assert app.model.series is None
+            series = app.screen.model.series
+        assert series is None
 
 
 @pytest.mark.asyncio
