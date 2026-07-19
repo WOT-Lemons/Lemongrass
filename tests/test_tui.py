@@ -95,8 +95,12 @@ class TestSinkBound:
             router = sys.stdout
             with _sink_bound(sink_b):  # same thread: rebinds sink, refcount to 2
                 assert sys.stdout is router
+                assert _current_sink() is sink_b
+            # inner exit restores the outer scope's binding, not None
+            assert _current_sink() is sink_a
             assert sys.stdout is router  # still installed at depth 1
         assert sys.stdout is original  # restored at depth 0
+        assert _current_sink() is None
 
     def test_print_routes_to_bound_thread_sink(self):
         sink = _LogSink()

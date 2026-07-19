@@ -99,10 +99,16 @@ def _sink_bound(sink):
     sys.stdout (capturing whatever is current — Textual's capture — as its fallback);
     the last unbinder restores it. The lock is held only across bind/unbind, never
     during the wrapped work, so a long worker never serializes another screen's
-    worker."""
+    worker.
+
+    Saves and restores the thread's prior sink binding on exit (rather than
+    unconditionally clearing it), so nesting two `_sink_bound` scopes on the same
+    thread is safe: the inner exit restores the outer scope's binding instead of
+    deleting it."""
     global _stdout_depth, _routed_stdout
     ident = threading.get_ident()
     with _route_lock:
+        prev = _thread_sinks.get(ident)
         _thread_sinks[ident] = sink
         if _stdout_depth == 0:
             _routed_stdout = _RoutedStdout(sys.stdout)
@@ -116,7 +122,10 @@ def _sink_bound(sink):
             if _stdout_depth == 0:
                 sys.stdout = _routed_stdout._real
                 _routed_stdout = None
-            _thread_sinks.pop(ident, None)
+            if prev is not None:
+                _thread_sinks[ident] = prev
+            else:
+                _thread_sinks.pop(ident, None)
 
 
 class _RoutedLogHandler(logging.Handler):

@@ -73,8 +73,8 @@ class LemongrassApp(LapsFlowMixin, App):
 def run_home_tui(client):
     """Run the top-level TUI against an already-open RaceMonitorClient.
 
-    Root logging is routed into the in-app log panes for the app's lifetime and
-    restored afterwards. Returns 0.
+    Root logging is routed into per-screen log sinks (via _routed_output()) for
+    the app's lifetime and restored afterwards. Returns 0.
     """
     app = LemongrassApp(client)
     with _routed_output():

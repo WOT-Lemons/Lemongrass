@@ -89,8 +89,8 @@ class LapBoardModel:
 
 class LapsFlowMixin:
     """App-level coordination for the laps flow, shared by the standalone LapsApp and
-    the unified LemongrassApp. Both hold a RaceMonitorClient + routed log handler and
-    push the laps screens; the screens only ever reach these methods via self.app."""
+    the unified LemongrassApp. Both hold a RaceMonitorClient and push the laps
+    screens; the screens only ever reach these methods via self.app."""
 
     def _init_laps_flow(self, client):
         self.client = client
@@ -144,8 +144,8 @@ class LapsApp(LapsFlowMixin, App):
 def run_laps_tui(client):
     """Run the laps TUI against an already-open RaceMonitorClient.
 
-    Root logging is routed into the in-app log pane for the app's lifetime and
-    restored afterwards. Returns 0.
+    Root logging is routed into per-screen log sinks (via _routed_output()) for
+    the app's lifetime and restored afterwards. Returns 0.
     """
     app = LapsApp(client)
     with _routed_output():
