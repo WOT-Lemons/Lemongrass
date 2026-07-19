@@ -113,19 +113,19 @@ class LapBoardModel:
         return list(self._standings)
 
 
-class LapsApp(App):
-    """Laps TUI root. Owns the shared client and the routed-log handler; the
-    exit value is unused (screens perform their own work in place)."""
+class LapsFlowMixin:
+    """App-level coordination for the laps flow, shared by the standalone LapsApp and
+    the unified LemongrassApp. Both hold a RaceMonitorClient + routed log handler and
+    push the laps screens; the screens only ever reach these methods via self.app."""
 
-    def __init__(self, client):
-        super().__init__()
+    def _init_laps_flow(self, client):
         self.client = client
         self.log_handler = _TuiLogHandler()
         self.picked = None  # (race_details, is_live) once a race is chosen
         self.monitor_args = None   # set by CarSelectScreen
 
-    def on_mount(self):
-        """Open on the picker."""
+    def start_laps(self):
+        """Enter the laps flow at the race picker."""
         self.push_screen(PickerScreen(self.client))
 
     def _on_race_resolved(self, details, is_live, race_id):
@@ -152,6 +152,20 @@ class LapsApp(App):
                 self._start_import(race_id, str(race_id))
         self.push_screen(_ConfirmModal(
             'Race ended — run authoritative final import now? [y/n]'), _answer)
+
+
+class LapsApp(LapsFlowMixin, App):
+    """Laps TUI root (standalone `lemongrass laps` path). Owns the shared client
+    and the routed-log handler; the exit value is unused (screens perform their
+    own work in place)."""
+
+    def __init__(self, client):
+        super().__init__()
+        self._init_laps_flow(client)
+
+    def on_mount(self):
+        """Open on the picker."""
+        self.start_laps()
 
 
 def run_laps_tui(client):

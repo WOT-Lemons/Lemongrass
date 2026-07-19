@@ -10,7 +10,9 @@ from lemongrass._laps_tui import (
     ImportScreen,
     LapBoardModel,
     LapsApp,
+    LapsFlowMixin,
     MonitorScreen,
+    PickerScreen,
 )
 
 
@@ -364,3 +366,15 @@ class TestFinalImportPrompt:
                 await pilot.press('y')
                 await pilot.pause()
                 assert isinstance(app.screen, ImportScreen)
+
+
+class TestLapsFlowMixin:
+    @pytest.mark.asyncio
+    async def test_start_laps_pushes_picker(self):
+        app = LapsApp(_client_with_race())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, PickerScreen)
+
+    def test_lapsapp_uses_mixin(self):
+        assert issubclass(LapsApp, LapsFlowMixin)
