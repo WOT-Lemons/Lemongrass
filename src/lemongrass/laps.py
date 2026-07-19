@@ -494,7 +494,10 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
             push_influx(ctx, laps, False, competitor_name=competitor_name, car_info=car_info,
                         class_name=class_name, class_positions=None, session_id=live_session_id)
         push_influx_standings_live(ctx, session_response, live_session_id)
-        observer.on_standings(session_response)
+
+    # Seed the leaderboard immediately regardless of network mode; otherwise a
+    # non-network run shows a blank leaderboard until monitor_routine's first poll.
+    observer.on_standings(session_response)
 
     if opts.save_file:
         # Create filename and call function to write to CSV

@@ -365,8 +365,11 @@ class _TuiObserver:
     def _call(self, fn, *args):
         # Runs on the monitor worker thread. Skip marshalling into a torn-down
         # event loop if the worker was cancelled (app exit not routed through
-        # action_quit_monitor).
-        if get_current_worker().is_cancelled:
+        # action_quit_monitor). Also skip once the screen is unmounted: pressing
+        # 'q' pops the screen but can't interrupt an in-flight blocking API call,
+        # and is_cancelled may not have propagated by the time it returns — a
+        # call_from_thread against removed widgets would raise NoMatches.
+        if get_current_worker().is_cancelled or not self._screen.is_mounted:
             return
         self._screen.app.call_from_thread(fn, *args)
 
@@ -438,8 +441,18 @@ class MonitorScreen(Screen):
     def on_mount(self):
         self.query_one('#laps', DataTable).add_columns('Lap', 'Time', 'Pos', 'ClassPos')
         self.query_one('#board', DataTable).add_columns('Pos', '#', 'Name', 'Laps', 'Best')
-        self.set_interval(0.25, self._drain_log)
+        self._log_timer = self.set_interval(0.25, self._drain_log)
         self._run()
+
+    def on_screen_suspend(self):
+        # When the final-import prompt / ImportScreen is pushed on top, this
+        # screen stays mounted and its timer keeps firing. Pause draining so we
+        # don't race ImportScreen's own drain over the shared log deque and steal
+        # half its output into this now-hidden pane.
+        self._log_timer.pause()
+
+    def on_screen_resume(self):
+        self._log_timer.resume()
 
     # --- observer-driven UI updates (main thread) ---
     def set_header(self, text):
@@ -490,28 +503,29 @@ class MonitorScreen(Screen):
         opts = laps_mod.RaceOptions(
             network_mode=self.network, monitor_mode=True, interval=self.interval)
         observer = _TuiObserver(self)
-        with _logging_to(self.app.log_handler):
-            try:
-                if self.network:
-                    # Writing needs a live Influx handle + resolved metadata,
-                    # exactly as laps.backfill_race sets up before live_race. The
-                    # connection stays open for the whole poll loop.
-                    with _influx.connect() as influx_client:
-                        ctx = self._network_ctx(laps_mod, influx_client)
-                        laps_mod.live_race(ctx, opts, observer=observer,
-                                           _stop_event=self._stop)
-                else:
-                    ctx = laps_mod.RaceContext(
-                        str(self.race_id), str(self.car_number), self.client, None, 0)
+        # Root logging is already routed to app.log_handler by run_laps_tui for the
+        # whole app lifetime, so no per-worker _logging_to is needed here.
+        try:
+            if self.network:
+                # Writing needs a live Influx handle + resolved metadata,
+                # exactly as laps.backfill_race sets up before live_race. The
+                # connection stays open for the whole poll loop.
+                with _influx.connect() as influx_client:
+                    ctx = self._network_ctx(laps_mod, influx_client)
                     laps_mod.live_race(ctx, opts, observer=observer,
                                        _stop_event=self._stop)
-            except RaceMonitorError as exc:
-                if not get_current_worker().is_cancelled:
-                    self.app.call_from_thread(self.log_line, f'error: {exc}')
-            except Exception as exc:  # last resort: a TUI worker must never crash the app
-                logging.exception("monitor worker failed")
-                if not get_current_worker().is_cancelled:
-                    self.app.call_from_thread(self.log_line, f'error: {exc}')
+            else:
+                ctx = laps_mod.RaceContext(
+                    str(self.race_id), str(self.car_number), self.client, None, 0)
+                laps_mod.live_race(ctx, opts, observer=observer,
+                                   _stop_event=self._stop)
+        except RaceMonitorError as exc:
+            if not get_current_worker().is_cancelled:
+                self.app.call_from_thread(self.log_line, f'error: {exc}')
+        except Exception as exc:  # last resort: a TUI worker must never crash the app
+            logging.exception("monitor worker failed")
+            if not get_current_worker().is_cancelled:
+                self.app.call_from_thread(self.log_line, f'error: {exc}')
 
     def _network_ctx(self, laps_mod, influx_client):
         """Build a write-enabled RaceContext, mirroring backfill_race's live
@@ -598,18 +612,19 @@ class ImportScreen(Screen):
         opts = laps_mod.RaceOptions(network_mode=True)
         summary = None
         writer = _StdoutToLines(self.app.log_handler.lines)
-        with _logging_to(self.app.log_handler):
-            try:
-                with contextlib.redirect_stdout(writer):
-                    rc = laps_mod.backfill_race(str(self.race_id), None, self.client, opts)
-                summary = 'Import complete.' if rc == 0 else f'Import failed (exit {rc}).'
-            except RaceMonitorError as exc:
-                summary = f'import failed: {exc}'
-            except Exception as exc:  # last resort: a TUI worker must never crash the app
-                logging.exception("import worker failed")
-                summary = f'import failed: {exc}'
-            finally:
-                writer.flush()
+        # Root logging is already routed to app.log_handler by run_laps_tui for the
+        # whole app lifetime, so no per-worker _logging_to is needed here.
+        try:
+            with contextlib.redirect_stdout(writer):
+                rc = laps_mod.backfill_race(str(self.race_id), None, self.client, opts)
+            summary = 'Import complete.' if rc == 0 else f'Import failed (exit {rc}).'
+        except RaceMonitorError as exc:
+            summary = f'import failed: {exc}'
+        except Exception as exc:  # last resort: a TUI worker must never crash the app
+            logging.exception("import worker failed")
+            summary = f'import failed: {exc}'
+        finally:
+            writer.flush()
         if summary is not None and not get_current_worker().is_cancelled:
             self.app.call_from_thread(self._done, summary)
 
