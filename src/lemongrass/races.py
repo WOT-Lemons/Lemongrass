@@ -130,16 +130,24 @@ def _handle_list():
                   f"{info['total']:<8} {schema_str}")
 
 
-def prune_races(delete_api, race_ids, on_progress=None):
+def prune_races(delete_api, race_ids, on_progress=None, on_error=None):
     """Delete all data for each race id across the session/lap/standings/race buckets.
 
     Race metadata is deleted LAST: the caller's not-found guard keys off the race
     measurement, so as long as it survives, a retry after a partial failure can still
     clean up orphaned rows. on_progress(message) is called after each successful bucket
-    delete. Returns the ids that failed (each logged via on_progress too)."""
+    delete. Per-race errors are reported via on_error(message) when provided; otherwise
+    they fall back to on_progress so the message is never lost. Returns the ids that
+    failed."""
     def _note(msg):
         if on_progress:
             on_progress(msg)
+
+    def _note_error(msg):
+        if on_error:
+            on_error(msg)
+        else:
+            _note(msg)
 
     now = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
     failed = []
@@ -165,7 +173,7 @@ def prune_races(delete_api, race_ids, on_progress=None):
                               bucket=_influx.BUCKET_RACES)
             _note(f"Deleted race metadata for race {rid}")
         except Exception as e:  # record-and-continue across races
-            _note(f"error pruning race {rid}: {e}")
+            _note_error(f"error pruning race {rid}: {e}")
             failed.append(rid)
     return failed
 
@@ -221,7 +229,8 @@ def _handle_prune():
                 sys.exit(0)
 
         delete_api = client.delete_api()
-        failed = prune_races(delete_api, race_ids, on_progress=print)
+        failed = prune_races(delete_api, race_ids, on_progress=print,
+                             on_error=lambda m: print(m, file=sys.stderr))
         if failed:
             print("failed to prune:", " ".join(failed), file=sys.stderr)
             sys.exit(1)

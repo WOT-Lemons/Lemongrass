@@ -101,6 +101,28 @@ class TestPruneRaces:
         failed = prune_races(delete_api, ['144185'])
         assert failed == ['144185']
 
+    def test_failure_reported_via_on_error_when_provided(self):
+        delete_api = MagicMock()
+        delete_api.delete.side_effect = RuntimeError('boom')
+        progress = []
+        errors = []
+        failed = prune_races(delete_api, ['144185'],
+                             on_progress=progress.append, on_error=errors.append)
+        assert failed == ['144185']
+        assert len(errors) == 1
+        assert 'error pruning race 144185' in errors[0]
+        assert 'boom' in errors[0]
+        # the error line must not also be duplicated onto on_progress
+        assert not any('error pruning race' in m for m in progress)
+
+    def test_failure_falls_back_to_on_progress_when_no_on_error(self):
+        delete_api = MagicMock()
+        delete_api.delete.side_effect = RuntimeError('boom')
+        progress = []
+        failed = prune_races(delete_api, ['144185'], on_progress=progress.append)
+        assert failed == ['144185']
+        assert any('error pruning race 144185' in m for m in progress)
+
 
 class TestHandlePrune:
     def _make_influx_client(self, races=None):
@@ -307,9 +329,12 @@ class TestHandlePrune:
                     with pytest.raises(SystemExit) as exc:
                         _mod._handle_prune()
         assert exc.value.code == 1
-        err = capsys.readouterr().err
-        assert 'failed to prune' in err
-        assert '12345' in err
+        captured = capsys.readouterr()
+        assert 'failed to prune' in captured.err
+        assert '12345' in captured.err
+        # the per-race error line must go to stderr, not stdout
+        assert 'error pruning race 12345' in captured.err
+        assert 'error pruning race 12345' not in captured.out
 
 
 class TestHandleBackfill:
