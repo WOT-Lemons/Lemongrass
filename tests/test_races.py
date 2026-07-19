@@ -5,6 +5,42 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import lemongrass.races as _mod
+from lemongrass.races import fetch_race_rows
+
+
+class TestFetchRaceRows:
+    def _query_api(self):
+        """Fake query_api: three queries in order — races meta, total laps, current-schema laps."""
+        def _rec(values, value=None, time=None):
+            rec = MagicMock()
+            rec.values = values
+            rec.get_value.return_value = value
+            rec.get_time.return_value = time
+            return rec
+
+        def _table(records):
+            t = MagicMock()
+            t.records = records
+            return t
+
+        meta = _table([_rec(
+            {'race_id': '144185', 'race_name': 'Sears Pointless'},
+            time=datetime(2026, 6, 1, tzinfo=UTC))])
+        totals = _table([_rec({'race_id': '144185'}, value=100)])
+        current = _table([_rec({'race_id': '144185'}, value=100)])
+
+        api = MagicMock()
+        api.query.side_effect = [[meta], [totals], [current]]
+        return api
+
+    def test_returns_row_with_counts(self):
+        rows = fetch_race_rows(self._query_api())
+        assert len(rows) == 1
+        assert rows[0]['race_id'] == '144185'
+        assert rows[0]['name'] == 'Sears Pointless'
+        assert rows[0]['date'] == '2026-06-01'
+        assert rows[0]['total'] == 100
+        assert rows[0]['current'] == 100
 
 
 class TestDispatch:
