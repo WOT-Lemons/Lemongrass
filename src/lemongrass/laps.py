@@ -211,7 +211,12 @@ class _StdoutObserver(RaceObserver):
 
 def _build_parser():
     """Build and return the argument parser."""
-    parser = argparse.ArgumentParser(description='Interact with lap data')
+    parser = argparse.ArgumentParser(
+        description='Interact with lap data',
+        epilog='Run with no arguments in a terminal to open the interactive TUI: '
+               'search for a race, then watch it live or import a completed race. '
+               'Passing a race_id (or any non-terminal invocation) uses the '
+               'scripted behavior below.')
     parser.add_argument('race_id', metavar='race_id', nargs=1, type=int, action='store')
     parser.add_argument('car_number', metavar='car_number', nargs='?', type=int, default=None)
     parser.add_argument('-c', '--class', metavar='A/B/C', dest='selected_class', nargs='?',

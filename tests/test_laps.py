@@ -1080,6 +1080,13 @@ class TestArgParserCarNumber:
         args = _mod._build_parser().parse_args(['12345'])
         assert args.car_number is None
 
+    def test_help_advertises_interactive_tui(self):
+        # `laps -h` is the primary discovery surface for the no-arg TUI mode, and
+        # argparse otherwise shows race_id as required — so the help must mention it.
+        help_text = _mod._build_parser().format_help()
+        assert 'no arguments' in help_text
+        assert 'interactive' in help_text.lower()
+
 
 class TestExistingLapCountsFieldwide:
     def _query_api(self, lap_no_count=0, current_count=0):
