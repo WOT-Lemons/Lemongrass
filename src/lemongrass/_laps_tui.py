@@ -454,9 +454,13 @@ class MonitorScreen(Screen):
         self._rebuild_laps()
 
     def _rebuild_laps(self):
+        # Newest lap first: for a live race the most recent lap is what matters,
+        # so render in reverse of the model's ascending order (the table is
+        # rebuilt each tick and scroll resets to the top, so row 0 is always
+        # on-screen). The model stays ascending/UI-agnostic.
         table = self.query_one('#laps', DataTable)
         table.clear()
-        for row in self.board.lap_rows():
+        for row in reversed(self.board.lap_rows()):
             table.add_row(*(str(c) for c in row))
 
     def set_standings(self, session_response):

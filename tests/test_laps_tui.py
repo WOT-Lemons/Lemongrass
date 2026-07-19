@@ -185,6 +185,29 @@ class TestMonitorScreen:
                 assert table.row_count == 2
 
     @pytest.mark.asyncio
+    async def test_lap_table_shows_newest_lap_first(self):
+        client = MagicMock()
+        app = LapsApp(client)
+
+        def fake_live_race(ctx, opts, observer=None, _stop_event=None):
+            observer.on_laps([{'Lap': '1', 'LapTime': '1:50', 'Position': '6'},
+                              {'Lap': '2', 'LapTime': '1:48', 'Position': '4'}])
+            observer.on_lap({'Lap': '3', 'LapTime': '1:46', 'Position': '2'})
+            return None
+
+        async with app.run_test() as pilot:
+            with patch('lemongrass.laps.live_race', side_effect=fake_live_race):
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                table = app.screen.query_one('#laps', DataTable)
+                # Row 0 is the most recent lap (3), row order descends.
+                first_cell = table.get_row_at(0)[0]
+                last_cell = table.get_row_at(table.row_count - 1)[0]
+                assert first_cell == '3'
+                assert last_cell == '1'
+
+    @pytest.mark.asyncio
     async def test_run_logs_race_monitor_error_when_not_cancelled(self):
         # Guards the normal (not-cancelled) error path: MonitorScreen._run's
         # except RaceMonitorError guards call_from_thread with
