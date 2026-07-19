@@ -139,8 +139,8 @@ class _RoutedLogHandler(logging.Handler):
 @contextmanager
 def _routed_output():
     """Install _RoutedLogHandler at root for one app run; restore the previous root
-    handlers on exit even if the app crashes. Replaces _logging_to. Does NOT touch
-    sys.stdout — print routing is established per-worker by _sink_bound.
+    handlers on exit even if the app crashes. Does NOT touch sys.stdout — print
+    routing is established per-worker by _sink_bound.
 
     Also ensures the root logger's own level admits INFO records for the duration,
     restoring the previous level on exit: the root logger's default level (WARNING)
