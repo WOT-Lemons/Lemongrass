@@ -1,9 +1,9 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from textual.widgets import Input, ListView
 
-from lemongrass._laps_tui import LapBoardModel, LapsApp
+from lemongrass._laps_tui import CarSelectScreen, LapBoardModel, LapsApp
 
 
 def _client_with_race(is_live=False):
@@ -95,3 +95,42 @@ class TestPickerScreen:
             await pilot.pause()
             hits = app.screen.query_one('#hits', ListView)
             assert len(hits.children) == 1
+
+
+def _client_live_session():
+    client = MagicMock()
+    client.live.get_session.return_value = {'Successful': True, 'Session': {
+        'ID': 's1', 'Name': 'S1', 'Competitors': {
+            'a': {'Number': '7', 'FirstName': 'Jo', 'LastName': 'X'}}}}
+    return client
+
+
+class TestCarSelectScreen:
+    @pytest.mark.asyncio
+    async def test_lists_competitors(self):
+        client = _client_live_session()
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            app.push_screen(CarSelectScreen(client, 42, 'Sears'))
+            await app.workers.wait_for_complete()  # await the get_session worker
+            await pilot.pause()
+            cars = app.screen.query_one('#cars', ListView)
+            assert len(cars.children) == 1
+
+    @pytest.mark.asyncio
+    async def test_typed_number_confirms_with_defaults(self):
+        client = _client_live_session()
+        app = LapsApp(client)
+        # _start_monitor pushes MonitorScreen (Task 8), whose worker would launch
+        # a real live_race against the mock — patch it out.
+        with patch('lemongrass.laps.live_race', return_value=None):
+            async with app.run_test() as pilot:
+                app.push_screen(CarSelectScreen(client, 42, 'Sears'))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                number = app.screen.query_one('#car-number', Input)
+                number.focus()          # Enter routes to the focused Input
+                number.value = '7'
+                await pilot.press('enter')
+                await pilot.pause()
+        assert app.monitor_args == (42, '7', True, 30)

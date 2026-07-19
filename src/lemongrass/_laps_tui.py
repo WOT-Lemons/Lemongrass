@@ -13,6 +13,7 @@ from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.screen import Screen
 from textual.widgets import (
+    Checkbox,
     Footer,
     Input,
     Label,
@@ -90,18 +91,24 @@ class LapsApp(App):
         self.client = client
         self.log_handler = _TuiLogHandler()
         self.picked = None  # (race_details, is_live) once a race is chosen
+        self.monitor_args = None   # set by CarSelectScreen
 
     def on_mount(self):
         """Open on the picker."""
         self.push_screen(PickerScreen(self.client))
 
-    def _on_race_resolved(self, details, is_live):
-        """Branch to the live or import flow once a race is resolved.
-
-        Filled in by later tasks; for now it just records the pick so tests can
-        assert the resolve path ran.
-        """
+    def _on_race_resolved(self, details, is_live, race_id):
+        """Branch to the live or import flow once a race is resolved."""
         self.picked = (details, is_live)
+        race = details.get('Race', {})
+        name = race.get('Name', str(race_id))
+        if is_live:
+            self.push_screen(CarSelectScreen(self.client, race_id, name))
+        else:
+            self.push_screen(ImportConfirmScreen(self.client, race_id, name))  # Task 9
+
+    def _start_monitor(self, race_id, car_number, network, interval):
+        self.monitor_args = (race_id, car_number, network, interval)
 
 
 class PickerScreen(Screen):
@@ -186,4 +193,82 @@ class PickerScreen(Screen):
         if worker.is_cancelled:
             return
         is_live = bool(live_resp.get('Successful') and live_resp.get('IsLive'))
-        self.app.call_from_thread(self.app._on_race_resolved, details, is_live)
+        self.app.call_from_thread(self.app._on_race_resolved, details, is_live, race_id)
+
+
+class CarSelectScreen(Screen):
+    """Pick the tracked car from the live feed (or type a number) + options."""
+
+    # No priority Enter: it would intercept the key before ListView.Selected
+    # fires, so a keyboard user could never pick a car from the list. Enter is
+    # instead consumed by whichever widget is focused — the Input emits
+    # Input.Submitted, the ListView emits ListView.Selected.
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('escape', 'app.pop_screen', 'Back'),
+    ]
+
+    def __init__(self, client, race_id, race_name):
+        super().__init__()
+        self.client = client
+        self.race_id = race_id
+        self.race_name = race_name
+        self._competitors = []
+
+    def compose(self):
+        yield Label(f'{self.race_name} — LIVE. Pick your car:')
+        yield ListView(id='cars')
+        yield Input(placeholder='…or type a car number', id='car-number')
+        yield Checkbox('Write to InfluxDB', value=True, id='write')
+        yield Input(value='30', id='interval')
+        yield Label('', id='status')
+        yield Footer()
+
+    def on_mount(self):
+        self._load()
+
+    @work(thread=True, exclusive=True)
+    def _load(self):
+        worker = get_current_worker()
+        try:
+            resp = self.client.live.get_session(self.race_id)
+        except RaceMonitorError as exc:
+            if not worker.is_cancelled:
+                self.app.call_from_thread(self.app.notify, f'session load failed: {exc}',
+                                          severity='error')
+            return
+        if worker.is_cancelled:
+            return
+        comps = list(resp.get('Session', {}).get('Competitors', {}).values())
+        self.app.call_from_thread(self._show, comps)
+
+    def _show(self, competitors):
+        self._competitors = competitors
+        view = self.query_one('#cars', ListView)
+        view.clear()
+        for comp in competitors:
+            name = f"{comp.get('FirstName', '')} {comp.get('LastName', '')}".strip()
+            view.append(ListItem(Label(f"#{comp.get('Number', '?')}  {name}")))
+
+    def on_list_view_selected(self, event):
+        index = self.query_one('#cars', ListView).index
+        if index is not None and self._competitors:
+            self._confirm(str(self._competitors[index].get('Number', '')))
+
+    def on_input_submitted(self, event):
+        # Only the car-number Input confirms; Enter in the interval Input is inert
+        # (its value must not be mistaken for a car number).
+        event.stop()
+        if event.input.id == 'car-number':
+            self._confirm(event.value.strip())
+
+    def _confirm(self, car_number):
+        if not car_number:
+            self.query_one('#status', Label).update('pick or type a car number')
+            return
+        network = self.query_one('#write', Checkbox).value
+        interval = _as_int(self.query_one('#interval', Input).value) or 30
+        self.app._start_monitor(self.race_id, car_number, network, interval)
+
+
+class ImportConfirmScreen(Screen):
+    """Placeholder — implemented in Task 9."""
