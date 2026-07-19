@@ -2,8 +2,11 @@ import logging
 import re
 
 import pytest
+from textual.app import App
+from textual.screen import Screen
+from textual.widgets import RichLog
 
-from lemongrass._tui import _logging_to, _race_label, _TuiLogHandler
+from lemongrass._tui import LogPaneScreen, _logging_to, _race_label, _TuiLogHandler
 
 
 def _info_record(message):
@@ -63,3 +66,44 @@ class TestRaceLabel:
         assert '#42' in label
         assert 'Sears Pointless' in label
         assert re.match(r'^\d{4}-\d\d-\d\d ', label)
+
+
+class _LogScreen(LogPaneScreen, Screen):
+    def compose(self):
+        yield RichLog(id='log')
+
+    def on_mount(self):
+        self.set_interval(0.05, self._drain_log)
+
+
+class _HostApp(App):
+    def __init__(self):
+        super().__init__()
+        self.log_handler = _TuiLogHandler()
+
+    def on_mount(self):
+        self.push_screen(_LogScreen())
+
+
+class TestLogPaneScreen:
+    @pytest.mark.asyncio
+    async def test_inactive_screen_does_not_drain(self):
+        app = _HostApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            bottom = app.screen
+            top = _LogScreen()
+            app.push_screen(top)          # pushes a second screen on top
+            await pilot.pause()
+            app.log_handler.lines.append('line-1')
+            await pilot.pause(0.2)
+
+            bottom_log = bottom.query_one('#log', RichLog)
+            top_log = top.query_one('#log', RichLog)
+
+            # the active top screen drained the line into its RichLog...
+            assert len(top_log.lines) > 0
+            # ...the shared deque was fully drained by that one screen...
+            assert len(app.log_handler.lines) == 0
+            # ...and the inactive bottom screen never wrote anything.
+            assert len(bottom_log.lines) == 0

@@ -5,6 +5,8 @@ from collections import deque
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
+from textual.widgets import RichLog
+
 
 class _TuiLogHandler(logging.Handler):
     """Buffer formatted log records for a TUI log pane.
@@ -43,6 +45,24 @@ def _logging_to(handler):
         root.removeHandler(handler)
         for existing in saved:
             root.addHandler(existing)
+
+
+class LogPaneScreen:
+    """Screen mixin: drain the app's shared log buffer into this screen's '#log'
+    RichLog, but ONLY while this screen is the active (topmost) one.
+
+    One _TuiLogHandler deque is shared app-wide; without this guard two mounted
+    screens' drain timers would each pop from it and steal half the other's lines.
+    Screens using this call self.set_interval(0.25, self._drain_log) in on_mount.
+    """
+
+    def _drain_log(self):
+        """Pop buffered lines into this screen's RichLog, skipping if inactive."""
+        if self.app.screen is not self:
+            return
+        log_view = self.query_one('#log', RichLog)
+        while self.app.log_handler.lines:
+            log_view.write(self.app.log_handler.lines.popleft())
 
 
 def _race_label(race):

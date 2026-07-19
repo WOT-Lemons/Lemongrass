@@ -97,6 +97,16 @@ def test_connect_reads_token_from_configured_env_var(monkeypatch, tmp_path, relo
     assert client_cls.call_args.kwargs['token'] == 'via-directive'
 
 
+def test_influx_token_present(monkeypatch):
+    from lemongrass import _influx
+    from lemongrass._config import load_config
+    env = load_config().influx.token_env
+    monkeypatch.delenv(env, raising=False)
+    assert _influx.influx_token_present() is False
+    monkeypatch.setenv(env, 'tok')
+    assert _influx.influx_token_present() is True
+
+
 class TestInvalidFluxIds:
     @pytest.mark.parametrize("values,expected", [
         (['144185', 'car_25-2'], []),                     # clean ids pass
