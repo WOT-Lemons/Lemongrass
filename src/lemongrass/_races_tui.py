@@ -15,8 +15,10 @@ from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
 from lemongrass import _influx
-from lemongrass._laps_tui import _StdoutToLines
+from lemongrass._backfill_tui import RaceListModel, RefineScreen
+from lemongrass._laps_tui import ImportScreen, _StdoutToLines
 from lemongrass._tui import _STDOUT_LOCK, LogPaneScreen
+from lemongrass.race_backfill import run_backfill
 from lemongrass.race_diagnose import diagnose_api, diagnose_influx
 from lemongrass.races import fetch_race_rows, prune_races
 
@@ -287,10 +289,27 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         self.app.push_screen(DiagnoseCarScreen(row['race_id'], row['name']))
 
     def action_reimport(self):
-        """Re-import the highlighted race. Stub — implemented in Task 11."""
+        """Re-import the highlighted race via the laps ImportScreen."""
+        row = self.row_for_highlight()
+        if row is None:
+            self.app.notify('highlight a race first', severity='warning')
+            return
+        self.app.push_screen(ImportScreen(self.app.client, row['race_id'], row['name']))
 
     def action_backfill(self):
-        """Backfill the highlighted race. Stub — implemented in Task 11."""
+        """Discover races by term in RefineScreen, then backfill the chosen set.
+
+        Discovery starts from an empty selection; the user searches terms in the
+        RefineScreen exactly as `races backfill` does. start_epoc=0 shows all.
+        """
+        model = RaceListModel([], {}, 0)
+        refine = RefineScreen(self.app.client, model)
+
+        def _picked(result):
+            if result is not None and result.races:
+                self.app.push_screen(BackfillRunScreen(result.races))
+
+        self.app.push_screen(refine, _picked)
 
 
 class DiagnoseOutputScreen(LogPaneScreen, Screen):
@@ -341,3 +360,48 @@ class DiagnoseOutputScreen(LogPaneScreen, Screen):
             self.app.call_from_thread(
                 self.query_one('#title', Label).update,
                 f'Diagnose #{self.race_id} car {self.car_number} — done')
+
+
+class BackfillRunScreen(LogPaneScreen, Screen):
+    """Import a chosen set of races via run_backfill, streaming its output."""
+
+    CSS = "#log { height: 1fr; }"
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('q', 'app.pop_screen', 'Back'),
+        Binding('escape', 'app.pop_screen', 'Back', show=False),
+    ]
+
+    def __init__(self, races):
+        """Store the races to backfill."""
+        super().__init__()
+        self._races = races
+
+    def compose(self):
+        """Render the title, log pane, and footer."""
+        yield Label(f'Backfilling {len(self._races)} race(s)…', id='title')
+        yield RichLog(id='log')
+        yield Footer()
+
+    def on_mount(self):
+        """Start the log drain timer, then kick off the backfill worker."""
+        self.set_interval(0.25, self._drain_log)
+        self._run()
+
+    @work(thread=True, exclusive=True)
+    def _run(self):
+        worker = get_current_worker()
+        writer = _StdoutToLines(self.app.log_handler.lines)
+        failures = None
+        try:
+            with _STDOUT_LOCK, contextlib.redirect_stdout(writer):
+                failures = run_backfill(self._races, dry_run=False, force=False)
+        except Exception as exc:
+            logging.exception('backfill run failed')
+            self.app.log_handler.lines.append(f'backfill failed: {exc}')
+        finally:
+            writer.flush()
+        if not worker.is_cancelled:
+            msg = ('Backfill complete.' if not failures
+                   else f'Backfill finished with {len(failures)} failure(s).')
+            self.app.call_from_thread(self.query_one('#title', Label).update, msg)

@@ -140,3 +140,38 @@ async def test_diagnose_car_rejects_invalid_number():
                 assert not isinstance(app.screen, DiagnoseOutputScreen)
                 status = str(screen.query_one('#status', Label).render())
                 assert 'invalid car number' in status
+
+
+@pytest.mark.asyncio
+async def test_reimport_pushes_import_screen():
+    from lemongrass._laps_tui import ImportScreen
+    app = _Host(MagicMock())
+    with patch('lemongrass._races_tui._influx.influx_token_present', return_value=True), \
+         patch('lemongrass._races_tui.fetch_race_rows', return_value=_rows()), \
+         patch('lemongrass._races_tui._influx.connect') as connect, \
+         patch('lemongrass.laps.backfill_race', return_value=0):
+        connect.return_value.__enter__.return_value = MagicMock()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            app.screen.query_one('#races', SelectionList).highlighted = 0
+            await pilot.pause()
+            await pilot.press('r')
+            await pilot.pause()
+            assert isinstance(app.screen, ImportScreen)
+
+
+@pytest.mark.asyncio
+async def test_backfill_run_calls_run_backfill():
+    app = _Host(MagicMock())
+    from lemongrass._races_tui import BackfillRunScreen
+    with patch('lemongrass._races_tui.run_backfill', return_value=[]) as rb:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(BackfillRunScreen([{'ID': 1, 'Name': 'X', 'StartDateEpoc': 0}]))
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+    rb.assert_called_once()
+    assert rb.call_args.kwargs == {'dry_run': False, 'force': False}
