@@ -11,7 +11,7 @@ from textual.widgets import Footer, Label, ListItem, ListView
 
 from lemongrass._laps_tui import LapsFlowMixin
 from lemongrass._races_tui import RacesBrowserScreen
-from lemongrass._tui import _logging_to
+from lemongrass._tui import _routed_output
 
 
 class HomeScreen(Screen):
@@ -73,6 +73,6 @@ def run_home_tui(client):
     restored afterwards. Returns 0.
     """
     app = LemongrassApp(client)
-    with _logging_to(app.log_handler):
+    with _routed_output():
         app.run()
     return 0

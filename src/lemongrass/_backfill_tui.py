@@ -28,7 +28,7 @@ from textual.widgets import (
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
-from lemongrass._tui import LogPaneScreen, _logging_to, _race_label, _TuiLogHandler
+from lemongrass._tui import LogPaneScreen, _race_label, _routed_output, _sink_bound
 from lemongrass.race_backfill import enumerate_series, filter_races_by_terms
 
 
@@ -371,6 +371,7 @@ class RefineScreen(LogPaneScreen, Screen):
         series_error, when set, is the exception from a failed config-driven
         series enumeration, surfaced as an error state in the Series pane."""
         super().__init__()
+        self._init_sink()
         self.client = client
         self.model = model
         self.series_error = series_error
@@ -516,14 +517,15 @@ class RefineScreen(LogPaneScreen, Screen):
         skip call_from_thread in that case since the event loop is already closed.
         """
         worker = get_current_worker()
-        try:
-            resp = self.client.results.search_results(term)
-        except RaceMonitorError as exc:
-            if worker.is_cancelled:
+        with _sink_bound(self.sink):
+            try:
+                resp = self.client.results.search_results(term)
+            except RaceMonitorError as exc:
+                if worker.is_cancelled:
+                    return
+                self.app.call_from_thread(
+                    self.notify, f'search "{term}" failed: {exc}', severity='error')
                 return
-            self.app.call_from_thread(
-                self.notify, f'search "{term}" failed: {exc}', severity='error')
-            return
         if worker.is_cancelled:
             return
         self.app.call_from_thread(self._merge_results, term, resp.get('Races', []))
@@ -549,7 +551,6 @@ class BackfillApp(App):
         series_error, when set, is the exception from a failed config-driven
         series enumeration, surfaced as an error state in the Series pane."""
         super().__init__()
-        self.log_handler = _TuiLogHandler()
         self._screen = RefineScreen(client, model, series_error=series_error)
 
     def on_mount(self):
@@ -583,7 +584,7 @@ def refine_races(client, terms, races_by_term, start_epoc, series=None,
     model = RaceListModel(terms, races_by_term, start_epoc, series=series)
     app = BackfillApp(client, model, series_error=series_error)
     try:
-        with _logging_to(app.log_handler):
+        with _routed_output():
             return app.run()
     except KeyboardInterrupt:
         return None

@@ -1,4 +1,3 @@
-import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,7 +11,6 @@ from lemongrass._backfill_tui import (
     RefineScreen,
     SeriesSearchModal,
 )
-from lemongrass._tui import _TuiLogHandler
 
 
 def _race(id, name, start_epoc):
@@ -29,31 +27,24 @@ def _app(races_by_term=None, terms=('t1',), start_epoc=0, client=None,
     return BackfillApp(client or MagicMock(), model, series_error=series_error)
 
 
-def _info_record(message):
-    return logging.LogRecord('httpx', logging.INFO, __file__, 0,
-                             message, None, None)
-
-
 class TestBackfillAppLogPane:
     @pytest.mark.asyncio
     async def test_buffered_lines_drain_into_pane(self):
         app = _app({'t1': [_race(1, 'one', 100)]})
         async with app.run_test() as pilot:
-            app.log_handler.emit(_info_record('sleeping 9.77s'))
+            app.screen.sink.write_line('sleeping 9.77s')
             await pilot.pause(0.4)  # past the 0.25s drain interval
             log_view = app.query_one('#log', RichLog)
             assert len(log_view.lines) >= 1
 
 
 class _RefineHostApp(App):
-    """Minimal stand-in for LemongrassApp: an app-level log_handler (like
-    LapsFlowMixin provides) hosting a pushed RefineScreen. Proves RefineScreen
-    drains whatever deque `self.app.log_handler` resolves to for its *host*
-    app, not just its own screen-local handler (the unified-TUI regression)."""
+    """Minimal stand-in for LemongrassApp hosting a pushed RefineScreen — proves
+    RefineScreen drains its own per-screen sink regardless of the host app,
+    now that the sink is screen-owned rather than resolved off the host."""
 
     def __init__(self, refine_screen):
         super().__init__()
-        self.log_handler = _TuiLogHandler()
         self._refine_screen = refine_screen
 
     def on_mount(self):
@@ -62,13 +53,13 @@ class _RefineHostApp(App):
 
 class TestRefineScreenUnifiedLogPane:
     @pytest.mark.asyncio
-    async def test_drains_host_app_level_log_handler(self):
+    async def test_drains_own_sink_into_pane(self):
         model = _model({'t1': [_race(1, 'one', 100)]})
         screen = RefineScreen(MagicMock(), model)
         app = _RefineHostApp(screen)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.log_handler.lines.append('unified-line')
+            screen.sink.write_line('unified-line')
             await pilot.pause(0.4)  # past the 0.25s drain interval
             log_view = screen.query_one('#log', RichLog)
             assert len(log_view.lines) >= 1

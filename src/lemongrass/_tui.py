@@ -212,21 +212,22 @@ def _logging_to(handler):
 
 
 class LogPaneScreen:
-    """Screen mixin: drain the app's shared log buffer into this screen's '#log'
-    RichLog, but ONLY while this screen is the active (topmost) one.
+    """Screen mixin: own a private _LogSink and drain it into this screen's '#log'
+    RichLog on a timer. Because the sink is per-screen and worker output is routed to
+    it by producing thread, the drain is unconditional — no 'am I topmost' guard.
 
-    One _TuiLogHandler deque is shared app-wide; without this guard two mounted
-    screens' drain timers would each pop from it and steal half the other's lines.
-    Screens using this call self.set_interval(0.25, self._drain_log) in on_mount.
-    """
+    Screens call self._init_sink() in __init__ (or on_mount) and start
+    self.set_interval(0.25, self._drain_log) in on_mount."""
+
+    def _init_sink(self):
+        """Create this screen's private log sink."""
+        self.sink = _LogSink()
 
     def _drain_log(self):
-        """Pop buffered lines into this screen's RichLog, skipping if inactive."""
-        if self.app.screen is not self:
-            return
+        """Pop this screen's buffered lines into its RichLog."""
         log_view = self.query_one('#log', RichLog)
-        while self.app.log_handler.lines:
-            log_view.write(self.app.log_handler.lines.popleft())
+        while self.sink.lines:
+            log_view.write(self.sink.lines.popleft())
 
 
 def _race_label(race):
