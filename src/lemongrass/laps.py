@@ -905,17 +905,24 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             if not current_competitor_lap_times:
                 continue
 
+            # Resolve class position once per poll (on the first new lap): it is
+            # invariant across this batch, so a per-lap call would only repeat the
+            # same O(competitors) scan and, when the car is absent, log the same
+            # warning for every lap. Computed regardless of network_mode because
+            # the API-provided lap dict has no ClassPosition of its own.
+            class_name = class_position = None
+            resolved = False
             for lap in current_competitor_lap_times:
                 if lap in laps:
                     continue
+                if not resolved:
+                    class_name, class_position = _resolve_class_live(
+                        session_response, ctx.car_number)
+                    resolved = True
                 # Dedup on a pristine snapshot: the live feed never returns a
                 # ClassPosition key, so stamping it below would make every re-seen
                 # lap look new next poll. Snapshot before stamping.
                 laps.append(dict(lap))
-                # Resolve class position for the panel regardless of network_mode;
-                # the API-provided lap dict has no ClassPosition of its own.
-                class_name, class_position = _resolve_class_live(
-                    session_response, ctx.car_number)
                 if class_position is not None:
                     lap['ClassPosition'] = class_position
                 observer.on_lap(lap)

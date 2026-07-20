@@ -558,6 +558,23 @@ class TestMonitorRoutineObserver:
         emitted = obs.on_lap.call_args_list[0].args[0]
         assert 'ClassPosition' not in emitted
 
+    def test_resolve_class_live_called_once_per_poll_batch(self):
+        """Several new laps in one poll resolve class position once, not per lap:
+        the value is invariant across the poll, and per-lap calls would rescan the
+        competitor list and flood the log with warnings when the car is absent."""
+        obs = MagicMock()
+        lap_a = {'Lap': '5', 'LapTime': '1:47.0', 'TotalTime': '9:00.0', 'Position': '3'}
+        lap_b = {'Lap': '6', 'LapTime': '1:46.0', 'TotalTime': '10:46.0', 'Position': '3'}
+        mock_stop = MagicMock()
+        mock_stop.wait.side_effect = [False, True]  # one poll, then stop
+        ctx = _monitor_ctx()
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+        with patch.object(_mod, 'refresh_competitor', return_value=[lap_a, lap_b]):
+            with patch.object(_mod, '_resolve_class_live', return_value=('GT', 2)) as mock_r:
+                _mod.monitor_routine(ctx, [], opts, _stop_event=mock_stop, observer=obs)
+        assert mock_r.call_count == 1
+        assert obs.on_lap.call_count == 2
+
     def test_stamped_lap_not_reemitted_next_poll(self):
         """Stamping ClassPosition must not break cross-poll dedup: the live feed
         never returns a ClassPosition key, so the accumulator holds a pristine
