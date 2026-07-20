@@ -12,7 +12,6 @@ from typing import ClassVar
 
 from race_monitor import RaceMonitorError
 from textual import work
-from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
@@ -28,7 +27,7 @@ from textual.widgets import (
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
-from lemongrass._tui import LogPaneScreen, _logging_to, _race_label, _TuiLogHandler
+from lemongrass._tui import LogPaneScreen, _race_label, _routed_output, _sink_bound
 from lemongrass.race_backfill import enumerate_series, filter_races_by_terms
 
 
@@ -371,6 +370,7 @@ class RefineScreen(LogPaneScreen, Screen):
         series_error, when set, is the exception from a failed config-driven
         series enumeration, surfaced as an error state in the Series pane."""
         super().__init__()
+        self._init_sink()
         self.client = client
         self.model = model
         self.series_error = series_error
@@ -516,14 +516,15 @@ class RefineScreen(LogPaneScreen, Screen):
         skip call_from_thread in that case since the event loop is already closed.
         """
         worker = get_current_worker()
-        try:
-            resp = self.client.results.search_results(term)
-        except RaceMonitorError as exc:
-            if worker.is_cancelled:
+        with _sink_bound(self.sink):
+            try:
+                resp = self.client.results.search_results(term)
+            except RaceMonitorError as exc:
+                if worker.is_cancelled:
+                    return
+                self.app.call_from_thread(
+                    self.notify, f'search "{term}" failed: {exc}', severity='error')
                 return
-            self.app.call_from_thread(
-                self.notify, f'search "{term}" failed: {exc}', severity='error')
-            return
         if worker.is_cancelled:
             return
         self.app.call_from_thread(self._merge_results, term, resp.get('Races', []))
@@ -534,56 +535,22 @@ class RefineScreen(LogPaneScreen, Screen):
         self._refresh_all()
 
 
-class BackfillApp(App):
-    """Thin shell so refine_races() and existing tests keep an App entry point.
-
-    All UI lives on RefineScreen; this app pushes it on mount and mirrors its
-    dismissal to its own exit value, and proxies the handful of attributes
-    tests and refine_races() reach for directly (App.query_one() targets the
-    app's own empty default screen, not the pushed RefineScreen, so that one
-    in particular needs redirecting).
-    """
-
-    def __init__(self, client, model, series_error=None):
-        """client is the shared RaceMonitorClient; model a seeded RaceListModel.
-        series_error, when set, is the exception from a failed config-driven
-        series enumeration, surfaced as an error state in the Series pane."""
-        super().__init__()
-        self.log_handler = _TuiLogHandler()
-        self._screen = RefineScreen(client, model, series_error=series_error)
-
-    def on_mount(self):
-        """Push the refine screen; mirror its dismissal to this app's exit value."""
-        self.push_screen(self._screen, callback=self.exit)
-
-    @property
-    def model(self):
-        """Proxy to the screen's RaceListModel (tests read app.model directly)."""
-        return self._screen.model
-
-    def query_one(self, *args, **kwargs):
-        """Proxy to the screen (see class docstring: App.query_one() alone
-        would miss the pushed RefineScreen's widgets)."""
-        return self._screen.query_one(*args, **kwargs)
-
-
 def refine_races(client, terms, races_by_term, start_epoc, series=None,
                  series_error=None):
-    """Run the refinement app; return a RefineResult, or None if cancelled.
+    """Run the refinement UI; return a RefineResult, or None if cancelled.
 
-    client is the already-open RaceMonitorClient from the initial search (its
-    rate-limiter window is shared with in-app searches). races_by_term is the
-    per-term output of search_races_by_term(); series the config-driven
-    (series_id, series_name, races) enumeration or None; series_error the
-    exception from a failed enumeration (shown as an in-app error state).
-    start_epoc filters in-app search results the same way --start-date
-    filtered the initial ones. While the app runs, root logging is routed
-    into the in-app log pane and restored afterwards.
-    """
+    Seeds RefineScreen as the start screen of the shared LemongrassApp and mirrors
+    its dismissal to the app exit value. client is the already-open
+    RaceMonitorClient; races_by_term the per-term search output; series the
+    config-driven (series_id, series_name, races) enumeration or None; series_error
+    the exception from a failed enumeration; start_epoc filters in-app searches.
+    While the app runs, root logging is routed into the per-screen sinks."""
+    from lemongrass._home_tui import LemongrassApp  # lazy: breaks home→races→backfill cycle
     model = RaceListModel(terms, races_by_term, start_epoc, series=series)
-    app = BackfillApp(client, model, series_error=series_error)
+    screen = RefineScreen(client, model, series_error=series_error)
+    app = LemongrassApp(client, start_screen=screen, exit_on_start_dismiss=True)
     try:
-        with _logging_to(app.log_handler):
+        with _routed_output():
             return app.run()
     except KeyboardInterrupt:
         return None

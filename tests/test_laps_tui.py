@@ -310,10 +310,10 @@ class TestImportFlow:
     @pytest.mark.asyncio
     async def test_backfill_stdout_is_captured_not_leaked_to_terminal(self):
         # Finding 1: backfill_race does unconditional print() calls (race header,
-        # completed-race import path via _StdoutObserver). _logging_to only
-        # redirects logging.*, not stdout, so those prints would corrupt the
-        # Textual display. ImportScreen._run must redirect stdout into the same
-        # deque the log-pane timer drains.
+        # completed-race import path via _StdoutObserver). _routed_output only
+        # routes logging.*, not stdout, so those prints would corrupt the Textual
+        # display. ImportScreen._run must bind its sink (via _sink_bound) for the
+        # worker so print() routes into the same sink the log-pane timer drains.
         client = MagicMock()
         app = LapsApp(client)
 
@@ -327,7 +327,7 @@ class TestImportFlow:
                 app.push_screen(screen)
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                buffered = list(app.log_handler.lines)
+                buffered = list(screen.sink.lines)
                 log = screen.query_one('#log', RichLog)
                 drained_text = '\n'.join(str(line) for line in log.lines)
                 assert 'RACE HEADER LINE' in buffered or 'RACE HEADER LINE' in drained_text

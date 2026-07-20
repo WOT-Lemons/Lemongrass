@@ -2,7 +2,6 @@
 re-import them. The race table (the `list` view) is the hub; keys act on the checked
 batch (prune) or the highlighted row (diagnose / re-import)."""
 
-import contextlib
 import logging
 from typing import ClassVar
 
@@ -16,8 +15,8 @@ from textual.worker import get_current_worker
 
 from lemongrass import _influx
 from lemongrass._backfill_tui import RaceListModel, RefineScreen
-from lemongrass._laps_tui import ImportScreen, _StdoutToLines
-from lemongrass._tui import _STDOUT_LOCK, LogPaneScreen
+from lemongrass._laps_tui import ImportScreen
+from lemongrass._tui import LogPaneScreen, _sink_bound
 from lemongrass.race_backfill import run_backfill
 from lemongrass.race_diagnose import diagnose_api, diagnose_influx
 from lemongrass.races import fetch_race_rows, prune_races
@@ -171,6 +170,7 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
 
     def __init__(self):
         super().__init__()
+        self._init_sink()
         self._rows = []
 
     def action_back(self):
@@ -219,14 +219,15 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
     @work(thread=True, exclusive=True)
     def _load(self):
         worker = get_current_worker()
-        try:
-            with _influx.connect() as client:
-                rows = fetch_race_rows(client.query_api())
-        except Exception as exc:  # surface, never crash the app
-            logging.exception('races list load failed')
-            if not worker.is_cancelled:
-                self.app.call_from_thread(self._fail, str(exc))
-            return
+        with _sink_bound(self.sink):
+            try:
+                with _influx.connect() as client:
+                    rows = fetch_race_rows(client.query_api())
+            except Exception as exc:  # surface, never crash the app
+                logging.exception('races list load failed')
+                if not worker.is_cancelled:
+                    self.app.call_from_thread(self._fail, str(exc))
+                return
         if not worker.is_cancelled:
             self.app.call_from_thread(self._show, rows)
 
@@ -278,17 +279,18 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
     @work(thread=True, exclusive=True)
     def _run_prune(self, race_ids):
         worker = get_current_worker()
-        try:
-            with _influx.connect() as client:
-                failed = prune_races(
-                    client.delete_api(), race_ids,
-                    on_progress=lambda m: self.app.log_handler.lines.append(m))
-        except Exception as exc:  # surface, never crash the app
-            logging.exception('prune failed')
-            if not worker.is_cancelled:
-                self.app.call_from_thread(self.app.notify, f'prune failed: {exc}',
-                                           severity='error')
-            return
+        with _sink_bound(self.sink):
+            try:
+                with _influx.connect() as client:
+                    failed = prune_races(
+                        client.delete_api(), race_ids,
+                        on_progress=lambda m: self.sink.lines.append(m))
+            except Exception as exc:  # surface, never crash the app
+                logging.exception('prune failed')
+                if not worker.is_cancelled:
+                    self.app.call_from_thread(self.app.notify, f'prune failed: {exc}',
+                                              severity='error')
+                return
         if worker.is_cancelled:
             return
         if failed:
@@ -342,6 +344,7 @@ class DiagnoseOutputScreen(LogPaneScreen, Screen):
     def __init__(self, race_id, car_number):
         """Store the race/car being diagnosed."""
         super().__init__()
+        self._init_sink()
         self.race_id = race_id
         self.car_number = car_number
 
@@ -359,19 +362,18 @@ class DiagnoseOutputScreen(LogPaneScreen, Screen):
     @work(thread=True, exclusive=True)
     def _run(self):
         worker = get_current_worker()
-        writer = _StdoutToLines(self.app.log_handler.lines)
-        try:
-            with _STDOUT_LOCK, contextlib.redirect_stdout(writer):
+        with _sink_bound(self.sink):
+            try:
                 start_epoc, end_epoc = diagnose_api(
                     self.app.client, self.race_id, self.car_number)
                 with _influx.connect() as client:
                     diagnose_influx(client.query_api(), self.race_id,
-                                     self.car_number, start_epoc, end_epoc)
-        except Exception as exc:
-            logging.exception('diagnose failed')
-            self.app.log_handler.lines.append(f'diagnose failed: {exc}')
-        finally:
-            writer.flush()
+                                    self.car_number, start_epoc, end_epoc)
+            except Exception as exc:
+                logging.exception('diagnose failed')
+                self.sink.lines.append(f'diagnose failed: {exc}')
+            finally:
+                self.sink.flush()
         if not worker.is_cancelled:
             self.app.call_from_thread(
                 self.query_one('#title', Label).update,
@@ -391,6 +393,7 @@ class BackfillRunScreen(LogPaneScreen, Screen):
     def __init__(self, races):
         """Store the races to backfill."""
         super().__init__()
+        self._init_sink()
         self._races = races
 
     def compose(self):
@@ -407,18 +410,17 @@ class BackfillRunScreen(LogPaneScreen, Screen):
     @work(thread=True, exclusive=True)
     def _run(self):
         worker = get_current_worker()
-        writer = _StdoutToLines(self.app.log_handler.lines)
         failures = None
         crashed = False
-        try:
-            with _STDOUT_LOCK, contextlib.redirect_stdout(writer):
+        with _sink_bound(self.sink):
+            try:
                 failures = run_backfill(self._races, dry_run=False, force=False)
-        except Exception as exc:
-            crashed = True
-            logging.exception('backfill run failed')
-            self.app.log_handler.lines.append(f'backfill failed: {exc}')
-        finally:
-            writer.flush()
+            except Exception as exc:
+                crashed = True
+                logging.exception('backfill run failed')
+                self.sink.lines.append(f'backfill failed: {exc}')
+            finally:
+                self.sink.flush()
         if not worker.is_cancelled:
             if crashed:
                 msg = 'Backfill failed — see log.'

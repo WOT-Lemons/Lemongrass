@@ -39,10 +39,10 @@ def run_races_tui(client):
     """Run the unified app opening directly on the races browser."""
     from lemongrass._home_tui import LemongrassApp
     from lemongrass._races_tui import RacesBrowserScreen
-    from lemongrass._tui import _logging_to
+    from lemongrass._tui import _routed_output
 
     app = LemongrassApp(client, start_screen=RacesBrowserScreen())
-    with _logging_to(app.log_handler):
+    with _routed_output():
         app.run()
     return 0
 

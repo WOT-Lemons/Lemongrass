@@ -13,7 +13,6 @@ from lemongrass._races_tui import (
     _row_label,
     distinct_car_numbers,
 )
-from lemongrass._tui import _TuiLogHandler
 
 
 def _rows():
@@ -29,7 +28,6 @@ class _Host(App):
     def __init__(self, client):
         super().__init__()
         self.client = client
-        self.log_handler = _TuiLogHandler()
 
     def on_mount(self):
         self.push_screen(RacesBrowserScreen())
