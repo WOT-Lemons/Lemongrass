@@ -13,6 +13,7 @@ from lemongrass._laps_tui import (
     LapsFlowMixin,
     MonitorScreen,
     PickerScreen,
+    _TuiObserver,
 )
 
 
@@ -42,6 +43,18 @@ class TestLapBoardModel:
         m = LapBoardModel()
         m.set_laps([_lap('1'), _lap('CAUTION')])
         assert [r[0] for r in m.lap_rows()] == [1]
+
+    def test_lap_rows_surface_class_position(self):
+        m = LapBoardModel()
+        lap = _lap('5')
+        lap['ClassPosition'] = 2
+        m.add_lap(lap)
+        assert m.lap_rows()[0][3] == 2
+
+    def test_lap_rows_class_position_defaults_to_dash(self):
+        m = LapBoardModel()
+        m.add_lap(_lap('5'))  # API lap dict carries no ClassPosition
+        assert m.lap_rows()[0][3] == '-'
 
     def test_leaderboard_sorted_by_position(self):
         m = LapBoardModel()
@@ -76,6 +89,22 @@ class TestLapBoardModel:
         assert len(rows) == 1
         assert rows[0][0] == 1
         assert rows[0][1] == '5'
+
+
+class TestTuiObserver:
+    def test_on_live_detail_includes_class_position(self):
+        obs = _TuiObserver(MagicMock())
+        with patch.object(_TuiObserver, '_call') as mock_call:
+            obs.on_live_detail({'Number': '42', 'Name': 'Jane Doe'}, 'GT', 3)
+        header = mock_call.call_args[0][1]
+        assert '42' in header and 'GT' in header and '3' in header
+
+    def test_on_live_detail_omits_missing_class_position(self):
+        obs = _TuiObserver(MagicMock())
+        with patch.object(_TuiObserver, '_call') as mock_call:
+            obs.on_live_detail({'Number': '42', 'Name': 'Jane Doe'}, 'GT', None)
+        header = mock_call.call_args[0][1]
+        assert 'GT' in header and 'None' not in header
 
 
 class TestPickerScreen:

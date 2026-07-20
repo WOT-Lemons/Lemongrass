@@ -365,8 +365,10 @@ class _TuiObserver:
 
     def on_live_detail(self, competitor_details, class_name, class_position):
         name = competitor_details.get('Name', '')
-        self._call(self._screen.set_header,
-                   f"#{competitor_details.get('Number', '?')} {name} — class {class_name}")
+        header = f"#{competitor_details.get('Number', '?')} {name} — class {class_name}"
+        if class_position is not None:
+            header += f" (P{class_position})"
+        self._call(self._screen.set_header, header)
 
     def on_laps(self, laps):
         self._call(self._screen.set_laps, laps)
