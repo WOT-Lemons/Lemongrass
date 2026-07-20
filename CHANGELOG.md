@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.3.0](https://github.com/WOT-Lemons/Lemongrass/compare/v5.2.1...v5.3.0) (2026-07-20)
+
+
+### Features
+
+* unified lemongrass TUI (Home menu + races browser) ([#219](https://github.com/WOT-Lemons/Lemongrass/issues/219)) ([cecc81c](https://github.com/WOT-Lemons/Lemongrass/commit/cecc81c1402ca78af910b4d0cff84a103ef98065))
+
+
+### Bug Fixes
+
+* **laps:** fill live-monitor ClassPos column and header ([#222](https://github.com/WOT-Lemons/Lemongrass/issues/222)) ([5b44256](https://github.com/WOT-Lemons/Lemongrass/commit/5b44256656eaf891dbd2c124ff558aad9cbd2b58))
+
 ## [5.2.1](https://github.com/WOT-Lemons/Lemongrass/compare/v5.2.0...v5.2.1) (2026-07-19)
 
 
