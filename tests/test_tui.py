@@ -1,3 +1,4 @@
+import io
 import logging
 import re
 import sys
@@ -102,6 +103,21 @@ class TestSinkBound:
         assert sys.stdout is original  # restored at depth 0
         assert _current_sink() is None
 
+    def test_stdout_restore_skipped_when_proxy_replaced_during_teardown(self):
+        # If the app tears down (Textual restores the real terminal stdout) while
+        # a bound worker is still finishing, the worker's finally must NOT clobber
+        # that restored stream with the proxy's now-defunct captured _real.
+        original = sys.stdout
+        capture = io.StringIO()  # stand-in for Textual's capture stream
+        sink = _LogSink()
+        try:
+            sys.stdout = capture
+            with _sink_bound(sink):        # proxy captures `capture` as _real
+                sys.stdout = original       # teardown restores the real terminal
+            assert sys.stdout is original   # finally left the restore in place
+        finally:
+            sys.stdout = original
+
     def test_print_routes_to_bound_thread_sink(self):
         sink = _LogSink()
         with _sink_bound(sink):
@@ -122,6 +138,21 @@ class TestRoutedStdout:
         real = sys.__stdout__
         router = _RoutedStdout(real)
         assert router.isatty() == real.isatty()
+
+    def test_flush_emits_bound_sink_trailing_partial(self):
+        sink = _LogSink()
+        with _sink_bound(sink):
+            sys.stdout.write('partial')  # no trailing newline
+            sys.stdout.flush()
+        assert 'partial' in list(sink.lines)
+
+    def test_flush_delegates_to_real_when_unbound(self):
+        flushed = []
+        real = type('R', (), {'write': lambda self, t: None,
+                              'flush': lambda self: flushed.append(True)})()
+        router = _RoutedStdout(real)
+        router.flush()  # no _sink_bound active on this thread
+        assert flushed == [True]
 
 
 class TestRoutedLogHandler:
@@ -166,3 +197,14 @@ class TestRoutedOutput:
         with _routed_output():
             assert any(isinstance(h, _RoutedLogHandler) for h in root.handlers)
         assert root.handlers == before
+
+    def test_restores_root_handlers_after_exception(self):
+        root = logging.getLogger()
+        before = root.handlers[:]
+        before_level = root.level
+        with pytest.raises(RuntimeError):
+            with _routed_output():
+                raise RuntimeError('boom')
+        assert root.handlers == before
+        assert root.level == before_level
+        assert not any(isinstance(h, _RoutedLogHandler) for h in root.handlers)

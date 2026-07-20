@@ -85,7 +85,14 @@ class _RoutedStdout:
         (sink.write if sink is not None else self._real.write)(text)
 
     def flush(self):
-        if _current_sink() is None:
+        # On a bound thread, flush the sink so a trailing newline-less line
+        # (print(flush=True) / an explicit sys.stdout.flush()) reaches the pane
+        # instead of being stranded in the sink buffer; off bound threads, flush
+        # the underlying stream as usual.
+        sink = _current_sink()
+        if sink is not None:
+            sink.flush()
+        else:
             self._real.flush()
 
     def __getattr__(self, name):
@@ -120,7 +127,13 @@ def _sink_bound(sink):
         with _route_lock:
             _stdout_depth -= 1
             if _stdout_depth == 0:
-                sys.stdout = _routed_stdout._real
+                # Restore only if our proxy is still installed. If app.run() has
+                # already returned and Textual restored the real terminal stdout
+                # while this bound worker was still finishing, sys.stdout is no
+                # longer our proxy — reinstalling _real (Textual's now-defunct
+                # capture stream) would send every post-TUI print to a dead stream.
+                if sys.stdout is _routed_stdout:
+                    sys.stdout = _routed_stdout._real
                 _routed_stdout = None
             if prev is not None:
                 _thread_sinks[ident] = prev
