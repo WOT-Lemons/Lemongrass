@@ -520,6 +520,60 @@ class TestMonitorRoutineObserver:
         assert obs.on_laps.called          # initial seed
         assert obs.on_standings.called     # once per poll
 
+    def test_stamps_class_position_on_lap_non_network(self):
+        """Class position is computed and stamped onto each new lap even when
+        not writing to InfluxDB, so the live panel's ClassPos column is filled."""
+        obs = MagicMock()
+        stop = threading.Event()
+        new_lap = {'Lap': '5', 'LapTime': '1:47.0', 'TotalTime': '9:00.0', 'Position': '3'}
+
+        def fake_refresh(ctx):
+            stop.set()
+            return [new_lap]
+
+        ctx = _monitor_ctx()
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(_mod, '_resolve_class_live', return_value=('GT', 2)):
+                _mod.monitor_routine(ctx, [], opts, _stop_event=stop, observer=obs)
+        emitted = obs.on_lap.call_args_list[0].args[0]
+        assert emitted.get('ClassPosition') == 2
+
+    def test_none_class_position_leaves_lap_unstamped(self):
+        """A car absent from the standings yields no class position; the lap dict
+        is left without a ClassPosition key so the panel falls back to '-'."""
+        obs = MagicMock()
+        stop = threading.Event()
+        new_lap = {'Lap': '5', 'LapTime': '1:47.0', 'TotalTime': '9:00.0', 'Position': '3'}
+
+        def fake_refresh(ctx):
+            stop.set()
+            return [new_lap]
+
+        ctx = _monitor_ctx()
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(_mod, '_resolve_class_live', return_value=(None, None)):
+                _mod.monitor_routine(ctx, [], opts, _stop_event=stop, observer=obs)
+        emitted = obs.on_lap.call_args_list[0].args[0]
+        assert 'ClassPosition' not in emitted
+
+    def test_stamped_lap_not_reemitted_next_poll(self):
+        """Stamping ClassPosition must not break cross-poll dedup: the live feed
+        never returns a ClassPosition key, so the accumulator holds a pristine
+        snapshot and a re-seen lap is recognized rather than emitted twice."""
+        obs = MagicMock()
+        lap = {'Lap': '5', 'LapTime': '1:47.0', 'TotalTime': '9:00.0', 'Position': '3'}
+        mock_stop = MagicMock()
+        mock_stop.wait.side_effect = [False, False, True]  # two polls, then stop
+        ctx = _monitor_ctx()
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+        # A fresh pristine dict each poll, exactly as the live API returns them.
+        with patch.object(_mod, 'refresh_competitor', side_effect=lambda c: [dict(lap)]):
+            with patch.object(_mod, '_resolve_class_live', return_value=('GT', 2)):
+                _mod.monitor_routine(ctx, [], opts, _stop_event=mock_stop, observer=obs)
+        assert obs.on_lap.call_count == 1
+
 
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):

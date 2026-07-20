@@ -906,27 +906,35 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 continue
 
             for lap in current_competitor_lap_times:
-                if lap not in laps:
-                    observer.on_lap(lap)
-                    laps.append(lap)
-                    if opts.network_mode:
-                        class_name, class_position = _resolve_class_live(
-                            session_response, ctx.car_number)
-                        try:
-                            new_lap_num = int(lap['Lap'])
-                        except (ValueError, TypeError):
-                            logging.warning(
-                                "%s in monitor; skipping",
-                                _describe_bad_value(lap['Lap'], 'Lap'))
-                            continue
-                        class_positions = (
-                            {new_lap_num: class_position} if class_position is not None else None)
-                        push_influx(
-                            ctx, [lap], True,
-                            competitor_name=competitor_name,
-                            car_info=car_info,
-                            class_name=class_name, class_positions=class_positions,
-                            session_id=session_id)
+                if lap in laps:
+                    continue
+                # Dedup on a pristine snapshot: the live feed never returns a
+                # ClassPosition key, so stamping it below would make every re-seen
+                # lap look new next poll. Snapshot before stamping.
+                laps.append(dict(lap))
+                # Resolve class position for the panel regardless of network_mode;
+                # the API-provided lap dict has no ClassPosition of its own.
+                class_name, class_position = _resolve_class_live(
+                    session_response, ctx.car_number)
+                if class_position is not None:
+                    lap['ClassPosition'] = class_position
+                observer.on_lap(lap)
+                if opts.network_mode:
+                    try:
+                        new_lap_num = int(lap['Lap'])
+                    except (ValueError, TypeError):
+                        logging.warning(
+                            "%s in monitor; skipping",
+                            _describe_bad_value(lap['Lap'], 'Lap'))
+                        continue
+                    class_positions = (
+                        {new_lap_num: class_position} if class_position is not None else None)
+                    push_influx(
+                        ctx, [lap], True,
+                        competitor_name=competitor_name,
+                        car_info=car_info,
+                        class_name=class_name, class_positions=class_positions,
+                        session_id=session_id)
     except KeyboardInterrupt:
         observer.on_status("\nMonitoring stopped.")
         return MonitorStatus.INTERRUPTED
