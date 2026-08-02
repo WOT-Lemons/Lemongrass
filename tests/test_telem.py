@@ -1,5 +1,6 @@
 import logging
 import threading
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -625,9 +626,14 @@ class TestInfluxConnectTuning:
 
     def test_main_connects_with_short_timeout_and_trimmed_retries(self):
         """The hot loop must build its Influx client with a short timeout and a
-        trimmed retry budget so a downed Influx fails fast to the spool."""
+        trimmed retry budget so a downed Influx fails fast to the spool.
+
+        _start_drain is stubbed out because it deliberately builds a *second*,
+        untuned client; TestDrainLifecycle covers that call's arguments.
+        """
         with patch.object(_mod._influx, "connect") as influx_connect, \
                 patch.object(_mod.Spool, "from_config"), \
+                patch.object(_mod, "_start_drain", return_value=(None, None)), \
                 patch.object(_mod, "_configure_obd_logging"), \
                 patch.object(_mod, "connect", side_effect=RuntimeError("stop")):
             with pytest.raises(RuntimeError, match="stop"):
@@ -698,18 +704,10 @@ class TestPump:
     def setup_method(self):
         _reset()
 
-    def test_replays_spool_when_flush_succeeds(self):
+    def test_pump_does_not_replay(self):
         _mod._spool = MagicMock()
-        write_api = MagicMock()
         with patch.object(_mod, "flush_points", return_value=True):
-            _mod._pump(write_api)
-        _mod._spool.replay_oldest.assert_called_once_with(write_api, _mod.WRITE_BUCKET)
-
-    def test_skips_replay_when_flush_fails(self):
-        _mod._spool = MagicMock()
-        write_api = MagicMock()
-        with patch.object(_mod, "flush_points", return_value=False):
-            _mod._pump(write_api)
+            _mod._pump(MagicMock())
         _mod._spool.replay_oldest.assert_not_called()
 
     def test_no_spool_does_not_crash(self):
@@ -786,6 +784,93 @@ class TestDrainLoop:
         with patch.object(_mod, "_drain_once") as once:
             _mod._drain_loop(MagicMock(), stop, interval=0)
         once.assert_not_called()
+
+
+class TestDrainLifecycle:
+    def setup_method(self):
+        _reset()
+
+    def test_drain_starts_before_obd_connect(self):
+        """The regression: main() blocks in the no-car wait, so a drain started
+        after connect() never runs."""
+        spool = MagicMock(enabled=True)
+        order = []
+        with patch.object(_mod.Spool, "from_config", return_value=spool), \
+             patch.object(_mod._influx, "connect") as conn, \
+             patch.object(_mod.threading, "Thread") as thread, \
+             patch.object(_mod, "connect", side_effect=RuntimeError("stop")):
+            thread.side_effect = lambda **kw: order.append("drain") or MagicMock()
+            conn.return_value.__enter__ = lambda s: MagicMock()
+            conn.return_value.__exit__ = lambda *a: False
+            with pytest.raises(RuntimeError):
+                _mod.main()
+        assert order == ["drain"]
+
+    def test_drain_not_started_when_spool_disabled(self, caplog):
+        _mod._spool = MagicMock(enabled=False)
+        with caplog.at_level(logging.ERROR):
+            client, thread = _mod._start_drain()
+        assert (client, thread) == (None, None)
+        assert "durability" in caplog.text
+
+    def test_drain_uses_its_own_client_not_the_hot_path_one(self):
+        _mod._spool = MagicMock(enabled=True)
+        with patch.object(_mod._influx, "connect") as conn, \
+             patch.object(_mod.threading, "Thread"):
+            _mod._start_drain()
+        conn.assert_called_once_with()      # no timeout/retries overrides
+
+    def test_stop_drain_sets_event_joins_and_closes(self):
+        client, thread = MagicMock(), MagicMock()
+        _mod._stop_drain(client, thread)
+        assert _mod._drain_stop.is_set()
+        thread.join.assert_called_once_with(timeout=_mod.DRAIN_JOIN_TIMEOUT_S)
+        client.close.assert_called_once()
+
+
+class TestSpoolDrainsWithNoCar:
+    """The behavioural regression test, driven through main().
+
+    A structural 'thread started before connect()' assertion passes for a thread
+    that starts and immediately dies, so it cannot catch this bug. This runs the
+    real drain thread while main() is parked in the no-car wait — the exact state
+    the Pi sat in for hours — and asserts the spool empties anyway.
+    """
+
+    def setup_method(self):
+        _reset()
+
+    def test_spooled_file_drains_while_main_waits_for_the_car(self, tmp_path):
+        spool = Spool(tmp_path / "spool")
+        spool.append([Point("RPM").field("value", 1).time(datetime.now(UTC))])
+        attempts = []
+
+        def obd_connect():
+            """The car never connects. Break out once the drain has finished."""
+            attempts.append(1)
+            if not list((tmp_path / "spool").glob("*.lp")):
+                raise RuntimeError("drained")
+            assert len(attempts) < 2000, "spool never drained while waiting for the car"
+            conn = MagicMock()
+            conn.status.return_value = "Not Connected"
+            return conn
+
+        client = MagicMock()
+        client.__enter__ = lambda s: client
+        client.__exit__ = lambda *a: False
+
+        with patch.object(_mod.Spool, "from_config", return_value=spool), \
+             patch.object(_mod._influx, "connect", return_value=client), \
+             patch.object(_mod, "connect", side_effect=obd_connect), \
+             patch.object(_mod, "_configure_obd_logging"), \
+             patch.object(_mod, "sleep"), \
+             patch.object(_mod, "DRAIN_ACTIVE_S", 0), \
+             patch.object(_mod, "DRAIN_IDLE_S", 0):
+            with pytest.raises(RuntimeError, match="drained"):
+                _mod.main()
+
+        assert list((tmp_path / "spool").glob("*.lp")) == []
+        assert client.write_api.return_value.write.called
 
 
 class TestRouteCommand:

@@ -516,14 +516,49 @@ def _drain_loop(write_api, stop_event, interval=None):
             return
 
 
-def _pump(write_api):
-    """One service cycle: flush fresh points, then replay one spooled file.
+def _start_drain():
+    """Start the spool-drain thread on its own InfluxDB client.
 
-    Replay runs only when the live flush succeeded — while Influx is down the
-    flush already failed (and spilled), so we skip a second blocking write.
+    Its own client, not just its own write_api: _influx.connect fixes timeout and
+    retries at construction, so a second write_api off the hot-path client would
+    inherit the 3s/1-retry fail-fast tuning. The drain is the slow path and takes
+    the library defaults instead.
     """
-    if flush_points(write_api) and _spool is not None:
-        _spool.replay_oldest(write_api, WRITE_BUCKET)
+    if _spool is None or not _spool.enabled:
+        logger.error("Spool unusable; telemetry durability and drain are disabled")
+        return None, None
+    client = _influx.connect()
+    thread = threading.Thread(
+        target=_drain_loop,
+        args=(client.write_api(write_options=SYNCHRONOUS), _drain_stop),
+        name="spool-drain",
+        daemon=True,
+    )
+    thread.start()
+    return client, thread
+
+
+def _stop_drain(client, thread):
+    """Stop the drain thread and close its client, in that order.
+
+    Ordering matters: the watchdog's sys.exit unwinds main()'s `with`, which
+    closes the hot-path client. Doing the same to the drain's client while the
+    thread is mid-POST produces interpreter-shutdown noise.
+    """
+    _drain_stop.set()
+    if thread is not None:
+        thread.join(timeout=DRAIN_JOIN_TIMEOUT_S)
+    if client is not None:
+        client.close()
+
+
+def _pump(write_api):
+    """One service cycle: flush fresh points to InfluxDB.
+
+    Spool replay is NOT done here — it runs on its own thread (see _start_drain)
+    so recovery is not gated on the OBD link being up.
+    """
+    flush_points(write_api)
 
 
 def main():
@@ -535,45 +570,52 @@ def main():
     with _influx.connect(timeout=WRITE_TIMEOUT_MS, retries=WRITE_RETRIES) as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
-        _configure_obd_logging()
-        connection = connect()
-        status = connection.status()
-        while "Car Connected" not in status:
-            connection.close()
-            logger.info("No car connected, sleeping...")
-            sleep(1)
+        # Started before the OBD connect, deliberately: the wait loop below can
+        # block for days with the car switched off, and spool recovery must not
+        # be hostage to it. That coupling is what stranded 4.4h of telemetry.
+        drain_client, drain_thread = _start_drain()
+        try:
+            _configure_obd_logging()
             connection = connect()
             status = connection.status()
+            while "Car Connected" not in status:
+                connection.close()
+                logger.info("No car connected, sleeping...")
+                sleep(1)
+                connection = connect()
+                status = connection.status()
 
-        logger.debug(connection.status())
+            logger.debug(connection.status())
 
-        _connection = connection
-        _vin = _resolve_vin(connection)
-        logger.info("Tagging telemetry with vin=%s", _vin)
-        _query_fuel_type_once(connection)
+            _connection = connection
+            _vin = _resolve_vin(connection)
+            logger.info("Tagging telemetry with vin=%s", _vin)
+            _query_fuel_type_once(connection)
 
-        for command in connection.supported_commands:
-            callback = _route_command(command)
-            if callback is not None:
-                connection.watch(command, callback=callback)
+            for command in connection.supported_commands:
+                callback = _route_command(command)
+                if callback is not None:
+                    connection.watch(command, callback=callback)
 
-        try:
-            connection.watch(obd.commands.ELM_VOLTAGE, callback=new_value)
-        except (AttributeError, KeyError):
-            logger.warning("Could not find voltage monitoring command - skipping")
+            try:
+                connection.watch(obd.commands.ELM_VOLTAGE, callback=new_value)
+            except (AttributeError, KeyError):
+                logger.warning("Could not find voltage monitoring command - skipping")
 
-        connection.start()
-        _last_append_monotonic = monotonic()
+            connection.start()
+            _last_append_monotonic = monotonic()
 
-        while True:
-            sleep(0.5)
-            _pump(write_api)
-            if not _connection_healthy(connection):
-                # Exit nonzero so the container/systemd restart policy re-runs
-                # the well-tested startup connect sequence; _pump at the top of
-                # this iteration already flushed or spilled pending points.
-                logger.error("Exiting for supervisor restart")
-                sys.exit(1)
+            while True:
+                sleep(0.5)
+                _pump(write_api)
+                if not _connection_healthy(connection):
+                    # Exit nonzero so the container/systemd restart policy re-runs
+                    # the well-tested startup connect sequence; _pump at the top of
+                    # this iteration already flushed or spilled pending points.
+                    logger.error("Exiting for supervisor restart")
+                    sys.exit(1)
+        finally:
+            _stop_drain(drain_client, drain_thread)
 
 
 if __name__ == "__main__":
