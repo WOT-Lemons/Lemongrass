@@ -7,6 +7,8 @@ below drive it from a background worker via _TuiObserver.
 
 import logging
 import threading
+import time
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from race_monitor import RaceMonitorError
@@ -109,7 +111,16 @@ class LapsFlowMixin:
         if is_live:
             self.push_screen(CarSelectScreen(self.client, race_id, name))
         else:
-            self.push_screen(ImportConfirmScreen(self.client, race_id, name))
+            # Not live covers two very different races — one that has not started
+            # yet and one that finished — and is_live cannot tell them apart, so
+            # let the user choose instead of assuming the race is over.
+            self.push_screen(NotLiveScreen(self.client, race_id, name, details))
+
+    def _confirm_import(self, race_id, race_name):
+        self.push_screen(ImportConfirmScreen(self.client, race_id, race_name))
+
+    def _start_wait(self, race_id, race_name):
+        self.push_screen(WaitForLiveScreen(self.client, race_id, race_name))
 
     def _start_monitor(self, race_id, car_number, network, interval):
         self.monitor_args = (race_id, car_number, network, interval)
@@ -263,6 +274,55 @@ class PickerScreen(Screen):
             return
         is_live = bool(live_resp.get('Successful') and live_resp.get('IsLive'))
         self.app.call_from_thread(self.app._on_race_resolved, details, is_live, race_id)
+
+
+class NotLiveScreen(Screen):
+    """A race that isn't live: wait for the green flag, or import it as completed."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('escape', 'app.pop_screen', 'Back'),
+    ]
+
+    def __init__(self, client, race_id, race_name, race_details=None):
+        super().__init__()
+        self.client = client
+        self.race_id = race_id
+        self.race_name = race_name
+        self._race = (race_details or {}).get('Race', {})
+
+    def compose(self):
+        yield Label(f'{self.race_name} (#{self.race_id}) is not live right now.')
+        yield Label(f'Scheduled start: {self._scheduled()}', id='scheduled')
+        yield ListView(
+            ListItem(Label('Wait for the green flag, then monitor'), id='wait'),
+            ListItem(Label('Import as a completed race'), id='import'),
+            id='menu')
+        yield Footer()
+
+    def _scheduled(self):
+        start = self._race.get('StartDateEpoc') or 0
+        if not start:
+            return 'unknown'
+        return datetime.fromtimestamp(start, tz=UTC).strftime('%Y-%m-%d %H:%M UTC')
+
+    def _upcoming(self):
+        """True if the race's stored end time hasn't passed (0 = unknown, treat
+        as upcoming)."""
+        end = self._race.get('EndDateEpoc') or 0
+        return end == 0 or end > time.time()
+
+    def on_mount(self):
+        # Focus is a hint about which choice is likely, never a decision — both
+        # rows stay one arrow key apart because RaceMonitor's dates can be wrong.
+        view = self.query_one('#menu', ListView)
+        view.index = 0 if self._upcoming() else 1
+        view.focus()
+
+    def on_list_view_selected(self, event):
+        if event.item.id == 'wait':
+            self.app._start_wait(self.race_id, self.race_name)
+        elif event.item.id == 'import':
+            self.app._confirm_import(self.race_id, self.race_name)
 
 
 class CarSelectScreen(Screen):

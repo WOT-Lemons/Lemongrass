@@ -12,6 +12,7 @@ from lemongrass._laps_tui import (
     LapsApp,
     LapsFlowMixin,
     MonitorScreen,
+    NotLiveScreen,
     PickerScreen,
     _TuiObserver,
 )
@@ -123,7 +124,10 @@ class TestPickerScreen:
         assert app.picked[1] is True  # is_live
 
     @pytest.mark.asyncio
-    async def test_non_live_race_pushes_import_confirm_screen(self):
+    async def test_non_live_race_pushes_not_live_screen(self):
+        # A race that has not gone live yet is indistinguishable from a finished
+        # one by is_live alone, so the picker must offer the fork instead of
+        # assuming the race is over.
         client = _client_with_race(is_live=False)
         app = LapsApp(client)  # on_mount pushes PickerScreen automatically
         async with app.run_test() as pilot:
@@ -132,7 +136,7 @@ class TestPickerScreen:
             await pilot.press('enter')
             await app.workers.wait_for_complete()  # deterministic: await the resolve worker
             await pilot.pause()
-            assert isinstance(app.screen, ImportConfirmScreen)
+            assert isinstance(app.screen, NotLiveScreen)
         client.race.details.assert_called_with(42)
 
     @pytest.mark.asyncio
@@ -147,6 +151,70 @@ class TestPickerScreen:
             await pilot.pause()
             hits = app.screen.query_one('#hits', ListView)
             assert len(hits.children) == 1
+
+
+class TestNotLiveScreen:
+    @pytest.mark.asyncio
+    async def test_import_choice_reaches_import_confirm(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            app.push_screen(NotLiveScreen(client, 42, 'Sears', {'Race': {}}))
+            await pilot.pause()
+            menu = app.screen.query_one('#menu', ListView)
+            menu.index = 1
+            await pilot.press('enter')
+            await pilot.pause()
+            assert isinstance(app.screen, ImportConfirmScreen)
+
+    @pytest.mark.asyncio
+    async def test_wait_choice_calls_start_wait(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            with patch.object(LapsApp, '_start_wait') as mock_start:
+                app.push_screen(NotLiveScreen(client, 42, 'Sears', {'Race': {}}))
+                await pilot.pause()
+                menu = app.screen.query_one('#menu', ListView)
+                menu.index = 0
+                await pilot.press('enter')
+                await pilot.pause()
+        mock_start.assert_called_once_with(42, 'Sears')
+
+    @pytest.mark.asyncio
+    async def test_shows_scheduled_start(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        details = {'Race': {'StartDateEpoc': 86400, 'EndDateEpoc': 0}}
+        async with app.run_test() as pilot:
+            screen = NotLiveScreen(client, 42, 'Sears', details)
+            app.push_screen(screen)
+            await pilot.pause()
+            text = str(screen.query_one('#scheduled', Label).render())
+            assert '1970-01-02' in text
+
+    @pytest.mark.asyncio
+    async def test_missing_start_epoch_reads_unknown(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            screen = NotLiveScreen(client, 42, 'Sears', {'Race': {}})
+            app.push_screen(screen)
+            await pilot.pause()
+            assert 'unknown' in str(screen.query_one('#scheduled', Label).render())
+
+    @pytest.mark.asyncio
+    async def test_finished_race_defaults_to_import(self):
+        # A race whose stored end time is in the past most likely wants an
+        # import, so focus lands there — but waiting is still one arrow key away.
+        client = MagicMock()
+        app = LapsApp(client)
+        details = {'Race': {'StartDateEpoc': 1, 'EndDateEpoc': 1}}
+        async with app.run_test() as pilot:
+            screen = NotLiveScreen(client, 42, 'Sears', details)
+            app.push_screen(screen)
+            await pilot.pause()
+            assert screen.query_one('#menu', ListView).index == 1
 
 
 def _client_live_session():
