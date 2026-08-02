@@ -3301,6 +3301,27 @@ class TestRunRaceDispatch:
         assert result == 1
         mock_wait.assert_not_called()
 
+    def test_wait_for_live_retry_paces_after_the_first_attempt(self):
+        """get_session (wait_for_car) and get_racer (live_race) can disagree —
+        a car listed in the field but with no racer detail yet must not spin.
+        No sleep before the first retry (fast path unaffected); a
+        _WAIT_POLL_S sleep before every retry after that."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+        with patch.object(_mod, 'live_race',
+                          side_effect=[_mod.MonitorStatus.NO_LIVE_DATA,
+                                       _mod.MonitorStatus.NO_LIVE_DATA,
+                                       _mod.MonitorStatus.NO_LIVE_DATA,
+                                       _mod.MonitorStatus.RACE_ENDED]) as mock_live, \
+             patch.object(_mod, 'wait_for_car', return_value=True) as mock_wait, \
+             patch.object(_mod.time, 'sleep') as mock_sleep:
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 0
+        assert mock_live.call_count == 4
+        assert mock_wait.call_count == 3
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_has_calls([call(_mod._WAIT_POLL_S), call(_mod._WAIT_POLL_S)])
+
 
 class TestComputeClassPositionsLive:
     def _resp(self, competitors, classes=None):

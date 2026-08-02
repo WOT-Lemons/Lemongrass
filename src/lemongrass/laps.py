@@ -537,10 +537,17 @@ def _run_race(ctx, opts, response, observer=None):
                     "--dry-run is historical-only; race %s is live", ctx.race_id)
                 return 1
             result = live_race(ctx, opts, observer=observer)
+            attempts = 0
             while result is MonitorStatus.NO_LIVE_DATA and opts.wait_for_live:
                 # The race is already live here, so re-checking is_live would
                 # return immediately and spin — wait for the *car* to show up in
                 # the timing feed instead, then retry the whole live setup.
+                # get_session (wait_for_car) and get_racer (live_race) can
+                # disagree, so a car listed in the field but with no racer
+                # detail yet must not spin: pace every retry after the first.
+                if attempts:
+                    time.sleep(_WAIT_POLL_S)
+                attempts += 1
                 logging.info(
                     "Car %s is not in the live feed yet — waiting for it to appear.",
                     ctx.car_number)
