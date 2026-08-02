@@ -3277,6 +3277,30 @@ class TestRunRaceDispatch:
             result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
         assert result == 1
 
+    def test_wait_for_live_retries_live_race_after_car_appears(self):
+        """Unattended capture must not end because the car had not yet appeared
+        in the timing feed — NO_LIVE_DATA re-waits for the car, then retries."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+        with patch.object(_mod, 'live_race',
+                          side_effect=[_mod.MonitorStatus.NO_LIVE_DATA,
+                                       _mod.MonitorStatus.RACE_ENDED]) as mock_live, \
+             patch.object(_mod, 'wait_for_car', return_value=True) as mock_wait:
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 0
+        assert mock_live.call_count == 2
+        mock_wait.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
+
+    def test_no_live_data_still_returns_1_without_the_flag(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(monitor_mode=True)
+        with patch.object(_mod, 'live_race',
+                          return_value=_mod.MonitorStatus.NO_LIVE_DATA), \
+             patch.object(_mod, 'wait_for_car') as mock_wait:
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 1
+        mock_wait.assert_not_called()
+
 
 class TestComputeClassPositionsLive:
     def _resp(self, competitors, classes=None):

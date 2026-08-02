@@ -537,6 +537,16 @@ def _run_race(ctx, opts, response, observer=None):
                     "--dry-run is historical-only; race %s is live", ctx.race_id)
                 return 1
             result = live_race(ctx, opts, observer=observer)
+            while result is MonitorStatus.NO_LIVE_DATA and opts.wait_for_live:
+                # The race is already live here, so re-checking is_live would
+                # return immediately and spin — wait for the *car* to show up in
+                # the timing feed instead, then retry the whole live setup.
+                logging.info(
+                    "Car %s is not in the live feed yet — waiting for it to appear.",
+                    ctx.car_number)
+                if not wait_for_car(ctx.client, ctx.race_id, ctx.car_number):
+                    break
+                result = live_race(ctx, opts, observer=observer)
             if result is MonitorStatus.INTERRUPTED:
                 sys.exit(130)
             if result is MonitorStatus.NO_LIVE_DATA:
