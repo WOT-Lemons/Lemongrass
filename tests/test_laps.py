@@ -1310,6 +1310,27 @@ class TestArgParserCarNumber:
         assert 'interactive' in help_text.lower()
 
 
+class TestWaitForLiveFlag:
+    def test_flag_defaults_off(self):
+        args = _mod._parse_args(['12345', '42'])
+        assert args.wait_for_live is False
+
+    def test_flag_sets_monitor_mode(self):
+        # --wait-for-live only makes sense as a prelude to monitoring, so it
+        # turns -m on the same way --dry-run implies -n.
+        args = _mod._parse_args(['12345', '42', '--wait-for-live'])
+        assert args.wait_for_live is True
+        assert args.monitor_mode is True
+
+    def test_rejects_dry_run_combination(self):
+        with pytest.raises(SystemExit):
+            _mod._parse_args(['12345', '42', '--wait-for-live', '--dry-run'])
+
+    def test_rejects_skip_if_complete_combination(self):
+        with pytest.raises(SystemExit):
+            _mod._parse_args(['12345', '42', '--wait-for-live', '--skip-if-complete'])
+
+
 class TestExistingLapCountsFieldwide:
     def _query_api(self, lap_no_count=0, current_count=0):
         responses = iter([lap_no_count, current_count])
@@ -3860,6 +3881,7 @@ class TestMainFluxIdValidation:
             race_id=[race_id], car_number=car_number, verbose=False,
             network_mode=False, monitor_mode=False, save_file=False,
             selected_class=None, interval=30, skip_if_complete=False, dry_run=False,
+            wait_for_live=False,
         )
 
     def test_race_id_with_quote_exits_1_before_racemonitor_client(self):
@@ -4347,6 +4369,25 @@ class TestBackfillRace:
         assert result == 0
         ctx = mock_run_race.call_args.args[0]
         assert ctx.client is client
+
+    def test_wait_for_live_waits_before_fetching_details(self):
+        """The wait runs before race.details so start/end epochs and metadata are
+        read after the green flag, not from a scheduled-but-not-started race."""
+        client = MagicMock()
+        client.race.details.return_value = self._details()
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
+        opts = _mod.RaceOptions(network_mode=False, monitor_mode=True, wait_for_live=True)
+        with patch.object(_mod, 'wait_for_live', return_value=True) as mock_wait, \
+             patch.object(_mod, '_run_race', return_value=0):
+            assert _mod.backfill_race('101', '42', client, opts) == 0
+        mock_wait.assert_called_once_with(client, '101')
+
+    def test_cancelled_wait_returns_0_without_fetching_details(self):
+        client = MagicMock()
+        opts = _mod.RaceOptions(network_mode=False, monitor_mode=True, wait_for_live=True)
+        with patch.object(_mod, 'wait_for_live', return_value=False):
+            assert _mod.backfill_race('101', '42', client, opts) == 0
+        client.race.details.assert_not_called()
 
 
 class TestStdoutObserver:

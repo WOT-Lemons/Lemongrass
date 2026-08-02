@@ -134,6 +134,7 @@ class RaceOptions:
     interval: int = 30
     skip_if_complete: bool = False
     dry_run: bool = False
+    wait_for_live: bool = False
 
 
 class RaceObserver:
@@ -254,8 +255,34 @@ def _build_parser():
         type=int,
         metavar='SECONDS',
         help='Polling interval in seconds for monitor mode (default: 30)')
+    parser.add_argument('--wait-for-live', dest='wait_for_live', default=False,
+                        action='store_true',
+                        help='Implies -m; wait for the race to go live (checked every '
+                             '10s, no timeout), then monitor car_number. If the car is '
+                             'not in the live feed yet, keep waiting for it.')
     parser.set_defaults(monitor_mode=False, network_mode=False)
     return parser
+
+
+def _parse_args(argv=None):
+    """Parse CLI args and enforce the cross-flag rules argparse can't express.
+
+    --wait-for-live is a live-only prelude to monitoring: it turns on monitor
+    mode the way --dry-run implies -n, and it cannot coexist with either
+    historical-only flag. parser.error() exits 2 with usage, as argparse does
+    for any other bad invocation.
+    """
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.wait_for_live:
+        if args.dry_run:
+            parser.error('--wait-for-live cannot be combined with --dry-run '
+                         '(--dry-run is historical-only)')
+        if args.skip_if_complete:
+            parser.error('--wait-for-live cannot be combined with --skip-if-complete '
+                         '(--skip-if-complete is historical-only)')
+        args.monitor_mode = True
+    return args
 
 
 def main():
@@ -274,7 +301,7 @@ def main():
         from lemongrass._tui import launch_tui
         launch_tui(run_laps_tui)
 
-    args = _build_parser().parse_args()
+    args = _parse_args()
 
     if args.verbose:
         print(args)
@@ -319,6 +346,7 @@ def main():
         interval=args.interval,
         skip_if_complete=args.skip_if_complete,
         dry_run=args.dry_run,
+        wait_for_live=args.wait_for_live,
     )
 
     # Fast path: for the historical backfill (--skip-if-complete), decide whether
@@ -431,6 +459,13 @@ def backfill_race(race_id, car_number, client, opts, observer=None):
     any RaceMonitorError, e.g. 429 exhaustion) propagates to the caller so a
     batch loop can decide whether to stop or record-and-continue.
     """
+    # Wait before fetching details: a scheduled-but-not-started race reports a
+    # placeholder start epoch and no metadata, so everything downstream should
+    # read post-green-flag values. Returning 0 on a cancelled wait keeps a
+    # user-initiated stop from looking like a failure.
+    if opts.wait_for_live and not wait_for_live(client, race_id):
+        return 0
+
     race_details = client.race.details(race_id)
 
     start_epoc = 0
