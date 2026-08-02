@@ -7,7 +7,7 @@ import pytest
 from influxdb_client import Point
 from influxdb_client.rest import ApiException
 
-from lemongrass._spool import DEFAULT_MAX_BYTES, DEFAULT_SPOOL_DIR, Spool
+from lemongrass._spool import DEFAULT_MAX_BYTES, DEFAULT_SPOOL_DIR, DRAINED, EMPTY, RETRY, Spool
 
 
 def _pt(measurement, value):
@@ -192,16 +192,12 @@ BUCKET = "stats_252/autogen"
 
 
 class TestReplay:
-    def test_empty_spool_returns_true(self, tmp_path):
-        s = Spool(tmp_path / "spool")
-        assert s.replay_oldest(MagicMock(), BUCKET) is True
-
     def test_replays_and_deletes_oldest_first(self, tmp_path):
         s = Spool(tmp_path / "spool", rotate_bytes=1)
         s.append([_pt("RPM", 1)])   # -> 000000000001.lp
         s.append([_pt("RPM", 2)])   # -> 000000000002.lp
         write_api = MagicMock()
-        assert s.replay_oldest(write_api, BUCKET) is True
+        assert s.replay_oldest(write_api, BUCKET) == DRAINED
         sent = write_api.write.call_args.kwargs["record"]
         assert "RPM value=1i" in sent
         remaining = sorted(p.name for p in (tmp_path / "spool").glob("*.lp"))
@@ -212,7 +208,7 @@ class TestReplay:
         s.append([_pt("RPM", 1)])
         write_api = MagicMock()
         write_api.write.side_effect = ConnectionError("influx down")
-        assert s.replay_oldest(write_api, BUCKET) is False
+        assert s.replay_oldest(write_api, BUCKET) == RETRY
         assert len(list((tmp_path / "spool").glob("*.lp"))) == 1
 
     def test_5xx_keeps_file(self, tmp_path):
@@ -220,7 +216,7 @@ class TestReplay:
         s.append([_pt("RPM", 1)])
         write_api = MagicMock()
         write_api.write.side_effect = ApiException(status=503, reason="unavailable")
-        assert s.replay_oldest(write_api, BUCKET) is False
+        assert s.replay_oldest(write_api, BUCKET) == RETRY
         assert len(list((tmp_path / "spool").glob("*.lp"))) == 1
 
     def test_torn_last_line_is_salvaged(self, tmp_path):
@@ -233,7 +229,7 @@ class TestReplay:
         write_api = MagicMock()
         # full-file write 400s; salvaged (last line dropped) write succeeds
         write_api.write.side_effect = [ApiException(status=400, reason="bad"), None]
-        assert s.replay_oldest(write_api, BUCKET) is True
+        assert s.replay_oldest(write_api, BUCKET) == DRAINED
         salvaged = write_api.write.call_args_list[1].kwargs["record"]
         assert "RPM value=1i" in salvaged and "BROKEN" not in salvaged
         assert list((tmp_path / "spool").glob("*.lp")) == []
@@ -243,7 +239,8 @@ class TestReplay:
         s.append([_pt("RPM", 1)])
         write_api = MagicMock()
         write_api.write.side_effect = ApiException(status=400, reason="bad")
-        assert s.replay_oldest(write_api, BUCKET) is True  # progress: file removed from queue
+        # progress: file removed from queue
+        assert s.replay_oldest(write_api, BUCKET) == DRAINED
         assert list((tmp_path / "spool").glob("*.lp")) == []
         assert len(list((tmp_path / "spool").glob("*.bad"))) == 1
 
@@ -257,7 +254,7 @@ class TestReplay:
             ApiException(status=400, reason="bad"),
             ApiException(status=503, reason="unavailable"),
         ]
-        assert s.replay_oldest(write_api, BUCKET) is False
+        assert s.replay_oldest(write_api, BUCKET) == RETRY
         assert len(list((tmp_path / "spool").glob("*.lp"))) == 1
         assert list((tmp_path / "spool").glob("*.bad")) == []
 
@@ -269,7 +266,7 @@ class TestReplay:
             ApiException(status=400, reason="bad"),
             ConnectionError("influx down"),
         ]
-        assert s.replay_oldest(write_api, BUCKET) is False
+        assert s.replay_oldest(write_api, BUCKET) == RETRY
         assert len(list((tmp_path / "spool").glob("*.lp"))) == 1
         assert list((tmp_path / "spool").glob("*.bad")) == []
 
@@ -282,7 +279,7 @@ class TestReplay:
             ApiException(status=400, reason="bad"),
             ApiException(status=400, reason="still bad"),
         ]
-        assert s.replay_oldest(write_api, BUCKET) is True
+        assert s.replay_oldest(write_api, BUCKET) == DRAINED
         assert list((tmp_path / "spool").glob("*.lp")) == []
         assert len(list((tmp_path / "spool").glob("*.bad"))) == 1
 
@@ -297,7 +294,7 @@ class TestReplay:
         monkeypatch.setattr(Path, "read_text", failing_read_text)
         with caplog.at_level(logging.ERROR):
             result = s.replay_oldest(write_api, BUCKET)
-        assert result is True
+        assert result == DRAINED
         assert list((tmp_path / "spool").glob("*.lp")) == []
         assert len(list((tmp_path / "spool").glob("*.bad"))) == 1
         write_api.write.assert_not_called()
@@ -312,8 +309,8 @@ class TestReplay:
         monkeypatch.setattr(Path, "unlink", failing_unlink)
         with caplog.at_level(logging.WARNING):
             result = s.replay_oldest(write_api, BUCKET)
-        # Should return True (data written successfully, cleanup error is non-fatal)
-        assert result is True
+        # Should return DRAINED (data written successfully, cleanup error is non-fatal)
+        assert result == DRAINED
         # Warning should be logged about the unlink failure
         assert any("Could not remove replayed spool file" in r.message for r in caplog.records)
 
@@ -336,7 +333,7 @@ class TestReplay:
         monkeypatch.setattr(Path, "rename", failing_rename)
         with caplog.at_level(logging.WARNING):
             result = s.replay_oldest(write_api, BUCKET)
-        assert result is True
+        assert result == DRAINED
         assert any(
             "Could not quarantine unreadable spool file" in r.message
             for r in caplog.records
@@ -357,7 +354,7 @@ class TestReplay:
         monkeypatch.setattr(Path, "unlink", failing_unlink)
         with caplog.at_level(logging.WARNING):
             result = s.replay_oldest(write_api, BUCKET)
-        assert result is True
+        assert result == DRAINED
         assert any(
             "Could not remove salvaged spool file" in r.message
             for r in caplog.records
@@ -379,10 +376,33 @@ class TestReplay:
         monkeypatch.setattr(Path, "rename", failing_rename)
         with caplog.at_level(logging.WARNING):
             result = s.replay_oldest(write_api, BUCKET)
-        assert result is True
+        assert result == DRAINED
         assert any(
             "Could not quarantine spool file" in r.message for r in caplog.records
         )
+
+
+class TestReplayResult:
+    def test_empty_spool_returns_empty(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        assert s.replay_oldest(MagicMock(), "b") == EMPTY
+
+    def test_disabled_spool_returns_empty(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        s.enabled = False
+        assert s.replay_oldest(MagicMock(), "b") == EMPTY
+
+    def test_successful_replay_returns_drained(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])
+        assert s.replay_oldest(MagicMock(), "b") == DRAINED
+
+    def test_connectivity_failure_returns_retry(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])
+        api = MagicMock()
+        api.write.side_effect = ConnectionError("down")
+        assert s.replay_oldest(api, "b") == RETRY
 
 
 class TestRoundTrip:

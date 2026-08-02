@@ -21,6 +21,12 @@ ROTATE_BYTES = 8 * 1024 * 1024       # 8 MiB per file
 _SUFFIX = '.lp'                      # live, replayable spool files
 _BAD_SUFFIX = '.bad'                 # quarantined files (unwritable / unreadable)
 
+# replay_oldest outcomes. A bool cannot distinguish "drained a file" from
+# "nothing to do", and the drain loop needs different sleep intervals for each.
+DRAINED = 'drained'   # one file replayed (or quarantined) — progress was made
+EMPTY = 'empty'       # nothing to replay
+RETRY = 'retry'       # retryable failure; the file was kept for another attempt
+
 
 class Spool:
     """A directory of rotating line-protocol files buffering points on disk."""
@@ -160,16 +166,17 @@ class Spool:
     def replay_oldest(self, write_api, bucket):
         """Replay the oldest spool file through write_api; delete it on success.
 
-        Returns True if the spool is empty or one file was drained (or a corrupt
-        file was quarantined — progress either way). Returns False if the write
-        failed for a retryable/connectivity reason (Influx still down): the file
-        is kept for the next attempt.
+        Returns DRAINED if one file was replayed (or a corrupt file was
+        quarantined — progress either way). Returns EMPTY if the spool is
+        disabled or there is nothing to replay. Returns RETRY if the write
+        failed for a retryable/connectivity reason (Influx still down): the
+        file is kept for the next attempt.
         """
         if not self.enabled:
-            return True
+            return EMPTY
         files = self._files()
         if not files:
-            return True
+            return EMPTY
         path = files[0]
         try:
             text = path.read_text()
@@ -181,28 +188,28 @@ class Spool:
             except OSError as e2:
                 logger.warning(
                     "Could not quarantine unreadable spool file %s: %s", path.name, e2)
-            return True
+            return DRAINED
         try:
             write_api.write(bucket=bucket, record=text)
         except ApiException as e:
             if e.status and 400 <= e.status < 500 and e.status != 429:
                 return self._handle_corrupt(write_api, bucket, path, text)
-            return False  # 5xx / 429 / unknown status: retryable, keep the file
+            return RETRY  # 5xx / 429 / unknown status: retryable, keep the file
         except Exception:
-            return False  # connectivity failure, keep the file
+            return RETRY  # connectivity failure, keep the file
         try:
             path.unlink(missing_ok=True)
         except OSError as e:
             logger.warning("Could not remove replayed spool file %s: %s", path.name, e)
         logger.info("Replayed spool file %s", path.name)
-        return True
+        return DRAINED
 
     def _handle_corrupt(self, write_api, bucket, path, text):
         """Salvage a 4xx-rejected file by dropping its (possibly torn) last line;
         quarantine to <name>.bad if it still will not write.
 
         A *retryable* failure of the salvage write (5xx / 429 / unknown status /
-        connectivity) keeps the file and returns False, so its good lines are not
+        connectivity) keeps the file and returns RETRY, so its good lines are not
         thrown away over a transient hiccup between the two writes; only a genuine
         4xx rejection (or an unsalvageable single-line file) is quarantined.
         """
@@ -213,10 +220,10 @@ class Spool:
                 write_api.write(bucket=bucket, record=salvaged)
             except ApiException as e:
                 if not (e.status and 400 <= e.status < 500 and e.status != 429):
-                    return False  # retryable — keep the file, try again later
+                    return RETRY  # retryable — keep the file, try again later
                 # genuine 4xx on the salvaged data too — fall through to quarantine
             except Exception:
-                return False  # connectivity failure — keep the file
+                return RETRY  # connectivity failure — keep the file
             else:
                 try:
                     path.unlink(missing_ok=True)
@@ -226,7 +233,7 @@ class Spool:
                 logger.warning(
                     "Dropped 1 unwritable line from spool file %s", path.name
                 )
-                return True
+                return DRAINED
         quarantine = path.with_suffix(_BAD_SUFFIX)
         try:
             path.rename(quarantine)
@@ -242,4 +249,4 @@ class Spool:
             path.name,
             quarantine.name,
         )
-        return True
+        return DRAINED
