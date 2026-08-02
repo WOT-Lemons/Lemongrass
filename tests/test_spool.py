@@ -7,7 +7,15 @@ import pytest
 from influxdb_client import Point
 from influxdb_client.rest import ApiException
 
-from lemongrass._spool import DEFAULT_MAX_BYTES, DEFAULT_SPOOL_DIR, DRAINED, EMPTY, RETRY, Spool
+from lemongrass._spool import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_SPOOL_DIR,
+    DRAINED,
+    EMPTY,
+    REPLAY_CHUNK_LINES,
+    RETRY,
+    Spool,
+)
 
 
 def _pt(measurement, value):
@@ -430,3 +438,56 @@ class TestRoundTrip:
         for token in ("RPM value=1000i", "SPEED value=10i",
                       "RPM value=2000i", "RPM value=3000i"):
             assert token in delivered
+
+
+class TestChunkedReplay:
+    def _seed(self, spool, n):
+        spool.append([_pt("RPM", i) for i in range(n)])
+
+    def test_file_under_chunk_size_is_one_write(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        self._seed(s, 10)
+        api = MagicMock()
+        assert s.replay_oldest(api, "b") == DRAINED
+        assert api.write.call_count == 1
+
+    def test_exactly_chunk_size_is_one_write(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        self._seed(s, REPLAY_CHUNK_LINES)
+        api = MagicMock()
+        assert s.replay_oldest(api, "b") == DRAINED
+        assert api.write.call_count == 1
+
+    def test_one_over_chunk_size_is_two_writes(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        self._seed(s, REPLAY_CHUNK_LINES + 1)
+        api = MagicMock()
+        assert s.replay_oldest(api, "b") == DRAINED
+        assert api.write.call_count == 2
+
+    def test_every_line_is_sent_exactly_once(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        self._seed(s, REPLAY_CHUNK_LINES + 7)
+        api = MagicMock()
+        s.replay_oldest(api, "b")
+        sent = []
+        for call in api.write.call_args_list:
+            sent.extend(call.kwargs["record"].splitlines())
+        assert len(sent) == REPLAY_CHUNK_LINES + 7
+        assert len(set(sent)) == REPLAY_CHUNK_LINES + 7
+
+    def test_no_empty_record_from_blank_lines(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        (tmp_path / "spool" / "000000000001.lp").write_text("RPM value=1i 1\n\nRPM value=2i 2\n")
+        api = MagicMock()
+        assert s.replay_oldest(api, "b") == DRAINED
+        for call in api.write.call_args_list:
+            assert call.kwargs["record"].strip()
+
+    def test_retryable_failure_on_middle_chunk_keeps_file(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        self._seed(s, REPLAY_CHUNK_LINES * 3)
+        api = MagicMock()
+        api.write.side_effect = [None, ConnectionError("down"), None]
+        assert s.replay_oldest(api, "b") == RETRY
+        assert len(list((tmp_path / "spool").glob("*.lp"))) == 1

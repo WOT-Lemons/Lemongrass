@@ -21,6 +21,11 @@ ROTATE_BYTES = 8 * 1024 * 1024       # 8 MiB per file
 _SUFFIX = '.lp'                      # live, replayable spool files
 _BAD_SUFFIX = '.bad'                 # quarantined files (unwritable / unreadable)
 
+# Lines per replay request. A whole file (up to ROTATE_BYTES) in one POST cannot
+# finish inside any sane timeout on the car's uplink, which is why a 4.4h outage
+# never drained. Chunking makes request size independent of the rotation size.
+REPLAY_CHUNK_LINES = 5000
+
 # replay_oldest outcomes. A bool cannot distinguish "drained a file" from
 # "nothing to do", and the drain loop needs different sleep intervals for each.
 DRAINED = 'drained'   # one file replayed (or quarantined) — progress was made
@@ -163,6 +168,19 @@ class Spool:
                 dropped,
             )
 
+    def _write_chunked(self, write_api, bucket, lines):
+        """Write ``lines`` to InfluxDB in REPLAY_CHUNK_LINES batches.
+
+        Exceptions propagate to the caller, which owns the retry/quarantine
+        decision. Blank lines are dropped: line protocol rejects an empty record,
+        and a torn write can leave one behind.
+        """
+        for i in range(0, len(lines), REPLAY_CHUNK_LINES):
+            batch = [line for line in lines[i:i + REPLAY_CHUNK_LINES] if line]
+            if not batch:
+                continue
+            write_api.write(bucket=bucket, record='\n'.join(batch) + '\n')
+
     def replay_oldest(self, write_api, bucket):
         """Replay the oldest spool file through write_api; delete it on success.
 
@@ -189,11 +207,12 @@ class Spool:
                 logger.warning(
                     "Could not quarantine unreadable spool file %s: %s", path.name, e2)
             return DRAINED
+        lines = text.splitlines()
         try:
-            write_api.write(bucket=bucket, record=text)
+            self._write_chunked(write_api, bucket, lines)
         except ApiException as e:
             if e.status and 400 <= e.status < 500 and e.status != 429:
-                return self._handle_corrupt(write_api, bucket, path, text)
+                return self._handle_corrupt(write_api, bucket, path, lines)
             return RETRY  # 5xx / 429 / unknown status: retryable, keep the file
         except Exception:
             return RETRY  # connectivity failure, keep the file
@@ -204,20 +223,21 @@ class Spool:
         logger.info("Replayed spool file %s", path.name)
         return DRAINED
 
-    def _handle_corrupt(self, write_api, bucket, path, text):
+    def _handle_corrupt(self, write_api, bucket, path, lines):
         """Salvage a 4xx-rejected file by dropping its (possibly torn) last line;
         quarantine to <name>.bad if it still will not write.
 
         A *retryable* failure of the salvage write (5xx / 429 / unknown status /
         connectivity) keeps the file and returns RETRY, so its good lines are not
         thrown away over a transient hiccup between the two writes; only a genuine
-        4xx rejection (or an unsalvageable single-line file) is quarantined.
+        4xx rejection (or an unsalvageable single-line file) is quarantined. The
+        salvage write re-chunks from the start, so any chunk that was already
+        accepted before the failing chunk is re-sent here; that is harmless
+        because replay is idempotent.
         """
-        lines = text.splitlines()
         if len(lines) > 1:
-            salvaged = '\n'.join(lines[:-1]) + '\n'
             try:
-                write_api.write(bucket=bucket, record=salvaged)
+                self._write_chunked(write_api, bucket, lines[:-1])
             except ApiException as e:
                 if not (e.status and 400 <= e.status < 500 and e.status != 429):
                     return RETRY  # retryable — keep the file, try again later
