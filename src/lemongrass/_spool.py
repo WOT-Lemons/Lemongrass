@@ -3,9 +3,13 @@
 telem.py's hot tier is an in-memory queue flushed to InfluxDB every 0.5s. When a
 flush fails (Influx unreachable) the unwritten batch is serialized to InfluxDB
 line protocol and appended here, on disk, so it survives the watchdog restart a
-coincident OBD dropout triggers. On recovery the oldest file is replayed through
-the same write_api and deleted. Replay is idempotent: every point carries an
-explicit nanosecond timestamp and Influx upserts by measurement+tags+time.
+coincident OBD dropout triggers.
+
+A separate drain thread replays the oldest file in bounded chunks and deletes it,
+independently of the OBD link — recovery must not wait for the car to be running.
+Replay is idempotent: every point carries an explicit nanosecond timestamp and
+Influx upserts by measurement+tags+time. The appending and draining threads are
+serialized by Spool's lock and its rename-to-claim protocol.
 """
 import logging
 import os

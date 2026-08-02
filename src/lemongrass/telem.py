@@ -46,9 +46,9 @@ WRITE_BUCKET = _influx.BUCKET_TELEM
 
 # Influx client tuning for the 0.5s pump loop. A short per-request timeout and a
 # single retry keep a downed/hung Influx from blocking the hot path — the durable
-# spool (replayed each cycle) is the real retry path, so we fail fast to it
-# rather than the library-default 10s x 3 attempts. Batch commands keep the
-# default (longer timeout, 3 retries) via the unparameterized _influx.connect().
+# spool is the real retry path, drained on its own thread and its own client with
+# the library defaults. Batch commands keep the default (longer timeout, 3
+# retries) via the unparameterized _influx.connect().
 WRITE_TIMEOUT_MS = 3000
 WRITE_RETRIES = _influx.build_retries(1)
 
@@ -429,7 +429,7 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
         logger.info("Flushed %d points to InfluxDB", written)
         if _spooling:
             logger.info(
-                "InfluxDB reachable again; flushed %d points, draining spool",
+                "InfluxDB reachable again; flushed %d points (spool drains separately)",
                 written)
             _spooling = False
         return True
@@ -521,8 +521,9 @@ def _start_drain():
 
     Its own client, not just its own write_api: _influx.connect fixes timeout and
     retries at construction, so a second write_api off the hot-path client would
-    inherit the 3s/1-retry fail-fast tuning. The drain is the slow path and takes
-    the library defaults instead.
+    inherit the 3s/1-retry fail-fast tuning. The drain is the slow path and calls
+    _influx.connect() unparameterized, so it gets the library's 10s timeout
+    default along with the project's INFLUX_RETRIES.
     """
     if _spool is None or not _spool.enabled:
         logger.error("Spool unusable; telemetry durability and drain are disabled")
@@ -541,9 +542,13 @@ def _start_drain():
 def _stop_drain(client, thread):
     """Stop the drain thread and close its client, in that order.
 
-    Ordering matters: the watchdog's sys.exit unwinds main()'s `with`, which
-    closes the hot-path client. Doing the same to the drain's client while the
-    thread is mid-POST produces interpreter-shutdown noise.
+    This is best-effort, not a guarantee: DRAIN_JOIN_TIMEOUT_S (5s) is shorter
+    than the drain client's 10s default write timeout, so on the watchdog's
+    sys.exit path the join can time out while the thread is still mid-POST, and
+    the client gets closed under it anyway. The fallout is bounded — _finish only
+    unlinks after a successful write, and a stranded .replaying claim is picked
+    up by _reclaim_orphans on the next process start — so this produces
+    interpreter-shutdown noise, not data loss.
     """
     _drain_stop.set()
     if thread is not None:
