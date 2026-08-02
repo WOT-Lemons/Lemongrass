@@ -325,6 +325,152 @@ class NotLiveScreen(Screen):
             self.app._confirm_import(self.race_id, self.race_name)
 
 
+class WaitForLiveScreen(Screen):
+    """Wait for a race to go live, then start monitoring a pre-chosen car.
+
+    One worker, two phases: laps.wait_for_live for the green flag, then
+    laps.wait_for_car until the number appears in the timing feed. Neither phase
+    ever gives up — the point of this screen is that lap capture starts while
+    nobody is at the keyboard — so the only exits are the car being found, 'c'
+    (open the car picker), and escape/unmount.
+
+    The car list CarSelectScreen shows cannot exist before the feed is live,
+    which is why the number is typed here instead.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('escape', 'cancel', 'Cancel'),
+        Binding('c', 'change_car', 'Change car'),
+    ]
+
+    def __init__(self, client, race_id, race_name):
+        super().__init__()
+        self.client = client
+        self.race_id = race_id
+        self.race_name = race_name
+        self.car_number = None   # set once the wait starts; also the "started" flag
+        self.network = True
+        self.interval = 30
+        self.live = False        # phase flag: gates the 'c' binding
+        self._stop = threading.Event()
+
+    def compose(self):
+        yield Label(f'{self.race_name} (#{self.race_id}) — wait for the green flag.')
+        yield Input(placeholder='car number to monitor…', id='car-number')
+        yield Checkbox('Write to InfluxDB', value=True, id='write')
+        yield Input(value='30', id='interval')
+        yield Label('enter a car number to start waiting', id='status')
+        yield Footer()
+
+    def on_mount(self):
+        self.query_one('#car-number', Input).focus()
+
+    def check_action(self, action, parameters):
+        # Hide 'c' from the footer until the race is live: before then there is
+        # no field for CarSelectScreen to list.
+        if action == 'change_car' and not self.live:
+            return None
+        return True
+
+    def on_input_submitted(self, event):
+        # Only the car-number Input starts the wait; Enter in the interval Input
+        # is inert, mirroring CarSelectScreen.
+        event.stop()
+        if event.input.id == 'car-number':
+            self._begin(event.value.strip())
+
+    def _begin(self, car_number):
+        if self.car_number is not None:
+            return  # already waiting
+        if not car_number:
+            self._status('enter a car number to start waiting')
+            return
+        # Read the settings once and freeze the widgets: the wait can run for
+        # hours, and the worker must not query widgets that may be torn down.
+        self.car_number = car_number
+        self.network = self.query_one('#write', Checkbox).value
+        self.interval = _as_int(self.query_one('#interval', Input).value) or 30
+        for widget_id in ('#car-number', '#write', '#interval'):
+            self.query_one(widget_id).disabled = True
+        self._status('waiting for green flag…')
+        self._wait()
+
+    # --- main-thread UI updates ---
+    def _status(self, text):
+        self.query_one('#status', Label).update(text)
+
+    def _mark_live(self):
+        self.live = True
+        self.refresh_bindings()  # 'c' becomes available now that a field exists
+
+    def _go_live(self):
+        # Pop first so quitting the monitor lands back on NotLiveScreen rather
+        # than on a wait screen whose worker is already finished.
+        self.app.pop_screen()
+        self.app._start_monitor(self.race_id, self.car_number, self.network, self.interval)
+
+    # --- background wait ---
+    def _call(self, fn, *args):
+        # Same guard as _TuiObserver._call: never marshal into a torn-down event
+        # loop or against removed widgets.
+        if get_current_worker().is_cancelled or not self.is_mounted:
+            return
+        self.app.call_from_thread(fn, *args)
+
+    def _tick_live(self, count, error):
+        text = f'waiting for green flag — {count} checks, last {self._stamp()}'
+        if error:
+            text += f' (last check failed: {error})'
+        self._call(self._status, text)
+
+    def _tick_car(self, count, state, error):
+        if state == 'no_feed':
+            text = f'live — waiting for the timing feed… {count} checks, last {self._stamp()}'
+        else:
+            text = (f'live — car #{self.car_number} not in the field yet — '
+                    f'{count} checks, last {self._stamp()}')
+        if error:
+            text += f' (last check failed: {error})'
+        self._call(self._status, text)
+
+    @staticmethod
+    def _stamp():
+        return datetime.now().strftime('%H:%M:%S')
+
+    @work(thread=True)
+    def _wait(self):
+        from lemongrass import laps as laps_mod
+        try:
+            if not laps_mod.wait_for_live(self.client, self.race_id, self._stop,
+                                          on_tick=self._tick_live):
+                return
+            self._call(self._mark_live)
+            if not laps_mod.wait_for_car(self.client, self.race_id, self.car_number,
+                                         self._stop, on_tick=self._tick_car):
+                return
+        except Exception as exc:  # last resort: a TUI worker must never crash the app
+            logging.exception("wait worker failed")
+            self._call(self._status, f'wait failed: {exc}')
+            return
+        self._call(self._go_live)
+
+    # --- user exits ---
+    def action_cancel(self):
+        self._stop.set()
+        self.app.pop_screen()
+
+    def action_change_car(self):
+        if not self.live:
+            return
+        self._stop.set()
+        self.app.pop_screen()
+        self.app.push_screen(CarSelectScreen(self.client, self.race_id, self.race_name))
+
+    def on_unmount(self):
+        # End the wait on ANY teardown (app exit, ctrl+c), not just escape.
+        self._stop.set()
+
+
 class CarSelectScreen(Screen):
     """Pick the tracked car from the live feed (or type a number) + options."""
 

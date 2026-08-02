@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from race_monitor import RaceMonitorError
-from textual.widgets import DataTable, Input, Label, ListView, RichLog
+from textual.widgets import Checkbox, DataTable, Input, Label, ListView, RichLog
 
 from lemongrass._laps_tui import (
     CarSelectScreen,
@@ -14,6 +14,7 @@ from lemongrass._laps_tui import (
     MonitorScreen,
     NotLiveScreen,
     PickerScreen,
+    WaitForLiveScreen,
     _TuiObserver,
 )
 
@@ -215,6 +216,211 @@ class TestNotLiveScreen:
             app.push_screen(screen)
             await pilot.pause()
             assert screen.query_one('#menu', ListView).index == 1
+
+
+class TestWaitForLiveScreen:
+    @staticmethod
+    async def _start(pilot, app, client, car='7'):
+        """Push the screen and submit a car number to begin the wait."""
+        screen = WaitForLiveScreen(client, 42, 'Sears')
+        app.push_screen(screen)
+        await pilot.pause()
+        number = screen.query_one('#car-number', Input)
+        number.focus()
+        number.value = car
+        await pilot.press('enter')
+        return screen
+
+    @pytest.mark.asyncio
+    async def test_starts_monitor_once_live_and_car_present(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live', return_value=True), \
+                patch('lemongrass.laps.wait_for_car', return_value=True), \
+                patch('lemongrass.laps.live_race', return_value=None), \
+                patch('lemongrass._influx.connect'):
+            async with app.run_test() as pilot:
+                await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+        assert app.monitor_args == (42, '7', True, 30)
+
+    @pytest.mark.asyncio
+    async def test_cancelled_wait_does_not_start_monitor(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live', return_value=False), \
+                patch('lemongrass.laps.wait_for_car') as mock_car:
+            async with app.run_test() as pilot:
+                await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+        assert app.monitor_args is None
+        mock_car.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_car_wait_does_not_start_monitor(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live', return_value=True), \
+                patch('lemongrass.laps.wait_for_car', return_value=False):
+            async with app.run_test() as pilot:
+                await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+        assert app.monitor_args is None
+
+    @pytest.mark.asyncio
+    async def test_empty_car_number_does_not_start_waiting(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live') as mock_wait:
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client, car='')
+                await pilot.pause()
+                assert screen.car_number is None
+        mock_wait.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_settings_are_frozen_once_waiting(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        # Hold the worker in the green-flag wait so the screen stays up.
+        with patch('lemongrass.laps.wait_for_live', return_value=False):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert screen.query_one('#car-number', Input).disabled is True
+                assert screen.query_one('#write', Checkbox).disabled is True
+                assert screen.query_one('#interval', Input).disabled is True
+
+    @pytest.mark.asyncio
+    async def test_green_flag_tick_updates_status(self):
+        client = MagicMock()
+        app = LapsApp(client)
+
+        def fake_wait_for_live(c, race_id, stop_event=None, on_tick=None, **kw):
+            on_tick(3, None)
+            return False
+
+        with patch('lemongrass.laps.wait_for_live', side_effect=fake_wait_for_live):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                text = str(screen.query_one('#status', Label).render())
+                assert 'green flag' in text and '3 checks' in text
+
+    @pytest.mark.asyncio
+    async def test_absent_car_status_names_the_car(self):
+        # 'absent' and 'no_feed' look the same to the API caller but mean very
+        # different things to someone watching the screen, so each gets its own
+        # wording. One tick per test keeps the final status deterministic.
+        client = MagicMock()
+        app = LapsApp(client)
+
+        def fake_wait_for_car(c, race_id, car, stop_event=None, on_tick=None, **kw):
+            on_tick(2, 'absent', None)
+            return False
+
+        with patch('lemongrass.laps.wait_for_live', return_value=True), \
+                patch('lemongrass.laps.wait_for_car', side_effect=fake_wait_for_car):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                text = str(screen.query_one('#status', Label).render())
+                assert '#7' in text and 'not in the field' in text
+
+    @pytest.mark.asyncio
+    async def test_empty_feed_status_says_waiting_for_feed(self):
+        client = MagicMock()
+        app = LapsApp(client)
+
+        def fake_wait_for_car(c, race_id, car, stop_event=None, on_tick=None, **kw):
+            on_tick(1, 'no_feed', None)
+            return False
+
+        with patch('lemongrass.laps.wait_for_live', return_value=True), \
+                patch('lemongrass.laps.wait_for_car', side_effect=fake_wait_for_car):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                text = str(screen.query_one('#status', Label).render())
+                assert 'timing feed' in text
+
+    @pytest.mark.asyncio
+    async def test_change_car_opens_picker_once_live(self):
+        client = _client_live_session()
+        app = LapsApp(client)
+
+        def fake_wait_for_car(c, race_id, car, stop_event=None, on_tick=None, **kw):
+            on_tick(1, 'absent', None)
+            return False  # stay on the wait screen so 'c' can be pressed
+
+        with patch('lemongrass.laps.wait_for_live', return_value=True), \
+                patch('lemongrass.laps.wait_for_car', side_effect=fake_wait_for_car):
+            async with app.run_test() as pilot:
+                await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                await pilot.press('c')
+                await pilot.pause()
+                assert isinstance(app.screen, CarSelectScreen)
+
+    @pytest.mark.asyncio
+    async def test_change_car_is_inert_before_green_flag(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live', return_value=False):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                await pilot.press('c')
+                await pilot.pause()
+                assert app.screen is screen
+
+    @pytest.mark.asyncio
+    async def test_escape_stops_the_wait_and_leaves(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live', return_value=False):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                await pilot.press('escape')
+                await pilot.pause()
+                assert screen._stop.is_set()
+                assert app.screen is not screen
+
+    @pytest.mark.asyncio
+    async def test_unmount_stops_the_wait(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live', return_value=False):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                app.pop_screen()
+                await pilot.pause()
+                assert screen._stop.is_set()
+
+    @pytest.mark.asyncio
+    async def test_worker_error_surfaces_and_app_survives(self):
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live', side_effect=ValueError('boom')):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert app.is_running
+                assert 'boom' in str(screen.query_one('#status', Label).render())
 
 
 def _client_live_session():
