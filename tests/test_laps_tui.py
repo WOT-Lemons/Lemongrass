@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from race_monitor import RaceMonitorError
@@ -571,6 +571,67 @@ class TestMonitorScreen:
                 log = app.screen.query_one('#log', RichLog)
                 text = '\n'.join(str(line) for line in log.lines)
                 assert 'boom' in text
+
+    @pytest.mark.asyncio
+    async def test_no_live_data_waits_for_car_then_retries(self):
+        # Unattended capture must survive a car that has not yet appeared in the
+        # live feed: live_race's NO_LIVE_DATA re-enters wait_for_car and retries.
+        client = MagicMock()
+        app = LapsApp(client)
+
+        from lemongrass import laps as laps_mod
+        with patch('lemongrass.laps.live_race',
+                   side_effect=[laps_mod.MonitorStatus.NO_LIVE_DATA, None]) as mock_live, \
+                patch('lemongrass.laps.wait_for_car', return_value=True) as mock_wait:
+            async with app.run_test() as pilot:
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+        assert mock_live.call_count == 2
+        assert mock_wait.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_cancelled_car_wait_ends_the_monitor(self):
+        client = MagicMock()
+        app = LapsApp(client)
+
+        from lemongrass import laps as laps_mod
+        with patch('lemongrass.laps.live_race',
+                   return_value=laps_mod.MonitorStatus.NO_LIVE_DATA) as mock_live, \
+                patch('lemongrass.laps.wait_for_car', return_value=False):
+            async with app.run_test() as pilot:
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+        assert mock_live.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_wait_is_paced_after_the_first_attempt(self):
+        # Regression: get_session (wait_for_car) and get_racer (live_race) can
+        # disagree about whether the car is present, so a NO_LIVE_DATA retry loop
+        # with no delay would spin hot hammering both endpoints. Pin the pacing:
+        # no stop.wait() before the first retry, a _WAIT_POLL_S-paced stop.wait()
+        # before every later retry. Patch stop.wait itself (never sleep for real)
+        # so this test stays instant regardless of _WAIT_POLL_S's value.
+        client = MagicMock()
+        app = LapsApp(client)
+
+        from lemongrass import laps as laps_mod
+        with patch('lemongrass.laps.live_race',
+                   side_effect=[laps_mod.MonitorStatus.NO_LIVE_DATA,
+                                laps_mod.MonitorStatus.NO_LIVE_DATA,
+                                laps_mod.MonitorStatus.NO_LIVE_DATA,
+                                None]) as mock_live, \
+                patch('lemongrass.laps.wait_for_car', return_value=True):
+            async with app.run_test() as pilot:
+                screen = MonitorScreen(client, 42, '7', False, 0)
+                with patch.object(screen._stop, 'wait', return_value=False) as mock_wait:
+                    app.push_screen(screen)
+                    await app.workers.wait_for_complete()
+                    await pilot.pause()
+        assert mock_live.call_count == 4
+        assert mock_wait.call_args_list == [
+            call(laps_mod._WAIT_POLL_S), call(laps_mod._WAIT_POLL_S)]
 
 
 class TestImportFlow:

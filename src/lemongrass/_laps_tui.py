@@ -703,13 +703,11 @@ class MonitorScreen(Screen):
                     # connection stays open for the whole poll loop.
                     with _influx.connect() as influx_client:
                         ctx = self._network_ctx(laps_mod, influx_client)
-                        laps_mod.live_race(ctx, opts, observer=observer,
-                                           _stop_event=self._stop)
+                        self._monitor_until_done(laps_mod, ctx, opts, observer)
                 else:
                     ctx = laps_mod.RaceContext(
                         str(self.race_id), str(self.car_number), self.client, None, 0)
-                    laps_mod.live_race(ctx, opts, observer=observer,
-                                       _stop_event=self._stop)
+                    self._monitor_until_done(laps_mod, ctx, opts, observer)
             except RaceMonitorError as exc:
                 if not get_current_worker().is_cancelled:
                     self.app.call_from_thread(self.log_line, f'error: {exc}')
@@ -734,6 +732,46 @@ class MonitorScreen(Screen):
             metadata=metadata,
             delete_api=influx_client.delete_api(),
             query_api=influx_client.query_api())
+
+    def _monitor_until_done(self, laps_mod, ctx, opts, observer):
+        """Run live_race, re-waiting for the car whenever it isn't in the feed.
+
+        Cars trickle into the timing feed after the green flag, so a
+        NO_LIVE_DATA at launch is a "not yet", not a failure — returning here
+        would leave an unattended session collecting nothing. Every other
+        outcome (race ended, stop event, error) is returned to _run unchanged."""
+        attempts = 0
+        while not self._stop.is_set():
+            result = laps_mod.live_race(ctx, opts, observer=observer,
+                                        _stop_event=self._stop)
+            if result is not laps_mod.MonitorStatus.NO_LIVE_DATA:
+                return result
+            if attempts and self._stop.wait(laps_mod._WAIT_POLL_S):
+                # get_session and get_racer can disagree; pace the retry so a car
+                # listed in the field but with no racer detail yet doesn't spin.
+                return None
+            attempts += 1
+            self._call(self.log_line,
+                       f'car #{self.car_number} is not in the live feed yet — waiting…')
+            if not laps_mod.wait_for_car(self.client, self.race_id, self.car_number,
+                                         self._stop, on_tick=self._car_tick):
+                return None
+        return None
+
+    def _call(self, fn, *args):
+        # Same guard as _TuiObserver._call: never marshal into a torn-down loop.
+        if get_current_worker().is_cancelled or not self.is_mounted:
+            return
+        self.app.call_from_thread(fn, *args)
+
+    def _car_tick(self, count, state, error):
+        if state == 'absent':
+            text = f'car #{self.car_number} still not in the field — {count} checks'
+        else:
+            text = f'waiting for the timing feed — {count} checks'
+        if error:
+            text += f' (last check failed: {error})'
+        self._call(self.log_line, text)
 
     def action_quit_monitor(self):
         self._stop.set()
