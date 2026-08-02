@@ -377,6 +377,48 @@ def wait_for_live(client, race_id, stop_event=None, on_tick=None, poll_s=_WAIT_P
     return False
 
 
+def wait_for_car(client, race_id, car_number, stop_event=None, on_tick=None,
+                 poll_s=_WAIT_POLL_S):
+    """Poll live.get_session until car_number appears in the live field.
+
+    A race going live does not mean its timing feed is populated — cars trickle
+    in — so this is a second, separate wait after wait_for_live. Returns True
+    once the number matches a competitor's Number, or False if stop_event was
+    set first. Like wait_for_live it never gives up: an unsuccessful response,
+    an empty field, a populated field without the car, and an exception are all
+    just "not yet".
+
+    on_tick(count, state, error) fires after each miss. state is 'no_feed' when
+    there is nothing to match against and 'absent' when the field is populated
+    but the car is not in it — the two look identical to the API caller but mean
+    very different things to someone watching the screen.
+    """
+    stop = stop_event if stop_event is not None else threading.Event()
+    wanted = str(car_number)
+    count = 0
+    while not stop.is_set():
+        error = None
+        state = 'no_feed'
+        try:
+            response = client.live.get_session(race_id)
+            competitors = (response.get('Session', {}).get('Competitors', {})
+                           if response.get('Successful') else {})
+            if competitors:
+                state = 'absent'
+                if any(str(comp.get('Number', '')) == wanted
+                       for comp in competitors.values()):
+                    return True
+        except Exception as exc:
+            logging.debug("get_session failed while waiting for car: %s", exc)
+            error = str(exc) or exc.__class__.__name__
+        count += 1
+        if on_tick is not None:
+            on_tick(count, state, error)
+        if stop.wait(timeout=poll_s):
+            return False
+    return False
+
+
 def backfill_race(race_id, car_number, client, opts, observer=None):
     """Fetch and process one race using an already-open RaceMonitorClient.
 

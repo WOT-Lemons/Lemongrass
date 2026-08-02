@@ -662,6 +662,87 @@ class TestWaitForLive:
         mock_event.wait.assert_called_with(timeout=10)
 
 
+class TestWaitForCar:
+    """Poll live.get_session until the tracked car appears in the field."""
+
+    @staticmethod
+    def _session(*numbers):
+        return {'Successful': True, 'Session': {'Competitors': {
+            str(i): {'Number': n} for i, n in enumerate(numbers)}}}
+
+    def test_returns_true_once_car_appears(self):
+        client = MagicMock()
+        client.live.get_session.side_effect = [
+            self._session('7', '9'),
+            self._session('7', '9', '42'),
+        ]
+        assert _mod.wait_for_car(client, '123', '42', poll_s=0) is True
+        assert client.live.get_session.call_count == 2
+
+    def test_matches_number_across_int_and_str(self):
+        client = MagicMock()
+        client.live.get_session.return_value = self._session(42)
+        assert _mod.wait_for_car(client, '123', '42', poll_s=0) is True
+
+    def test_empty_field_reports_no_feed_and_keeps_waiting(self):
+        client = MagicMock()
+        client.live.get_session.side_effect = [
+            {'Successful': True, 'Session': {'Competitors': {}}},
+            self._session('42'),
+        ]
+        ticks = []
+        assert _mod.wait_for_car(
+            client, '123', '42',
+            on_tick=lambda c, s, e: ticks.append((c, s, e)), poll_s=0) is True
+        assert ticks == [(1, 'no_feed', None)]
+
+    def test_unsuccessful_response_reports_no_feed(self):
+        client = MagicMock()
+        client.live.get_session.side_effect = [
+            {'Successful': False},
+            self._session('42'),
+        ]
+        ticks = []
+        _mod.wait_for_car(client, '123', '42',
+                          on_tick=lambda c, s, e: ticks.append((c, s, e)), poll_s=0)
+        assert ticks == [(1, 'no_feed', None)]
+
+    def test_populated_field_without_car_reports_absent(self):
+        client = MagicMock()
+        client.live.get_session.side_effect = [
+            self._session('7'),
+            self._session('7', '42'),
+        ]
+        ticks = []
+        _mod.wait_for_car(client, '123', '42',
+                          on_tick=lambda c, s, e: ticks.append((c, s, e)), poll_s=0)
+        assert ticks == [(1, 'absent', None)]
+
+    def test_api_error_is_retried_and_reported(self):
+        client = MagicMock()
+        client.live.get_session.side_effect = [RuntimeError('boom'), self._session('42')]
+        ticks = []
+        assert _mod.wait_for_car(
+            client, '123', '42',
+            on_tick=lambda c, s, e: ticks.append((c, s, e)), poll_s=0) is True
+        assert ticks == [(1, 'no_feed', 'boom')]
+
+    def test_returns_false_when_stop_event_set(self):
+        stop = threading.Event()
+        client = MagicMock()
+        client.live.get_session.return_value = self._session('7')
+        assert _mod.wait_for_car(
+            client, '123', '42', stop,
+            on_tick=lambda c, s, e: stop.set(), poll_s=0) is False
+
+    def test_preset_stop_event_makes_no_api_call(self):
+        stop = threading.Event()
+        stop.set()
+        client = MagicMock()
+        assert _mod.wait_for_car(client, '123', '42', stop, poll_s=0) is False
+        client.live.get_session.assert_not_called()
+
+
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
         laps = [{"Lap": 1, "LapTime": "0:01:30.000"}]
