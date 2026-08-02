@@ -367,6 +367,11 @@ class TestWaitForLiveScreen:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 await pilot.press('c')
+                # CarSelectScreen.on_mount starts its own _load worker, which
+                # doesn't exist yet at the wait_for_complete() call above (it
+                # snapshots the current worker set) — drain again so _load
+                # finishes before the app tears down.
+                await app.workers.wait_for_complete()
                 await pilot.pause()
                 assert isinstance(app.screen, CarSelectScreen)
 

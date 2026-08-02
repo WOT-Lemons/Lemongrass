@@ -437,8 +437,12 @@ class WaitForLiveScreen(Screen):
     def _stamp():
         return datetime.now().strftime('%H:%M:%S')
 
-    @work(thread=True)
+    @work(thread=True, exit_on_error=False)
     def _wait(self):
+        # exit_on_error=False: call_from_thread re-raises the callback's
+        # exception in this worker thread, and the default exit_on_error=True
+        # would route that into app._handle_exception and kill the app — the
+        # opposite of the "must never crash the app" guarantee below.
         from lemongrass import laps as laps_mod
         try:
             if not laps_mod.wait_for_live(self.client, self.race_id, self._stop,
@@ -452,6 +456,8 @@ class WaitForLiveScreen(Screen):
             logging.exception("wait worker failed")
             self._call(self._status, f'wait failed: {exc}')
             return
+        if self._stop.is_set():
+            return  # user already left via 'c' or escape — don't pop/push behind them
         self._call(self._go_live)
 
     # --- user exits ---
