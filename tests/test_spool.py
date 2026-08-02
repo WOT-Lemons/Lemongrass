@@ -334,8 +334,14 @@ class TestReplay:
         def failing_read_text(self, *args, **kwargs):
             raise OSError("I/O error")
 
+        # Only the quarantine rename fails; the drain's claim rename must still
+        # succeed or there would be nothing to quarantine.
+        real_rename = Path.rename
+
         def failing_rename(self, target):
-            raise OSError("cross-device link")
+            if Path(target).suffix == ".bad":
+                raise OSError("cross-device link")
+            return real_rename(self, target)
 
         monkeypatch.setattr(Path, "read_text", failing_read_text)
         monkeypatch.setattr(Path, "rename", failing_rename)
@@ -343,8 +349,7 @@ class TestReplay:
             result = s.replay_oldest(write_api, BUCKET)
         assert result == DRAINED
         assert any(
-            "Could not quarantine unreadable spool file" in r.message
-            for r in caplog.records
+            "Could not quarantine spool file" in r.message for r in caplog.records
         )
         write_api.write.assert_not_called()
 
@@ -364,7 +369,7 @@ class TestReplay:
             result = s.replay_oldest(write_api, BUCKET)
         assert result == DRAINED
         assert any(
-            "Could not remove salvaged spool file" in r.message
+            "Could not remove replayed spool file" in r.message
             for r in caplog.records
         )
 
@@ -378,8 +383,14 @@ class TestReplay:
         write_api = MagicMock()
         write_api.write.side_effect = ApiException(status=400, reason="bad")
 
+        # Only the quarantine rename fails; the drain's claim rename must still
+        # succeed or there would be nothing to quarantine.
+        real_rename = Path.rename
+
         def failing_rename(self, target):
-            raise OSError("cross-device link")
+            if Path(target).suffix == ".bad":
+                raise OSError("cross-device link")
+            return real_rename(self, target)
 
         monkeypatch.setattr(Path, "rename", failing_rename)
         with caplog.at_level(logging.WARNING):
@@ -491,3 +502,66 @@ class TestChunkedReplay:
         api.write.side_effect = [None, ConnectionError("down"), None]
         assert s.replay_oldest(api, "b") == RETRY
         assert len(list((tmp_path / "spool").glob("*.lp"))) == 1
+
+
+class TestConcurrency:
+    def test_append_during_replay_loses_no_lines(self, tmp_path, monkeypatch):
+        """The drain reads a file while the pump appends to it. With one file in
+        the spool, both select it — the regression this protocol prevents."""
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])
+        real_read = Path.read_text
+
+        def read_then_append(self, *a, **kw):
+            text = real_read(self, *a, **kw)
+            s.append([_pt("SPEED", 99)])   # pump races in here
+            return text
+
+        monkeypatch.setattr(Path, "read_text", read_then_append)
+        api = MagicMock()
+        assert s.replay_oldest(api, "b") == DRAINED
+        sent = "".join(c.kwargs["record"] for c in api.write.call_args_list)
+        remaining = "".join(p.read_text() for p in (tmp_path / "spool").glob("*.lp"))
+        assert "SPEED" in sent or "SPEED" in remaining   # never dropped
+
+    def test_claimed_file_is_not_an_append_target(self, tmp_path):
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])
+        claimed = s._claim_oldest()
+        s.append([_pt("SPEED", 2)])
+        assert "SPEED" not in claimed.read_text()
+
+    def test_orphaned_claim_is_reclaimed_on_construction(self, tmp_path):
+        d = tmp_path / "spool"
+        d.mkdir()
+        (d / "000000000001.replaying").write_text("RPM value=1i 1\n")
+        s = Spool(d)
+        assert (d / "000000000001.lp").exists()
+        assert not (d / "000000000001.replaying").exists()
+        assert s.pending() == (1, len("RPM value=1i 1\n"))
+
+    def test_claimed_file_counts_toward_cap_but_is_not_evicted(self, tmp_path):
+        """Eviction must skip the in-flight file: unlinking it would lose the
+        points the drain has not sent yet."""
+        s = Spool(tmp_path / "spool", max_bytes=1, rotate_bytes=1)
+        s.append([_pt("RPM", 1)])          # 000000000001.lp
+        s.append([_pt("SPEED", 2)])        # 000000000002.lp; cap evicts ...001
+        claimed = s._claim_oldest()        # claims 000000000002
+        s.append([_pt("TEMP", 3)])         # 000000000003.lp, forces the cap again
+        assert claimed.exists()            # in-flight file survives eviction
+        assert not (tmp_path / "spool" / "000000000002.lp").exists()  # it is claimed
+
+    def test_next_seq_accounts_for_claimed_files(self, tmp_path):
+        d = tmp_path / "spool"
+        d.mkdir()
+        (d / "000000000007.replaying").write_text("x\n")
+        s = Spool(d)                       # __init__ reclaims it to .lp
+        assert s._next_seq() == 8
+
+    def test_pending_reports_count_and_bytes(self, tmp_path):
+        s = Spool(tmp_path / "spool", rotate_bytes=1)
+        s.append([_pt("RPM", 1)])
+        s.append([_pt("SPEED", 2)])
+        count, size = s.pending()
+        assert count == 2
+        assert size > 0
