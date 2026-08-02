@@ -592,6 +592,76 @@ class TestMonitorRoutineObserver:
         assert obs.on_lap.call_count == 1
 
 
+class TestWaitForLive:
+    """Poll race.is_live until the green flag; never give up on its own."""
+
+    def test_returns_true_once_race_goes_live(self):
+        client = MagicMock()
+        client.race.is_live.side_effect = [
+            {'Successful': True, 'IsLive': False},
+            {'Successful': True, 'IsLive': False},
+            {'Successful': True, 'IsLive': True},
+        ]
+        assert _mod.wait_for_live(client, '123', poll_s=0) is True
+        assert client.race.is_live.call_count == 3
+
+    def test_returns_false_when_stop_event_set(self):
+        stop = threading.Event()
+        client = MagicMock()
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+
+        def _tick(count, error):
+            stop.set()  # ask to stop after the first check
+
+        assert _mod.wait_for_live(client, '123', stop, on_tick=_tick, poll_s=0) is False
+
+    def test_preset_stop_event_makes_no_api_call(self):
+        stop = threading.Event()
+        stop.set()
+        client = MagicMock()
+        assert _mod.wait_for_live(client, '123', stop, poll_s=0) is False
+        client.race.is_live.assert_not_called()
+
+    def test_unsuccessful_response_keeps_waiting(self):
+        client = MagicMock()
+        client.race.is_live.side_effect = [
+            {'Successful': False},
+            {'Successful': True, 'IsLive': True},
+        ]
+        assert _mod.wait_for_live(client, '123', poll_s=0) is True
+
+    def test_api_error_is_retried_and_reported(self):
+        client = MagicMock()
+        client.race.is_live.side_effect = [
+            RuntimeError('boom'),
+            {'Successful': True, 'IsLive': True},
+        ]
+        ticks = []
+        assert _mod.wait_for_live(
+            client, '123', on_tick=lambda c, e: ticks.append((c, e)), poll_s=0) is True
+        assert ticks == [(1, 'boom')]
+
+    def test_on_tick_counts_up_with_no_error(self):
+        client = MagicMock()
+        client.race.is_live.side_effect = [
+            {'Successful': True, 'IsLive': False},
+            {'Successful': True, 'IsLive': False},
+            {'Successful': True, 'IsLive': True},
+        ]
+        ticks = []
+        _mod.wait_for_live(client, '123', on_tick=lambda c, e: ticks.append((c, e)), poll_s=0)
+        assert ticks == [(1, None), (2, None)]
+
+    def test_uses_poll_interval_as_wait_timeout(self):
+        client = MagicMock()
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+        mock_event = MagicMock()
+        mock_event.is_set.return_value = False
+        mock_event.wait.return_value = True  # stop after the first check
+        _mod.wait_for_live(client, '123', mock_event)
+        mock_event.wait.assert_called_with(timeout=10)
+
+
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
         laps = [{"Lap": 1, "LapTime": "0:01:30.000"}]

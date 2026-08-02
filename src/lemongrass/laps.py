@@ -54,6 +54,12 @@ SCHEMA_VERSION = 4
 _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5
 
+# Cadence for the pre-race waits (wait_for_live / wait_for_car). 10s is 6 checks
+# per minute — exactly one RaceMonitor token's default rate-limit budget, so a
+# multi-hour wait never starves the pool. The client's own limiter blocks rather
+# than 429s if other calls are in flight, which self-throttles the wait.
+_WAIT_POLL_S = 10
+
 # How far in the past a race's stored end time must be before the Influx-only skip
 # will trust it as fully over. Sessions can share one race_id across a multi-day
 # event, so a stored end that is only recently past may still have a later session
@@ -336,6 +342,39 @@ def main():
     except KeyboardInterrupt:
         logging.info("Interrupted, exiting.")
         sys.exit(130)
+
+
+def wait_for_live(client, race_id, stop_event=None, on_tick=None, poll_s=_WAIT_POLL_S):
+    """Poll race.is_live until the race goes live.
+
+    Returns True once IsLive is set, or False if stop_event was set first. The
+    wait has no timeout: unattended capture must still be running whenever the
+    green flag actually drops, which can be hours after setup.
+
+    Every failure of the is_live call — RaceMonitorError (including exhausted
+    429 retries), transport errors, anything unexpected — is swallowed and
+    retried on the next tick, because a single bad poll must not end the wait.
+    on_tick(count, error) fires after each check that did not find the race
+    live, where error is None on a clean not-yet-live result and a short reason
+    otherwise; callers use it to render status.
+    """
+    stop = stop_event if stop_event is not None else threading.Event()
+    count = 0
+    while not stop.is_set():
+        error = None
+        try:
+            response = client.race.is_live(race_id)
+            if response.get('Successful') and response.get('IsLive'):
+                return True
+        except Exception as exc:
+            logging.debug("is_live check failed while waiting: %s", exc)
+            error = str(exc) or exc.__class__.__name__
+        count += 1
+        if on_tick is not None:
+            on_tick(count, error)
+        if stop.wait(timeout=poll_s):
+            return False
+    return False
 
 
 def backfill_race(race_id, car_number, client, opts, observer=None):
