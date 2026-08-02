@@ -351,6 +351,9 @@ class TestReplay:
         assert any(
             "Could not quarantine spool file" in r.message for r in caplog.records
         )
+        # The shared _quarantine message is identical for the unreadable and the
+        # 4xx-rejected case; this preceding line is what distinguishes them.
+        assert any("Cannot read spool file" in r.message for r in caplog.records)
         write_api.write.assert_not_called()
 
     def test_salvage_unlink_oserror_is_warned(self, tmp_path, monkeypatch, caplog):
@@ -370,6 +373,12 @@ class TestReplay:
         assert result == DRAINED
         assert any(
             "Could not remove replayed spool file" in r.message
+            for r in caplog.records
+        )
+        # _finish's message is shared with a plain replay; this preceding line is
+        # what marks the removal as the post-salvage one.
+        assert any(
+            "Dropped 1 unwritable line from spool file" in r.message
             for r in caplog.records
         )
 
@@ -399,6 +408,9 @@ class TestReplay:
         assert any(
             "Could not quarantine spool file" in r.message for r in caplog.records
         )
+        # Same _quarantine message as the unreadable case; the absence of the
+        # read failure is what identifies this as the Influx-rejected path.
+        assert not any("Cannot read spool file" in r.message for r in caplog.records)
 
 
 class TestReplayResult:
@@ -552,11 +564,25 @@ class TestConcurrency:
         assert not (tmp_path / "spool" / "000000000002.lp").exists()  # it is claimed
 
     def test_next_seq_accounts_for_claimed_files(self, tmp_path):
-        d = tmp_path / "spool"
-        d.mkdir()
-        (d / "000000000007.replaying").write_text("x\n")
-        s = Spool(d)                       # __init__ reclaims it to .lp
-        assert s._next_seq() == 8
+        # A *live* claim, not a reclaimed orphan: __init__ renames orphans back
+        # to .lp, so an orphan-based test passes even without the claim glob.
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])          # 000000000001.lp
+        s._claim_oldest()                  # -> 000000000001.replaying
+        assert s._next_seq() == 2          # must not hand out the claimed seq
+
+    def test_release_does_not_clobber_points_appended_while_claimed(self, tmp_path):
+        """The loss _next_seq's claim glob prevents: if append reuses the claimed
+        file's sequence, _release renames .replaying over it and os.rename
+        silently destroys the points appended in the meantime."""
+        s = Spool(tmp_path / "spool")
+        s.append([_pt("RPM", 1)])
+        claimed = s._claim_oldest()
+        s.append([_pt("SPEED", 2)])        # must land on a fresh sequence
+        s._release(claimed)                # renames .replaying back to .lp
+        live = "".join(p.read_text() for p in sorted((tmp_path / "spool").glob("*.lp")))
+        assert "SPEED" in live             # not clobbered by the release
+        assert "RPM" in live               # and the released file is back
 
     def test_pending_reports_count_and_bytes(self, tmp_path):
         s = Spool(tmp_path / "spool", rotate_bytes=1)

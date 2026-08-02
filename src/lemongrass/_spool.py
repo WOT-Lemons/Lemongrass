@@ -280,7 +280,14 @@ class Spool:
         return DRAINED
 
     def _quarantine(self, path):
-        """Rename a file that InfluxDB will not accept to <name>.bad."""
+        """Rename a file that InfluxDB will not accept to <name>.bad.
+
+        On rename failure the file stays claimed rather than returning to the
+        live set, for the same reason as _finish: re-reading a file InfluxDB has
+        already rejected would replay the whole reject/salvage cycle on every
+        drain pass forever. _reclaim_orphans retries it on the next process
+        start.
+        """
         with self._lock:
             target = path.with_suffix(_BAD_SUFFIX)
             try:
@@ -295,7 +302,7 @@ class Spool:
     def replay_oldest(self, write_api, bucket):
         """Replay the oldest spool file through write_api; delete it on success.
 
-        Returns DRAINED when a file was replaced or quarantined (progress either
+        Returns DRAINED when a file was replayed or quarantined (progress either
         way), EMPTY when there was nothing to do, and RETRY when the write failed
         for a retryable/connectivity reason — the file is kept for another
         attempt. Safe to call from a thread other than the one calling append().
@@ -308,7 +315,9 @@ class Spool:
         try:
             text = path.read_text()
         except FileNotFoundError:
-            # Evicted by _enforce_cap between the claim and the read. Benign —
+            # A claim is never evicted (_enforce_cap skips .replaying), so the
+            # only way here is something outside this process removing the file:
+            # manual cleanup, or an operator clearing the spool dir. Benign —
             # not corruption, and must not be logged as such.
             logger.debug("Spool file %s vanished before replay", path.name)
             return DRAINED
