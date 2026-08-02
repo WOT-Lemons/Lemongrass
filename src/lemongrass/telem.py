@@ -12,7 +12,7 @@ from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from lemongrass import _config, _influx
-from lemongrass._spool import Spool
+from lemongrass._spool import DRAINED, RETRY, Spool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
@@ -52,6 +52,17 @@ WRITE_BUCKET = _influx.BUCKET_TELEM
 WRITE_TIMEOUT_MS = 3000
 WRITE_RETRIES = _influx.build_retries(1)
 
+# Spool drain cadence. The drain is the slow path: it has no latency
+# requirement, so it idles cheaply and backs off hard rather than hammering a
+# down Influx or competing with the live flush for the car's uplink.
+DRAIN_ACTIVE_S = 0.5    # a file just drained; keep going
+DRAIN_IDLE_S = 30.0     # nothing to do; don't spin the SD card
+DRAIN_RETRY_S = 30.0    # retryable failure, or the live flush is already failing
+DRAIN_JOIN_TIMEOUT_S = 5.0
+# Drain failures repeat-warn (with a cumulative count) rather than edge-trigger:
+# a drain stuck for a week must not produce one line at the start of the week.
+_DRAIN_WARN_INTERVAL_S = 60
+
 FUEL_STATUS_MAP = {
     "Open loop due to insufficient engine temperature": 0,
     "Closed loop, using oxygen sensor feedback to determine fuel mix": 1,
@@ -77,6 +88,12 @@ _vin = "unknown"  # set by main() via _resolve_vin; tags every queued point
 # and once (INFO) on recovery instead of one line per 0.5s pump cycle. Only
 # touched from the main pump thread (flush_points), so no lock is needed.
 _spooling = False
+# Drain-thread state. Touched only from the drain thread, except _drain_stop.
+_drain_stop = threading.Event()
+_drain_thread = None
+_drain_failures = 0
+_drain_failing_since = None
+_last_drain_warn_monotonic = float('-inf')
 # Both only ever written from the Async callback thread; no lock needed.
 _last_dtc_count = 0
 _dtc_fetch_failures = 0
@@ -441,6 +458,62 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
                         "Backlog exceeded %d points; dropped %d oldest",
                         MAX_PENDING_POINTS, overflow)
         return False
+
+
+def _drain_once(write_api):
+    """Run one spool-drain cycle; return the seconds to sleep before the next.
+
+    Skipped entirely while the live flush is failing: Influx is unreachable, so
+    draining would fail anyway, and drain POSTs competing with the live flush on
+    one uplink can push it past its own timeout — spilling more to the spool
+    while we try to empty it.
+    """
+    global _drain_failures, _drain_failing_since, _last_drain_warn_monotonic
+    if _spooling:
+        return DRAIN_RETRY_S
+    result = _spool.replay_oldest(write_api, WRITE_BUCKET)
+    now = monotonic()
+    if result == RETRY:
+        _drain_failures += 1
+        if _drain_failing_since is None:
+            _drain_failing_since = now
+        if now - _last_drain_warn_monotonic >= _DRAIN_WARN_INTERVAL_S:
+            count, size = _spool.pending()
+            logger.warning(
+                "Spool drain failing for %.0fs (%d attempts); %d file(s) / "
+                "%d bytes pending",
+                now - _drain_failing_since, _drain_failures, count, size)
+            _last_drain_warn_monotonic = now
+        return DRAIN_RETRY_S
+    if _drain_failing_since is not None:
+        logger.info(
+            "Spool drain recovered after %.0fs and %d failed attempt(s)",
+            now - _drain_failing_since, _drain_failures)
+        _drain_failing_since = None
+        _drain_failures = 0
+        _last_drain_warn_monotonic = float('-inf')
+    if result == DRAINED:
+        count, size = _spool.pending()
+        logger.info("Spool drain: %d file(s) / %d bytes remaining", count, size)
+        return DRAIN_ACTIVE_S
+    return DRAIN_IDLE_S
+
+
+def _drain_loop(write_api, stop_event, interval=None):
+    """Replay spooled files until ``stop_event`` is set.
+
+    ``interval`` overrides the computed backoff; tests pass 0 so a cycle does not
+    block. A cycle that raises is logged and the loop continues — a drain thread
+    that dies silently reproduces the very bug this exists to fix.
+    """
+    while not stop_event.is_set():
+        try:
+            delay = _drain_once(write_api)
+        except Exception:
+            logger.exception("Spool drain cycle failed")
+            delay = DRAIN_RETRY_S
+        if stop_event.wait(interval if interval is not None else delay):
+            return
 
 
 def _pump(write_api):

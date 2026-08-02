@@ -1,10 +1,12 @@
 import logging
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 from influxdb_client import Point
 
 import lemongrass.telem as _mod
+from lemongrass import _spool as _spool_mod
 from lemongrass._spool import Spool
 
 
@@ -25,6 +27,11 @@ def _reset():
     _mod._spool = None
     _mod._spooling = False
     _mod._vin = "unknown"
+    _mod._drain_stop = threading.Event()
+    _mod._drain_thread = None
+    _mod._drain_failures = 0
+    _mod._drain_failing_since = None
+    _mod._last_drain_warn_monotonic = float('-inf')
 
 
 class TestConnect:
@@ -721,6 +728,64 @@ class TestPump:
         _mod._pump(write_api)
         assert _mod.pending_points == []                       # nothing left in RAM
         assert len(list((tmp_path / "spool").glob("*.lp"))) == 1  # durable on disk
+
+
+class TestDrainOnce:
+    def setup_method(self):
+        _reset()
+
+    def test_drained_uses_active_interval(self):
+        _mod._spool = MagicMock()
+        _mod._spool.replay_oldest.return_value = _spool_mod.DRAINED
+        _mod._spool.pending.return_value = (2, 1024)
+        assert _mod._drain_once(MagicMock()) == _mod.DRAIN_ACTIVE_S
+
+    def test_empty_uses_idle_interval(self):
+        _mod._spool = MagicMock()
+        _mod._spool.replay_oldest.return_value = _spool_mod.EMPTY
+        assert _mod._drain_once(MagicMock()) == _mod.DRAIN_IDLE_S
+
+    def test_retry_uses_backoff_interval(self):
+        _mod._spool = MagicMock()
+        _mod._spool.replay_oldest.return_value = _spool_mod.RETRY
+        # First-ever RETRY always crosses the repeat-warn threshold (starts at
+        # -inf), which pulls pending() for the log line -- must be mocked too.
+        _mod._spool.pending.return_value = (1, 512)
+        assert _mod._drain_once(MagicMock()) == _mod.DRAIN_RETRY_S
+
+    def test_skips_while_live_flush_is_failing(self):
+        _mod._spool = MagicMock()
+        _mod._spooling = True
+        assert _mod._drain_once(MagicMock()) == _mod.DRAIN_RETRY_S
+        _mod._spool.replay_oldest.assert_not_called()
+
+
+class TestDrainLoop:
+    def setup_method(self):
+        _reset()
+
+    def test_exception_does_not_kill_the_loop(self, caplog):
+        stop = threading.Event()
+        calls = []
+
+        def blow_up(_api):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            stop.set()
+            return 0
+
+        with patch.object(_mod, "_drain_once", side_effect=blow_up):
+            _mod._drain_loop(MagicMock(), stop, interval=0)
+        assert len(calls) == 2                      # survived the first raise
+        assert "Spool drain cycle failed" in caplog.text
+
+    def test_stop_event_terminates(self):
+        stop = threading.Event()
+        stop.set()
+        with patch.object(_mod, "_drain_once") as once:
+            _mod._drain_loop(MagicMock(), stop, interval=0)
+        once.assert_not_called()
 
 
 class TestRouteCommand:
