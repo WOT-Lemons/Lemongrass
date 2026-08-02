@@ -751,11 +751,50 @@ class TestDrainOnce:
         _mod._spool.pending.return_value = (1, 512)
         assert _mod._drain_once(MagicMock()) == _mod.DRAIN_RETRY_S
 
-    def test_skips_while_live_flush_is_failing(self):
+    def test_skips_replay_while_live_flush_is_failing(self):
         _mod._spool = MagicMock()
+        _mod._spool.pending.return_value = (1, 512)
         _mod._spooling = True
         assert _mod._drain_once(MagicMock()) == _mod.DRAIN_RETRY_S
         _mod._spool.replay_oldest.assert_not_called()
+
+    def test_suppressed_drain_warns_on_the_repeat_interval(self, caplog):
+        """A live-flush outage suppresses the drain *and* is the most likely
+        cause of a days-long stall, so the skip must not be silent: it accrues
+        blocked cycles and repeat-warns on the same cadence as a RETRY."""
+        _mod._spool = MagicMock()
+        _mod._spool.pending.return_value = (3, 4096)
+        _mod._spooling = True
+        clock = iter([0.0, 1.0, float(_mod._DRAIN_WARN_INTERVAL_S)])
+
+        with caplog.at_level(logging.WARNING, logger="telem"), \
+                patch.object(_mod, "monotonic", side_effect=lambda: next(clock)):
+            for _ in range(3):
+                assert _mod._drain_once(MagicMock()) == _mod.DRAIN_RETRY_S
+
+        _mod._spool.replay_oldest.assert_not_called()
+        assert _mod._drain_failures == 3
+        warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        # Cycle 1 warns (first ever), cycle 2 is inside the interval and stays
+        # quiet, cycle 3 crosses it and warns again with the cumulative count.
+        assert len(warnings) == 2
+        assert "suppressed (live flush failing)" in warnings[0]
+        assert "(3 cycle(s)); 3 file(s) / 4096 bytes pending" in warnings[1]
+
+    def test_suppression_clearing_logs_the_unblock(self, caplog):
+        _mod._spool = MagicMock()
+        _mod._spool.pending.return_value = (0, 0)
+        _mod._spooling = True
+        _mod._drain_once(MagicMock())           # one suppressed cycle
+        _mod._spooling = False
+        _mod._spool.replay_oldest.return_value = _spool_mod.EMPTY
+
+        with caplog.at_level(logging.INFO, logger="telem"):
+            assert _mod._drain_once(MagicMock()) == _mod.DRAIN_IDLE_S
+
+        assert "failed or suppressed cycle(s)" in caplog.text
+        assert _mod._drain_failures == 0
+        assert _mod._drain_failing_since is None
 
 
 class TestDrainLoop:
@@ -1025,6 +1064,7 @@ class TestMainLoop:
 
         with patch.object(_mod.Spool, "from_config", return_value=MagicMock()), \
                 patch.object(_mod._influx, "connect"), \
+                patch.object(_mod, "_start_drain", return_value=(None, None)), \
                 patch.object(_mod, "_configure_obd_logging"), \
                 patch.object(_mod, "connect", return_value=connection) as mock_connect, \
                 patch.object(_mod, "_resolve_vin", return_value="TESTVIN0000000001"), \

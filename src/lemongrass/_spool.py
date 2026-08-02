@@ -91,7 +91,11 @@ class Spool:
         claiming and finishing would otherwise strand the file outside every
         glob, invisible forever.
         """
-        for path in self.dir.glob(f'*{_CLAIM_SUFFIX}'):
+        # Materialize before renaming: Path.glob is lazy over os.scandir, and
+        # mutating directory entries mid-iteration can skip or repeat entries on
+        # a hash-ordered directory (ext4 dir_index) -- a skipped claim would stay
+        # stranded until the next restart.
+        for path in list(self.dir.glob(f'*{_CLAIM_SUFFIX}')):
             try:
                 path.rename(path.with_suffix(_SUFFIX))
                 logger.warning("Reclaimed interrupted spool file %s", path.name)

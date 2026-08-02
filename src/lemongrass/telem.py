@@ -59,8 +59,10 @@ DRAIN_ACTIVE_S = 0.5    # a file just drained; keep going
 DRAIN_IDLE_S = 30.0     # nothing to do; don't spin the SD card
 DRAIN_RETRY_S = 30.0    # retryable failure, or the live flush is already failing
 DRAIN_JOIN_TIMEOUT_S = 5.0
-# Drain failures repeat-warn (with a cumulative count) rather than edge-trigger:
-# a drain stuck for a week must not produce one line at the start of the week.
+# Blocked drain cycles -- a failed replay, or a replay suppressed because the
+# live flush is failing -- repeat-warn (with a cumulative count) rather than
+# edge-trigger: a drain stuck for a week must not produce one line at the start
+# of the week.
 _DRAIN_WARN_INTERVAL_S = 60
 
 FUEL_STATUS_MAP = {
@@ -460,34 +462,48 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
         return False
 
 
+def _note_drain_blocked(now, reason):
+    """Account for one cycle that made no progress and repeat-warn on cadence.
+
+    Shared by both blocked paths (a RETRY from replay, and the skip taken while
+    the live flush is failing) so neither can go silent for a week: the warning
+    repeats every _DRAIN_WARN_INTERVAL_S with a cumulative cycle count.
+    """
+    global _drain_failures, _drain_failing_since, _last_drain_warn_monotonic
+    _drain_failures += 1
+    if _drain_failing_since is None:
+        _drain_failing_since = now
+    if now - _last_drain_warn_monotonic >= _DRAIN_WARN_INTERVAL_S:
+        count, size = _spool.pending()
+        logger.warning(
+            "Spool drain %s for %.0fs (%d cycle(s)); %d file(s) / %d bytes pending",
+            reason, now - _drain_failing_since, _drain_failures, count, size)
+        _last_drain_warn_monotonic = now
+
+
 def _drain_once(write_api):
     """Run one spool-drain cycle; return the seconds to sleep before the next.
 
-    Skipped entirely while the live flush is failing: Influx is unreachable, so
+    Replay is skipped while the live flush is failing: Influx is unreachable, so
     draining would fail anyway, and drain POSTs competing with the live flush on
     one uplink can push it past its own timeout — spilling more to the spool
-    while we try to empty it.
+    while we try to empty it. The skip still counts as a blocked cycle, because
+    the live-flush outage that causes it is the most likely reason for a drain
+    to stall for days, and that must not be silent (flush_points only logs the
+    outage once, at onset).
     """
     global _drain_failures, _drain_failing_since, _last_drain_warn_monotonic
+    now = monotonic()
     if _spooling:
+        _note_drain_blocked(now, "suppressed (live flush failing)")
         return DRAIN_RETRY_S
     result = _spool.replay_oldest(write_api, WRITE_BUCKET)
-    now = monotonic()
     if result == RETRY:
-        _drain_failures += 1
-        if _drain_failing_since is None:
-            _drain_failing_since = now
-        if now - _last_drain_warn_monotonic >= _DRAIN_WARN_INTERVAL_S:
-            count, size = _spool.pending()
-            logger.warning(
-                "Spool drain failing for %.0fs (%d attempts); %d file(s) / "
-                "%d bytes pending",
-                now - _drain_failing_since, _drain_failures, count, size)
-            _last_drain_warn_monotonic = now
+        _note_drain_blocked(now, "failing")
         return DRAIN_RETRY_S
     if _drain_failing_since is not None:
         logger.info(
-            "Spool drain recovered after %.0fs and %d failed attempt(s)",
+            "Spool drain unblocked after %.0fs and %d failed or suppressed cycle(s)",
             now - _drain_failing_since, _drain_failures)
         _drain_failing_since = None
         _drain_failures = 0
