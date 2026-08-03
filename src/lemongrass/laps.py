@@ -259,7 +259,8 @@ def _build_parser():
                         action='store_true',
                         help='Implies -m; wait for the race to go live (checked every '
                              '10s, no timeout), then monitor car_number. If the car is '
-                             'not in the live feed yet, keep waiting for it.')
+                             'not in the live feed yet, keep waiting for it — unless the '
+                             'race ends first, which stops the wait and exits nonzero.')
     parser.set_defaults(monitor_mode=False, network_mode=False)
     return parser
 
@@ -281,6 +282,8 @@ def _parse_args(argv=None):
         if args.skip_if_complete:
             parser.error('--wait-for-live cannot be combined with --skip-if-complete '
                          '(--skip-if-complete is historical-only)')
+        if args.car_number is None:
+            parser.error('--wait-for-live requires car_number')
         args.monitor_mode = True
     return args
 
@@ -447,6 +450,65 @@ def wait_for_car(client, race_id, car_number, stop_event=None, on_tick=None,
     return False
 
 
+def _wait_for_live_log_tick(race_id, poll_s):
+    """Build an on_tick(count, error) callback that reports wait_for_live's
+    progress at INFO, so an unattended CLI run under systemd/docker isn't
+    silent between launch and the green flag.
+
+    Logs a start line immediately, then roughly one "still waiting" line every
+    5 minutes at the 10s cadence (first tick, then every 30th). A failing
+    check is always logged the first time it's seen, but a repeated identical
+    error is not re-logged on every tick — only a change in the error is.
+    """
+    logging.info("Waiting for race %s to go live (checking every %ss)…", race_id, poll_s)
+    last_error = None
+
+    def _tick(count, error):
+        nonlocal last_error
+        if count == 1 or count % 30 == 0:
+            logging.info(
+                "Still waiting for race %s to go live (%d checks so far)", race_id, count)
+        if error is not None and error != last_error:
+            logging.info(
+                "is_live check failing while waiting for race %s: %s", race_id, error)
+        last_error = error
+
+    return _tick
+
+
+def _wait_for_car_log_tick(race_id, car_number, poll_s):
+    """Build an on_tick(count, state, error) callback that reports
+    wait_for_car's progress at INFO — see _wait_for_live_log_tick for the
+    cadence/error-dedup rules, which are the same here.
+
+    state distinguishes 'no_feed' (nothing to match against yet) from 'absent'
+    (the field is populated but car_number isn't in it), the same distinction
+    the TUI's wait screen surfaces.
+    """
+    logging.info(
+        "Waiting for car %s to appear in race %s's timing feed (checking every %ss)…",
+        car_number, race_id, poll_s)
+    last_error = None
+
+    def _tick(count, state, error):
+        nonlocal last_error
+        if count == 1 or count % 30 == 0:
+            if state == 'no_feed':
+                logging.info(
+                    "Still waiting for the timing feed for race %s (%d checks so far)",
+                    race_id, count)
+            else:
+                logging.info(
+                    "Car %s still not in race %s's field (%d checks so far)",
+                    car_number, race_id, count)
+        if error is not None and error != last_error:
+            logging.info(
+                "get_session check failing while waiting for car %s: %s", car_number, error)
+        last_error = error
+
+    return _tick
+
+
 def backfill_race(race_id, car_number, client, opts, observer=None):
     """Fetch and process one race using an already-open RaceMonitorClient.
 
@@ -463,7 +525,8 @@ def backfill_race(race_id, car_number, client, opts, observer=None):
     # placeholder start epoch and no metadata, so everything downstream should
     # read post-green-flag values. Returning 0 on a cancelled wait keeps a
     # user-initiated stop from looking like a failure.
-    if opts.wait_for_live and not wait_for_live(client, race_id):
+    if opts.wait_for_live and not wait_for_live(
+            client, race_id, on_tick=_wait_for_live_log_tick(race_id, _WAIT_POLL_S)):
         return 0
 
     race_details = client.race.details(race_id)
@@ -539,19 +602,36 @@ def _run_race(ctx, opts, response, observer=None):
             result = live_race(ctx, opts, observer=observer)
             attempts = 0
             while result is MonitorStatus.NO_LIVE_DATA and opts.wait_for_live:
-                # The race is already live here, so re-checking is_live would
-                # return immediately and spin — wait for the *car* to show up in
-                # the timing feed instead, then retry the whole live setup.
-                # get_session (wait_for_car) and get_racer (live_race) can
-                # disagree, so a car listed in the field but with no racer
-                # detail yet must not spin: pace every retry after the first.
+                # Wait for the *car* to show up in the timing feed, then retry
+                # the whole live setup. get_session (wait_for_car) and
+                # get_racer (live_race) can disagree, so a car listed in the
+                # field but with no racer detail yet must not spin: pace every
+                # retry after the first.
                 if attempts:
                     time.sleep(_WAIT_POLL_S)
                 attempts += 1
+                # The race can end (or be red-flagged to a finish) before the
+                # car ever appears in the feed — without this check the loop
+                # would poll a rate-limited API forever with no recovery short
+                # of SIGINT. A failed/unsuccessful check is "unknown", not
+                # "ended", so only an explicit successful-and-not-live
+                # response terminates the wait.
+                try:
+                    is_live_resp = ctx.client.race.is_live(ctx.race_id)
+                except Exception as exc:
+                    logging.debug("is_live recheck failed while waiting for car: %s", exc)
+                    is_live_resp = {}
+                if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
+                    logging.error(
+                        "Race %s ended before car %s appeared in the live feed",
+                        ctx.race_id, ctx.car_number)
+                    return 1
                 logging.info(
                     "Car %s is not in the live feed yet — waiting for it to appear.",
                     ctx.car_number)
-                if not wait_for_car(ctx.client, ctx.race_id, ctx.car_number):
+                if not wait_for_car(ctx.client, ctx.race_id, ctx.car_number,
+                                    on_tick=_wait_for_car_log_tick(
+                                        ctx.race_id, ctx.car_number, _WAIT_POLL_S)):
                     break
                 result = live_race(ctx, opts, observer=observer)
             if result is MonitorStatus.INTERRUPTED:

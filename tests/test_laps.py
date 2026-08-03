@@ -743,6 +743,76 @@ class TestWaitForCar:
         client.live.get_session.assert_not_called()
 
 
+class TestCliWaitTickLogging:
+    """The CLI wait sites (backfill_race/_run_race) must not be silent under
+    systemd/docker: an on_tick callback logs at INFO so the operator can tell a
+    healthy wait from a persistent failure."""
+
+    def test_wait_for_live_tick_logs_start_line(self, caplog):
+        with caplog.at_level(logging.INFO):
+            _mod._wait_for_live_log_tick('101', 10)
+        assert any('101' in r.message and 'live' in r.message for r in caplog.records)
+
+    def test_wait_for_live_tick_logs_first_and_every_thirtieth(self, caplog):
+        tick = _mod._wait_for_live_log_tick('101', 10)
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            tick(1, None)
+            tick(2, None)
+            tick(29, None)
+            tick(30, None)
+        progress_lines = [r.message for r in caplog.records if 'checks' in r.message]
+        assert len(progress_lines) == 2  # ticks 1 and 30 only
+
+    def test_wait_for_live_tick_repeated_error_logged_once(self, caplog):
+        tick = _mod._wait_for_live_log_tick('101', 10)
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            tick(1, 'boom')
+            tick(2, 'boom')
+        error_lines = [r.message for r in caplog.records if 'boom' in r.message]
+        assert len(error_lines) == 1
+
+    def test_wait_for_live_tick_changed_error_logged_again(self, caplog):
+        tick = _mod._wait_for_live_log_tick('101', 10)
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            tick(1, 'boom')
+            tick(2, 'boom')
+            tick(3, 'different failure')
+        assert any('boom' in r.message for r in caplog.records)
+        assert any('different failure' in r.message for r in caplog.records)
+
+    def test_wait_for_car_tick_logs_start_line(self, caplog):
+        with caplog.at_level(logging.INFO):
+            _mod._wait_for_car_log_tick('101', '42', 10)
+        assert any('42' in r.message and '101' in r.message for r in caplog.records)
+
+    def test_wait_for_car_tick_distinguishes_no_feed_and_absent(self, caplog):
+        tick = _mod._wait_for_car_log_tick('101', '42', 10)
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            tick(1, 'no_feed', None)
+        no_feed_text = ' '.join(r.message for r in caplog.records if 'checks' in r.message)
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            tick(30, 'absent', None)
+        absent_text = ' '.join(r.message for r in caplog.records if 'checks' in r.message)
+        assert 'feed' in no_feed_text
+        assert '42' in absent_text and 'field' in absent_text
+
+    def test_wait_for_car_tick_repeated_error_not_logged_twice(self, caplog):
+        tick = _mod._wait_for_car_log_tick('101', '42', 10)
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            tick(1, 'no_feed', 'boom')
+            tick(2, 'no_feed', 'boom')
+            tick(3, 'no_feed', 'other')
+        error_lines = [r.message for r in caplog.records if 'boom' in r.message or
+                      'other' in r.message]
+        assert len(error_lines) == 2
+
+
 class TestWriteCSV:
     def test_opens_file_with_correct_name(self):
         laps = [{"Lap": 1, "LapTime": "0:01:30.000"}]
@@ -1329,6 +1399,12 @@ class TestWaitForLiveFlag:
     def test_rejects_skip_if_complete_combination(self):
         with pytest.raises(SystemExit):
             _mod._parse_args(['12345', '42', '--wait-for-live', '--skip-if-complete'])
+
+    def test_rejects_missing_car_number(self):
+        # Without this, --wait-for-live blocks for the whole unattended wait and
+        # only then fails with "car_number is required" once it's too late.
+        with pytest.raises(SystemExit):
+            _mod._parse_args(['12345', '--wait-for-live'])
 
 
 class TestExistingLapCountsFieldwide:
@@ -3281,6 +3357,7 @@ class TestRunRaceDispatch:
         """Unattended capture must not end because the car had not yet appeared
         in the timing feed — NO_LIVE_DATA re-waits for the car, then retries."""
         ctx = self._ctx()
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
         opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
         with patch.object(_mod, 'live_race',
                           side_effect=[_mod.MonitorStatus.NO_LIVE_DATA,
@@ -3289,7 +3366,9 @@ class TestRunRaceDispatch:
             result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
         assert result == 0
         assert mock_live.call_count == 2
-        mock_wait.assert_called_once_with(ctx.client, ctx.race_id, ctx.car_number)
+        mock_wait.assert_called_once()
+        assert mock_wait.call_args.args == (ctx.client, ctx.race_id, ctx.car_number)
+        assert 'on_tick' in mock_wait.call_args.kwargs
 
     def test_no_live_data_still_returns_1_without_the_flag(self):
         ctx = self._ctx()
@@ -3307,6 +3386,7 @@ class TestRunRaceDispatch:
         No sleep before the first retry (fast path unaffected); a
         _WAIT_POLL_S sleep before every retry after that."""
         ctx = self._ctx()
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
         opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
         with patch.object(_mod, 'live_race',
                           side_effect=[_mod.MonitorStatus.NO_LIVE_DATA,
@@ -3321,6 +3401,40 @@ class TestRunRaceDispatch:
         assert mock_wait.call_count == 3
         assert mock_sleep.call_count == 2
         mock_sleep.assert_has_calls([call(_mod._WAIT_POLL_S), call(_mod._WAIT_POLL_S)])
+
+    def test_race_ended_before_car_appears_returns_1(self, caplog):
+        """The retry loop must re-check is_live: a race that goes live and is
+        then cancelled/red-flagged before the tracked car ever appears must not
+        poll a rate-limited API forever — the CLI has no recovery short of
+        SIGINT."""
+        ctx = self._ctx()
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+        with patch.object(_mod, 'live_race',
+                          return_value=_mod.MonitorStatus.NO_LIVE_DATA), \
+             patch.object(_mod, 'wait_for_car') as mock_wait, \
+             caplog.at_level(logging.ERROR):
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 1
+        mock_wait.assert_not_called()
+        assert any('ended' in r.message for r in caplog.records)
+
+    def test_is_live_recheck_failure_does_not_end_the_loop(self):
+        """A single failed/unsuccessful is_live recheck is "unknown", not
+        "ended" — it must not be treated the same as a confirmed race end."""
+        ctx = self._ctx()
+        ctx.client.race.is_live.side_effect = [
+            RuntimeError('boom'), {'Successful': False}]
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+        with patch.object(_mod, 'live_race',
+                          side_effect=[_mod.MonitorStatus.NO_LIVE_DATA,
+                                       _mod.MonitorStatus.NO_LIVE_DATA,
+                                       _mod.MonitorStatus.RACE_ENDED]) as mock_live, \
+             patch.object(_mod, 'wait_for_car', return_value=True) as mock_wait:
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 0
+        assert mock_live.call_count == 3
+        assert mock_wait.call_count == 2
 
 
 class TestComputeClassPositionsLive:
@@ -4425,7 +4539,9 @@ class TestBackfillRace:
         with patch.object(_mod, 'wait_for_live', return_value=True) as mock_wait, \
              patch.object(_mod, '_run_race', return_value=0):
             assert _mod.backfill_race('101', '42', client, opts) == 0
-        mock_wait.assert_called_once_with(client, '101')
+        mock_wait.assert_called_once()
+        assert mock_wait.call_args.args == (client, '101')
+        assert 'on_tick' in mock_wait.call_args.kwargs
 
     def test_cancelled_wait_returns_0_without_fetching_details(self):
         client = MagicMock()

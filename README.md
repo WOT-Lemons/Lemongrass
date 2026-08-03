@@ -101,7 +101,8 @@ uvx lemongrass laps RACE_ID CAR_NUMBER -m -n
 > every 10 seconds and begin monitoring as soon as it goes live — useful when
 > you set the capture up and then leave for the grid. It implies `-m`, requires
 > `CAR_NUMBER`, and never times out; if the car isn't in the timing feed yet, it
-> keeps waiting for it. Ctrl-C stops the wait (exits 130).
+> keeps waiting for it, unless the race ends before the car ever appears, which
+> stops the wait and exits nonzero. Ctrl-C stops the wait (exits 130).
 >
 > ```shell
 > lemongrass laps RACE_ID CAR_NUMBER -n --wait-for-live

@@ -170,17 +170,21 @@ class TestNotLiveScreen:
 
     @pytest.mark.asyncio
     async def test_wait_choice_calls_start_wait(self):
+        # Left unpatched deliberately: WaitForLiveScreen.on_mount only focuses
+        # an Input and starts no worker, so this stays deterministic while
+        # actually proving _start_wait pushes the right screen — patching
+        # _start_wait out (as before) only proved it was called, not what it did.
         client = MagicMock()
         app = LapsApp(client)
         async with app.run_test() as pilot:
-            with patch.object(LapsApp, '_start_wait') as mock_start:
-                app.push_screen(NotLiveScreen(client, 42, 'Sears', {'Race': {}}))
-                await pilot.pause()
-                menu = app.screen.query_one('#menu', ListView)
-                menu.index = 0
-                await pilot.press('enter')
-                await pilot.pause()
-        mock_start.assert_called_once_with(42, 'Sears')
+            app.push_screen(NotLiveScreen(client, 42, 'Sears', {'Race': {}}))
+            await pilot.pause()
+            menu = app.screen.query_one('#menu', ListView)
+            menu.index = 0
+            await pilot.press('enter')
+            await pilot.pause()
+            assert isinstance(app.screen, WaitForLiveScreen)
+            assert app.screen.race_id == 42
 
     @pytest.mark.asyncio
     async def test_shows_scheduled_start(self):
@@ -427,6 +431,30 @@ class TestWaitForLiveScreen:
                 assert app.is_running
                 assert 'boom' in str(screen.query_one('#status', Label).render())
 
+    @pytest.mark.asyncio
+    async def test_go_live_is_inert_when_another_screen_is_on_top(self):
+        # Regression: the worker-thread _stop.is_set() re-check ran before
+        # _go_live actually executed on the main thread. If action_change_car
+        # fired in between, _go_live's pop_screen() would pop the WRONG screen
+        # (e.g. CarSelectScreen) and start monitoring the stale car number. The
+        # guard must live in _go_live itself, checked on the main thread.
+        # _start_monitor is patched so a guard failure is caught deterministically
+        # here rather than by a real monitor worker starting in the background.
+        client = MagicMock()
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            with patch.object(LapsApp, '_start_monitor') as mock_start:
+                screen = WaitForLiveScreen(client, 42, 'Sears')
+                app.push_screen(screen)
+                await pilot.pause()
+                screen.car_number = '7'  # simulate the wait having reached go-live
+                app.push_screen(ImportConfirmScreen(client, 42, 'Sears'))
+                await pilot.pause()
+                screen._go_live()
+                await pilot.pause()
+            mock_start.assert_not_called()
+            assert isinstance(app.screen, ImportConfirmScreen)
+
 
 def _client_live_session():
     client = MagicMock()
@@ -632,6 +660,50 @@ class TestMonitorScreen:
         assert mock_live.call_count == 4
         assert mock_wait.call_args_list == [
             call(laps_mod._WAIT_POLL_S), call(laps_mod._WAIT_POLL_S)]
+
+    @pytest.mark.asyncio
+    async def test_race_ended_before_car_appears_stops_the_monitor(self):
+        # Same reachable scenario as the CLI's _run_race: the race goes live and
+        # is then cancelled/red-flagged to a finish before the car ever shows up
+        # in the feed. Without an is_live recheck this would poll get_racer
+        # against a rate-limited API forever (the 'c' binding is the recovery,
+        # but only once the user notices).
+        client = MagicMock()
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+        app = LapsApp(client)
+
+        from lemongrass import laps as laps_mod
+        with patch('lemongrass.laps.live_race',
+                   return_value=laps_mod.MonitorStatus.NO_LIVE_DATA) as mock_live, \
+                patch('lemongrass.laps.wait_for_car') as mock_wait:
+            async with app.run_test() as pilot:
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                log = app.screen.query_one('#log', RichLog)
+                text = '\n'.join(str(line) for line in log.lines)
+        assert mock_live.call_count == 1
+        mock_wait.assert_not_called()
+        assert 'ended' in text
+
+    @pytest.mark.asyncio
+    async def test_is_live_recheck_failure_does_not_stop_the_monitor(self):
+        # A single failed/unsuccessful is_live recheck is "unknown", not
+        # "ended" — must not be treated the same as a confirmed race end.
+        client = MagicMock()
+        client.race.is_live.side_effect = RuntimeError('boom')
+        app = LapsApp(client)
+
+        from lemongrass import laps as laps_mod
+        with patch('lemongrass.laps.live_race',
+                   side_effect=[laps_mod.MonitorStatus.NO_LIVE_DATA, None]) as mock_live, \
+                patch('lemongrass.laps.wait_for_car', return_value=True) as mock_wait:
+            async with app.run_test() as pilot:
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+        assert mock_live.call_count == 2
+        mock_wait.assert_called_once()
 
 
 class TestImportFlow:

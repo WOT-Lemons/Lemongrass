@@ -404,6 +404,14 @@ class WaitForLiveScreen(Screen):
         self.refresh_bindings()  # 'c' becomes available now that a field exists
 
     def _go_live(self):
+        # Guarded here (main thread), not on the worker thread: _go_live runs
+        # via call_from_thread, so by the time it actually executes,
+        # action_change_car may already have popped this screen and pushed
+        # CarSelectScreen. Checking self.app.screen is not self catches that —
+        # a worker-side is_set() check does not, because it runs earlier and
+        # Textual's screen prune is deferred.
+        if self._stop.is_set() or self.app.screen is not self:
+            return
         # Pop first so quitting the monitor lands back on NotLiveScreen rather
         # than on a wait screen whose worker is already finished.
         self.app.pop_screen()
@@ -456,8 +464,10 @@ class WaitForLiveScreen(Screen):
             logging.exception("wait worker failed")
             self._call(self._status, f'wait failed: {exc}')
             return
-        if self._stop.is_set():
-            return  # user already left via 'c' or escape — don't pop/push behind them
+        # The invariant (don't pop/push behind a user who already left via 'c'
+        # or escape) is enforced inside _go_live itself, on the main thread —
+        # see its docstring/comment for why a worker-side check here would not
+        # be race-free.
         self._call(self._go_live)
 
     # --- user exits ---
@@ -739,7 +749,10 @@ class MonitorScreen(Screen):
         Cars trickle into the timing feed after the green flag, so a
         NO_LIVE_DATA at launch is a "not yet", not a failure — returning here
         would leave an unattended session collecting nothing. Every other
-        outcome (race ended, stop event, error) is returned to _run unchanged."""
+        outcome (race ended, stop event, error) is returned to _run unchanged.
+        Each retry re-checks is_live: the race can end (or be red-flagged to a
+        finish) before the car ever appears, and without that check this would
+        poll a rate-limited API forever."""
         attempts = 0
         while not self._stop.is_set():
             result = laps_mod.live_race(ctx, opts, observer=observer,
@@ -751,6 +764,17 @@ class MonitorScreen(Screen):
                 # listed in the field but with no racer detail yet doesn't spin.
                 return None
             attempts += 1
+            # A failed/unsuccessful check is "unknown", not "ended", so only an
+            # explicit successful-and-not-live response stops the wait.
+            try:
+                is_live_resp = self.client.race.is_live(self.race_id)
+            except Exception:
+                is_live_resp = {}
+            if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
+                self._call(
+                    self.log_line,
+                    f'race {self.race_id} ended before car #{self.car_number} appeared')
+                return None
             self._call(self.log_line,
                        f'car #{self.car_number} is not in the live feed yet — waiting…')
             if not laps_mod.wait_for_car(self.client, self.race_id, self.car_number,
