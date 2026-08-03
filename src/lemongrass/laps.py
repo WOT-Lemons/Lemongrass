@@ -60,6 +60,10 @@ _LIVE_CHECK_INTERVAL = 5
 # than 429s if other calls are in flight, which self-throttles the wait.
 _WAIT_POLL_S = 10
 
+# Ticks between a wait's periodic actions: the "still waiting" log line and the
+# in-wait is_live recheck. 30 ticks at the 10s cadence is once every 5 minutes.
+_WAIT_RECHECK_TICKS = 30
+
 # How far in the past a race's stored end time must be before the Influx-only skip
 # will trust it as fully over. Sessions can share one race_id across a multi-day
 # event, so a stored end that is only recently past may still have a later session
@@ -375,6 +379,25 @@ def main():
         sys.exit(130)
 
 
+def _race_ended(client, race_id):
+    """Has the race definitively ended? True, False, or None for unknown.
+
+    Every wait loop in the CLI and the TUI needs this same decision, and the
+    unknown case is the subtle one: a raised exception or a response without
+    'Successful' means the *check* failed, not that the race is over, and a
+    transient blip must never kill a multi-hour unattended capture. Only an
+    explicit successful-and-not-live response ends a wait.
+    """
+    try:
+        response = client.race.is_live(race_id)
+    except Exception as exc:
+        logging.debug("is_live check failed; treating as unknown: %s", exc)
+        return None
+    if not response.get('Successful'):
+        return None
+    return not response.get('IsLive')
+
+
 def wait_for_live(client, race_id, stop_event=None, on_tick=None, poll_s=_WAIT_POLL_S):
     """Poll race.is_live until the race goes live.
 
@@ -465,7 +488,7 @@ def _wait_for_live_log_tick(race_id, poll_s):
 
     def _tick(count, error):
         nonlocal last_error
-        if count == 1 or count % 30 == 0:
+        if count == 1 or count % _WAIT_RECHECK_TICKS == 0:
             logging.info(
                 "Still waiting for race %s to go live (%d checks so far)", race_id, count)
         if error is not None and error != last_error:
@@ -492,7 +515,7 @@ def _wait_for_car_log_tick(race_id, car_number, poll_s):
 
     def _tick(count, state, error):
         nonlocal last_error
-        if count == 1 or count % 30 == 0:
+        if count == 1 or count % _WAIT_RECHECK_TICKS == 0:
             if state == 'no_feed':
                 logging.info(
                     "Still waiting for the timing feed for race %s (%d checks so far)",
@@ -616,22 +639,15 @@ def _run_race(ctx, opts, response, observer=None):
 
                 def car_tick(count, state, error):
                     log_tick(count, state, error)
-                    # Re-check is_live from inside the wait itself, every 30th
-                    # tick (~once per 5 minutes at the 10s poll cadence): the
-                    # car may never appear at all, so this is the only thing
+                    # Re-check is_live from inside the wait itself, periodically:
+                    # the car may never appear at all, so this is the only thing
                     # that ends a wait that outlives the race it's waiting on.
-                    # A failed/unsuccessful check is "unknown", not "ended".
-                    if count % 30 == 0:
-                        try:
-                            is_live_resp = ctx.client.race.is_live(ctx.race_id)
-                            if (is_live_resp.get('Successful')
-                                    and not is_live_resp.get('IsLive')):
-                                logging.error(
-                                    "Race %s ended before car %s appeared in the live feed",
-                                    ctx.race_id, ctx.car_number)
-                                ended.set()
-                        except Exception as exc:
-                            logging.debug("is_live check failed; skipping: %s", exc)
+                    if (count % _WAIT_RECHECK_TICKS == 0
+                            and _race_ended(ctx.client, ctx.race_id)):
+                        logging.error(
+                            "Race %s ended before car %s appeared in the live feed",
+                            ctx.race_id, ctx.car_number)
+                        ended.set()
 
             while result is MonitorStatus.NO_LIVE_DATA and opts.wait_for_live:
                 # Wait for the *car* to show up in the timing feed, then retry
@@ -645,18 +661,12 @@ def _run_race(ctx, opts, response, observer=None):
                 # The race can end (or be red-flagged to a finish) before the
                 # car ever appears in the feed — without this check the loop
                 # would poll a rate-limited API forever with no recovery short
-                # of SIGINT. A failed/unsuccessful check is "unknown", not
-                # "ended", so only an explicit successful-and-not-live
-                # response terminates the wait.
-                try:
-                    is_live_resp = ctx.client.race.is_live(ctx.race_id)
-                    if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
-                        logging.error(
-                            "Race %s ended before car %s appeared in the live feed",
-                            ctx.race_id, ctx.car_number)
-                        return 1
-                except Exception as exc:
-                    logging.debug("is_live recheck failed while waiting for car: %s", exc)
+                # of SIGINT.
+                if _race_ended(ctx.client, ctx.race_id):
+                    logging.error(
+                        "Race %s ended before car %s appeared in the live feed",
+                        ctx.race_id, ctx.car_number)
+                    return 1
                 logging.info(
                     "Car %s is not in the live feed yet — waiting for it to appear.",
                     ctx.car_number)

@@ -592,6 +592,31 @@ class TestMonitorRoutineObserver:
         assert obs.on_lap.call_count == 1
 
 
+class TestRaceEnded:
+    """Tri-state race-end predicate shared by every wait loop. The unknown case
+    is the one that matters: a failed check must never end an unattended wait."""
+
+    def test_successful_and_not_live_is_ended(self):
+        client = MagicMock()
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+        assert _mod._race_ended(client, '123') is True
+
+    def test_successful_and_live_is_not_ended(self):
+        client = MagicMock()
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
+        assert _mod._race_ended(client, '123') is False
+
+    def test_unsuccessful_response_is_unknown(self):
+        client = MagicMock()
+        client.race.is_live.return_value = {'Successful': False}
+        assert _mod._race_ended(client, '123') is None
+
+    def test_raised_exception_is_unknown(self):
+        client = MagicMock()
+        client.race.is_live.side_effect = RuntimeError('boom')
+        assert _mod._race_ended(client, '123') is None
+
+
 class TestWaitForLive:
     """Poll race.is_live until the green flag; never give up on its own."""
 

@@ -286,6 +286,21 @@ class TestWaitForLiveScreen:
         mock_wait.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_unsafe_car_number_does_not_start_waiting(self):
+        # The CLI runs every identifier through _influx.invalid_flux_ids before
+        # touching RaceMonitor/Influx; the TUI reaches the same code with no
+        # argparse in front of it.
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live') as mock_wait:
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client, car='7" or true')
+                await pilot.pause()
+                assert screen.car_number is None
+                assert screen.query_one('#car-number', Input).disabled is False
+        mock_wait.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_settings_are_frozen_once_waiting(self):
         client = MagicMock()
         app = LapsApp(client)
@@ -497,6 +512,21 @@ class TestCarSelectScreen:
                 await pilot.press('enter')
                 await pilot.pause()
         assert app.monitor_args == (42, '7', True, 30)
+
+    @pytest.mark.asyncio
+    async def test_unsafe_typed_number_does_not_start_monitor(self):
+        client = _client_live_session()
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            app.push_screen(CarSelectScreen(client, 42, 'Sears'))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            number = app.screen.query_one('#car-number', Input)
+            number.focus()
+            number.value = '7" or true'
+            await pilot.press('enter')
+            await pilot.pause()
+        assert app.monitor_args is None
 
 
 class TestMonitorScreen:

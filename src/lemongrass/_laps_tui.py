@@ -29,7 +29,20 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
+from lemongrass import _influx
 from lemongrass._tui import _LogSink, _race_label, _routed_output, _sink_bound
+
+
+def _bad_car_number(car_number):
+    """Reject a typed car number the CLI's own validation would reject.
+
+    laps.main() runs every identifier through _influx.invalid_flux_ids before
+    touching RaceMonitor or Influx, since they end up interpolated into Flux
+    predicates; the TUI reaches the same code without argparse in front of it.
+    Checking at entry also turns a typo into an immediate error rather than a
+    wait for a car that can never appear.
+    """
+    return bool(_influx.invalid_flux_ids([car_number]))
 
 
 def _as_int(value):
@@ -385,6 +398,9 @@ class WaitForLiveScreen(Screen):
         if not car_number:
             self._status('enter a car number to start waiting')
             return
+        if _bad_car_number(car_number):
+            self._status(f'invalid car number: {car_number!r}')
+            return
         # Read the settings once and freeze the widgets: the wait can run for
         # hours, and the worker must not query widgets that may be torn down.
         self.car_number = car_number
@@ -549,8 +565,16 @@ class CarSelectScreen(Screen):
         # Only the car-number Input confirms; Enter in the interval Input is inert
         # (its value must not be mistaken for a car number).
         event.stop()
-        if event.input.id == 'car-number':
-            self._confirm(event.value.strip())
+        if event.input.id != 'car-number':
+            return
+        car_number = event.value.strip()
+        # Only the *typed* path is validated: a number selected from the list
+        # came from the live feed, and rejecting it would make a real car
+        # unmonitorable rather than prevent anything.
+        if car_number and _bad_car_number(car_number):
+            self.query_one('#status', Label).update(f'invalid car number: {car_number!r}')
+            return
+        self._confirm(car_number)
 
     def _confirm(self, car_number):
         if not car_number:
@@ -764,17 +788,11 @@ class MonitorScreen(Screen):
                 # listed in the field but with no racer detail yet doesn't spin.
                 return None
             attempts += 1
-            # A failed/unsuccessful check is "unknown", not "ended", so only an
-            # explicit successful-and-not-live response stops the wait.
-            try:
-                is_live_resp = self.client.race.is_live(self.race_id)
-                if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
-                    self._call(
-                        self.log_line,
-                        f'race {self.race_id} ended before car #{self.car_number} appeared')
-                    return None
-            except Exception:
-                logging.debug("is_live check failed; skipping")
+            if laps_mod._race_ended(self.client, self.race_id):
+                self._call(
+                    self.log_line,
+                    f'race {self.race_id} ended before car #{self.car_number} appeared')
+                return None
             self._call(self.log_line,
                        f'car #{self.car_number} is not in the live feed yet — waiting…')
             if not laps_mod.wait_for_car(self.client, self.race_id, self.car_number,
@@ -796,22 +814,17 @@ class MonitorScreen(Screen):
         if error:
             text += f' (last check failed: {error})'
         self._call(self.log_line, text)
-        # Re-check is_live from inside the wait itself, every 30th tick (~once
-        # per 5 minutes at the 10s poll cadence): the car may never appear at
-        # all (wrong number, or the race red-flagged before it got out), and
-        # wait_for_car has no timeout of its own — without this the wait
-        # outlives the race it's waiting on. A failed/unsuccessful check is
-        # "unknown", not "ended".
-        if count % 30 == 0:
-            try:
-                is_live_resp = self.client.race.is_live(self.race_id)
-                if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
-                    self._call(
-                        self.log_line,
-                        f'race {self.race_id} ended before car #{self.car_number} appeared')
-                    self._stop.set()
-            except Exception:
-                logging.debug("is_live check failed; skipping")
+        # Re-check is_live from inside the wait itself, periodically: the car may
+        # never appear at all (wrong number, or the race red-flagged before it
+        # got out), and wait_for_car has no timeout of its own — without this the
+        # wait outlives the race it's waiting on.
+        from lemongrass import laps as laps_mod
+        if (count % laps_mod._WAIT_RECHECK_TICKS == 0
+                and laps_mod._race_ended(self.client, self.race_id)):
+            self._call(
+                self.log_line,
+                f'race {self.race_id} ended before car #{self.car_number} appeared')
+            self._stop.set()
 
     def action_quit_monitor(self):
         self._stop.set()
