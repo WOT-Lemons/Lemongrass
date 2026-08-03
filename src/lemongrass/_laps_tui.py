@@ -768,13 +768,13 @@ class MonitorScreen(Screen):
             # explicit successful-and-not-live response stops the wait.
             try:
                 is_live_resp = self.client.race.is_live(self.race_id)
+                if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
+                    self._call(
+                        self.log_line,
+                        f'race {self.race_id} ended before car #{self.car_number} appeared')
+                    return None
             except Exception:
-                is_live_resp = {}
-            if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
-                self._call(
-                    self.log_line,
-                    f'race {self.race_id} ended before car #{self.car_number} appeared')
-                return None
+                logging.debug("is_live check failed; skipping")
             self._call(self.log_line,
                        f'car #{self.car_number} is not in the live feed yet — waiting…')
             if not laps_mod.wait_for_car(self.client, self.race_id, self.car_number,
@@ -796,6 +796,22 @@ class MonitorScreen(Screen):
         if error:
             text += f' (last check failed: {error})'
         self._call(self.log_line, text)
+        # Re-check is_live from inside the wait itself, every 30th tick (~once
+        # per 5 minutes at the 10s poll cadence): the car may never appear at
+        # all (wrong number, or the race red-flagged before it got out), and
+        # wait_for_car has no timeout of its own — without this the wait
+        # outlives the race it's waiting on. A failed/unsuccessful check is
+        # "unknown", not "ended".
+        if count % 30 == 0:
+            try:
+                is_live_resp = self.client.race.is_live(self.race_id)
+                if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
+                    self._call(
+                        self.log_line,
+                        f'race {self.race_id} ended before car #{self.car_number} appeared')
+                    self._stop.set()
+            except Exception:
+                logging.debug("is_live check failed; skipping")
 
     def action_quit_monitor(self):
         self._stop.set()

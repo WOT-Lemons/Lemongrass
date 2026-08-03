@@ -705,6 +705,91 @@ class TestMonitorScreen:
         assert mock_live.call_count == 2
         mock_wait.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_race_ends_mid_wait_for_car_stops_the_monitor(self):
+        # wait_for_car has no timeout of its own: a car that never appears at
+        # all (typo'd number, or the race red-flagged before it got out) must
+        # not leave the wait outliving the race. The top-of-attempt is_live
+        # recheck (covered above) only runs once per attempt, before
+        # wait_for_car is entered — _car_tick's own is_live recheck (every
+        # 30th tick) is what stops a wait blocked *inside* wait_for_car.
+        client = MagicMock()
+        client.race.is_live.side_effect = [
+            {'Successful': True, 'IsLive': True},   # top-of-attempt recheck
+            {'Successful': True, 'IsLive': False},  # the 30th on_tick recheck
+        ]
+        app = LapsApp(client)
+
+        from lemongrass import laps as laps_mod
+
+        def fake_wait_for_car(client, race_id, car_number, stop_event, on_tick=None):
+            on_tick(30, 'absent', None)
+            return not stop_event.is_set()
+
+        with patch('lemongrass.laps.live_race',
+                   return_value=laps_mod.MonitorStatus.NO_LIVE_DATA) as mock_live, \
+                patch('lemongrass.laps.wait_for_car', side_effect=fake_wait_for_car):
+            async with app.run_test() as pilot:
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                log = app.screen.query_one('#log', RichLog)
+                text = '\n'.join(str(line) for line in log.lines)
+        assert mock_live.call_count == 1
+        assert 'ended' in text
+
+    @pytest.mark.asyncio
+    async def test_failed_recheck_during_car_wait_does_not_stop_the_monitor(self):
+        # A single failed/unsuccessful is_live recheck fired from inside the
+        # car wait is "unknown", not "ended" — it must not stop the monitor.
+        client = MagicMock()
+        client.race.is_live.side_effect = [
+            {'Successful': True, 'IsLive': True},  # top-of-attempt recheck
+            RuntimeError('boom'),                   # the 30th on_tick recheck fails
+        ]
+        app = LapsApp(client)
+
+        from lemongrass import laps as laps_mod
+
+        def fake_wait_for_car(client, race_id, car_number, stop_event, on_tick=None):
+            on_tick(30, 'absent', None)
+            return not stop_event.is_set()
+
+        with patch('lemongrass.laps.live_race',
+                   side_effect=[laps_mod.MonitorStatus.NO_LIVE_DATA, None]) as mock_live, \
+                patch('lemongrass.laps.wait_for_car', side_effect=fake_wait_for_car):
+            async with app.run_test() as pilot:
+                app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+        assert mock_live.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_car_wait_recheck_only_fires_on_the_30th_tick(self):
+        client = MagicMock()
+        client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
+        app = LapsApp(client)
+
+        from lemongrass import laps as laps_mod
+
+        calls_during_ticks = []
+
+        def fake_wait_for_car(client, race_id, car_number, stop_event, on_tick=None):
+            calls_before = client.race.is_live.call_count
+            for count in range(1, 30):
+                on_tick(count, 'absent', None)
+            calls_during_ticks.append(client.race.is_live.call_count - calls_before)
+            return not stop_event.is_set()
+
+        with patch('lemongrass.laps.live_race',
+                   side_effect=[laps_mod.MonitorStatus.NO_LIVE_DATA, None]):
+            with patch('lemongrass.laps.wait_for_car', side_effect=fake_wait_for_car):
+                async with app.run_test() as pilot:
+                    app.push_screen(MonitorScreen(client, 42, '7', False, 0))
+                    await app.workers.wait_for_complete()
+                    await pilot.pause()
+        assert calls_during_ticks == [0]
+
 
 class TestImportFlow:
     @pytest.mark.asyncio

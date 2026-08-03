@@ -601,6 +601,38 @@ def _run_race(ctx, opts, response, observer=None):
                 return 1
             result = live_race(ctx, opts, observer=observer)
             attempts = 0
+            # wait_for_car has no timeout of its own, so a car that never
+            # appears at all (a typo'd number, or the race red-flagged before
+            # it ever got out) would otherwise leave the loop blocked inside
+            # it forever — the per-attempt recheck below only runs at the top
+            # of each retry, before wait_for_car is entered. ended and its
+            # on_tick are built once, right before the retry loop actually
+            # starts, so the "waiting for car" start line isn't re-logged and
+            # last_error dedup holds across every attempt.
+            ended = threading.Event()
+            car_tick = None
+            if result is MonitorStatus.NO_LIVE_DATA and opts.wait_for_live:
+                log_tick = _wait_for_car_log_tick(ctx.race_id, ctx.car_number, _WAIT_POLL_S)
+
+                def car_tick(count, state, error):
+                    log_tick(count, state, error)
+                    # Re-check is_live from inside the wait itself, every 30th
+                    # tick (~once per 5 minutes at the 10s poll cadence): the
+                    # car may never appear at all, so this is the only thing
+                    # that ends a wait that outlives the race it's waiting on.
+                    # A failed/unsuccessful check is "unknown", not "ended".
+                    if count % 30 == 0:
+                        try:
+                            is_live_resp = ctx.client.race.is_live(ctx.race_id)
+                            if (is_live_resp.get('Successful')
+                                    and not is_live_resp.get('IsLive')):
+                                logging.error(
+                                    "Race %s ended before car %s appeared in the live feed",
+                                    ctx.race_id, ctx.car_number)
+                                ended.set()
+                        except Exception as exc:
+                            logging.debug("is_live check failed; skipping: %s", exc)
+
             while result is MonitorStatus.NO_LIVE_DATA and opts.wait_for_live:
                 # Wait for the *car* to show up in the timing feed, then retry
                 # the whole live setup. get_session (wait_for_car) and
@@ -618,20 +650,18 @@ def _run_race(ctx, opts, response, observer=None):
                 # response terminates the wait.
                 try:
                     is_live_resp = ctx.client.race.is_live(ctx.race_id)
+                    if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
+                        logging.error(
+                            "Race %s ended before car %s appeared in the live feed",
+                            ctx.race_id, ctx.car_number)
+                        return 1
                 except Exception as exc:
                     logging.debug("is_live recheck failed while waiting for car: %s", exc)
-                    is_live_resp = {}
-                if is_live_resp.get('Successful') and not is_live_resp.get('IsLive'):
-                    logging.error(
-                        "Race %s ended before car %s appeared in the live feed",
-                        ctx.race_id, ctx.car_number)
-                    return 1
                 logging.info(
                     "Car %s is not in the live feed yet — waiting for it to appear.",
                     ctx.car_number)
-                if not wait_for_car(ctx.client, ctx.race_id, ctx.car_number,
-                                    on_tick=_wait_for_car_log_tick(
-                                        ctx.race_id, ctx.car_number, _WAIT_POLL_S)):
+                if not wait_for_car(ctx.client, ctx.race_id, ctx.car_number, ended,
+                                    on_tick=car_tick):
                     break
                 result = live_race(ctx, opts, observer=observer)
             if result is MonitorStatus.INTERRUPTED:

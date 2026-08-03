@@ -3367,7 +3367,8 @@ class TestRunRaceDispatch:
         assert result == 0
         assert mock_live.call_count == 2
         mock_wait.assert_called_once()
-        assert mock_wait.call_args.args == (ctx.client, ctx.race_id, ctx.car_number)
+        assert mock_wait.call_args.args[:3] == (ctx.client, ctx.race_id, ctx.car_number)
+        assert isinstance(mock_wait.call_args.args[3], threading.Event)
         assert 'on_tick' in mock_wait.call_args.kwargs
 
     def test_no_live_data_still_returns_1_without_the_flag(self):
@@ -3435,6 +3436,92 @@ class TestRunRaceDispatch:
         assert result == 0
         assert mock_live.call_count == 3
         assert mock_wait.call_count == 2
+
+
+class TestRunRaceCarNeverAppearsEndsWait:
+    """wait_for_car has no timeout of its own: if the car never appears at all
+    (a typo'd number, or the race ends before it gets out), the top-of-attempt
+    is_live recheck only runs once per attempt, before wait_for_car is
+    entered — it can't see a race end that happens while blocked *inside* the
+    wait. The on_tick callback must recheck is_live every 30th tick and stop
+    the wait via the stop_event wait_for_car already accepts."""
+
+    def _ctx(self):
+        ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
+        return ctx
+
+    def _capture_tick(self, ctx, opts):
+        # One retry attempt: live_race NO_LIVE_DATA -> wait_for_car (mocked,
+        # captured) -> live_race RACE_ENDED so the outer loop exits cleanly.
+        with patch.object(_mod, 'live_race',
+                          side_effect=[_mod.MonitorStatus.NO_LIVE_DATA,
+                                       _mod.MonitorStatus.RACE_ENDED]), \
+             patch.object(_mod, 'wait_for_car', return_value=True) as mock_wait:
+            _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        stop_event = mock_wait.call_args.args[3]
+        tick = mock_wait.call_args.kwargs['on_tick']
+        return stop_event, tick
+
+    def test_race_end_detected_mid_wait_stops_the_wait(self, caplog):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+        stop_event, tick = self._capture_tick(ctx, opts)
+        assert not stop_event.is_set()
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+        with caplog.at_level(logging.ERROR):
+            tick(30, 'absent', None)
+        assert stop_event.is_set()
+        assert any('ended' in r.message for r in caplog.records)
+
+    def test_recheck_does_not_fire_before_the_30th_tick(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+        stop_event, tick = self._capture_tick(ctx, opts)
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+        calls_before = ctx.client.race.is_live.call_count
+        for count in range(1, 30):
+            tick(count, 'absent', None)
+        assert not stop_event.is_set()
+        assert ctx.client.race.is_live.call_count == calls_before
+
+    def test_failed_recheck_during_wait_does_not_stop_the_wait(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+        stop_event, tick = self._capture_tick(ctx, opts)
+        ctx.client.race.is_live.side_effect = RuntimeError('boom')
+        tick(30, 'absent', None)
+        assert not stop_event.is_set()
+
+    def test_unsuccessful_recheck_during_wait_does_not_stop_the_wait(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+        stop_event, tick = self._capture_tick(ctx, opts)
+        ctx.client.race.is_live.return_value = {'Successful': False}
+        tick(30, 'absent', None)
+        assert not stop_event.is_set()
+
+    def test_car_never_appears_and_race_ends_returns_1(self):
+        """End to end with a wait_for_car stand-in that honors the real
+        contract (calls on_tick, then returns based on stop_event): 30 ticks'
+        worth of polling pass with the car never appearing, the race ends in
+        that time, and _run_race must fall through to the NO_LIVE_DATA -> 1
+        path — the same path a cancelled wait already used before this fix."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+        ctx.client.race.is_live.side_effect = [
+            {'Successful': True, 'IsLive': True},   # top-of-attempt recheck
+            {'Successful': True, 'IsLive': False},  # the 30th on_tick recheck
+        ]
+
+        def _fake_wait_for_car(client, race_id, car_number, stop_event, on_tick=None):
+            on_tick(30, 'absent', None)
+            return not stop_event.is_set()
+
+        with patch.object(_mod, 'live_race', return_value=_mod.MonitorStatus.NO_LIVE_DATA), \
+             patch.object(_mod, 'wait_for_car', side_effect=_fake_wait_for_car):
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        assert result == 1
 
 
 class TestComputeClassPositionsLive:
