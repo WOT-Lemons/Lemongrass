@@ -85,7 +85,12 @@ class LapBoardModel:
         """Store leaderboard rows from a live get_session response."""
         if not session_response.get('Successful'):
             return
-        competitors = session_response.get('Session', {}).get('Competitors', {})
+        # Session is null between sessions, so .get('Session', {}) yields None
+        # rather than the default — keep the last standings instead of crashing.
+        session = session_response.get('Session') or {}
+        competitors = session.get('Competitors') or {}
+        if not competitors:
+            return
         rows = []
         for comp in competitors.values():
             pos = _as_int(comp.get('Position'))
@@ -545,7 +550,9 @@ class CarSelectScreen(Screen):
             return
         if worker.is_cancelled:
             return
-        comps = list(resp.get('Session', {}).get('Competitors', {}).values())
+        # Session is null while the race is between sessions — show an empty
+        # picker (the car number can still be typed in) rather than crashing.
+        comps = list(((resp.get('Session') or {}).get('Competitors') or {}).values())
         self.app.call_from_thread(self._show, comps)
 
     def _show(self, competitors):

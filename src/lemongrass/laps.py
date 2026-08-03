@@ -379,6 +379,23 @@ def main():
         sys.exit(130)
 
 
+def _live_session(session_response):
+    """Return the session dict from a ``client.live.get_session`` response, or None.
+
+    A truthy ``Successful`` does not guarantee a session: RaceMonitor answers
+    ``{'Successful': True, 'Session': None}`` while a live race sits between
+    sessions — including the gap before a scheduled race's first session opens —
+    and the client raises on a falsy ``Successful``, so that null is the only
+    shape a "no session right now" poll can take. It is not a signal that the
+    race is over; only ``race.is_live`` (see ``_race_ended``) decides that. Every
+    consumer must treat it like an unsuccessful response rather than indexing
+    ``['Session']``.
+    """
+    if not session_response.get('Successful'):
+        return None
+    return session_response.get('Session') or None
+
+
 def _race_ended(client, race_id):
     """Has the race definitively ended? True, False, or None for unknown.
 
@@ -438,7 +455,8 @@ def wait_for_car(client, race_id, car_number, stop_event=None, on_tick=None,
     A race going live does not mean its timing feed is populated — cars trickle
     in — so this is a second, separate wait after wait_for_live. Returns True
     once the number matches a competitor's Number, or False if stop_event was
-    set first. Like wait_for_live it never gives up: an unsuccessful response,
+    set first. Like wait_for_live it never gives up: an unsuccessful response, a
+    null session (the normal shape before the first session of the day opens),
     an empty field, a populated field without the car, and an exception are all
     just "not yet".
 
@@ -455,8 +473,8 @@ def wait_for_car(client, race_id, car_number, stop_event=None, on_tick=None,
         state = 'no_feed'
         try:
             response = client.live.get_session(race_id)
-            competitors = (response.get('Session', {}).get('Competitors', {})
-                           if response.get('Successful') else {})
+            session = _live_session(response)
+            competitors = (session or {}).get('Competitors') or {}
             if competitors:
                 state = 'absent'
                 if any(str(comp.get('Number', '')) == wanted
@@ -697,9 +715,10 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
 
     live_session_id = None
     live_session_name = None
-    if session_response.get('Successful'):
-        live_session_id = session_response['Session'].get('ID')
-        live_session_name = session_response['Session'].get('Name')
+    session = _live_session(session_response)
+    if session is not None:
+        live_session_id = session.get('ID')
+        live_session_name = session.get('Name')
 
     observer.on_rankings([], True, opts.selected_class, {})
 
@@ -1124,17 +1143,18 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             except Exception:
                 logging.debug("get_session failed; skipping session check")
                 session_response = {'Successful': False}
-            if session_response.get('Successful'):
-                new_session_id = session_response['Session'].get('ID')
+            session = _live_session(session_response)
+            if session is not None:
+                new_session_id = session.get('ID')
                 if new_session_id and new_session_id != session_id:
-                    observer.on_session_change(session_response['Session'].get('Name', ''))
+                    observer.on_session_change(session.get('Name', ''))
                     session_id = new_session_id
                     prev_standings = {}
                     if opts.network_mode:
                         push_influx_session(
-                            ctx, session_id, session_response['Session'].get('Name'), None)
+                            ctx, session_id, session.get('Name'), None)
             else:
-                logging.debug("get_session returned unsuccessful; may be between sessions")
+                logging.debug("get_session returned no session; may be between sessions")
 
             if opts.network_mode:
                 prev_standings = push_influx_standings_live(
@@ -1662,9 +1682,9 @@ def _resolve_class_live(session_response, car_number):
     Takes the response from ``client.live.get_session`` so the caller can fetch the
     session once and reuse it.
     """
-    if not session_response.get('Successful'):
+    session = _live_session(session_response)
+    if session is None:
         return None, None
-    session = session_response['Session']
     classes = session['Classes']
     competitors = session['Competitors']
 
@@ -1715,9 +1735,10 @@ def _resolve_class_live(session_response, car_number):
 
 def _compute_class_positions_live(session_response):
     """Return {car_number: class_position} for all live competitors in one pass."""
-    if not session_response.get('Successful'):
+    session = _live_session(session_response)
+    if session is None:
         return {}
-    competitors = session_response['Session']['Competitors']
+    competitors = session['Competitors']
     by_class = defaultdict(list)
     for comp in competitors.values():
         try:
@@ -1766,11 +1787,12 @@ def push_influx_standings_live(ctx, session_response, session_id, prev_standings
     Pass None to write all competitors unconditionally (e.g. at race startup).
     Returns the current standings snapshot dict for the caller to pass next poll.
     """
-    if not session_response.get('Successful'):
-        logging.debug("push_influx_standings_live: unsuccessful session response, skipping")
+    session = _live_session(session_response)
+    if session is None:
+        logging.debug("push_influx_standings_live: no live session in response, skipping")
         return prev_standings if prev_standings is not None else {}
-    competitors = session_response['Session']['Competitors']
-    classes = session_response['Session']['Classes']
+    competitors = session['Competitors']
+    classes = session['Classes']
     class_positions = _compute_class_positions_live(session_response)
     timestamp_ms = int(time.time() * 1000)
     curr_standings = {}

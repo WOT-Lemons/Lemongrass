@@ -721,6 +721,21 @@ class TestWaitForCar:
             on_tick=lambda c, s, e: ticks.append((c, s, e)), poll_s=0) is True
         assert ticks == [(1, 'no_feed', None)]
 
+    def test_null_session_reports_clean_no_feed(self):
+        # Between sessions the API answers Successful: true with Session: null —
+        # the normal state during this wait. It is a clean "no feed", not a
+        # failed check, so no error text may reach the status line.
+        client = MagicMock()
+        client.live.get_session.side_effect = [
+            {'Successful': True, 'Session': None},
+            self._session('42'),
+        ]
+        ticks = []
+        assert _mod.wait_for_car(
+            client, '123', '42',
+            on_tick=lambda c, s, e: ticks.append((c, s, e)), poll_s=0) is True
+        assert ticks == [(1, 'no_feed', None)]
+
     def test_unsuccessful_response_reports_no_feed(self):
         client = MagicMock()
         client.live.get_session.side_effect = [
@@ -1024,6 +1039,121 @@ class TestResolveClassLive:
         class_name, class_pos = _mod._resolve_class_live({'Successful': False}, '42')
         assert class_name is None
         assert class_pos is None
+
+
+class TestNullLiveSession:
+    """RaceMonitor answers ``Successful: true`` with ``Session: null`` while a live
+    race is between sessions (the client raises on a falsy Successful, so that is
+    the only shape a "no session right now" poll can take). Every get_session
+    consumer must treat it exactly like an unsuccessful response."""
+
+    def _null_session(self):
+        return {'Successful': True, 'Session': None}
+
+    def _racer_response(self):
+        return {'Successful': True, 'Details': {
+            'Laps': [],
+            'Competitor': {'FirstName': 'Jo', 'LastName': 'X', 'Number': '42',
+                           'Transponder': 'T', 'BestPosition': '1', 'Position': '1',
+                           'Laps': '0', 'BestLap': '0', 'BestLapTime': '',
+                           'TotalTime': '', 'AdditionalData': None}}}
+
+    def test_monitor_routine_survives_null_session(self):
+        stop = threading.Event()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+        ctx.client.live.get_session.return_value = self._null_session()
+
+        calls = 0
+
+        def fake_refresh(c):
+            nonlocal calls
+            calls += 1
+            stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            with patch.object(_mod, 'push_influx_race', return_value=True):
+                result = _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
+        assert calls == 1  # reached refresh instead of dying on Session: None
+        assert result is None
+
+    def test_monitor_routine_null_session_does_not_signal_session_change(self):
+        stop = threading.Event()
+        obs = MagicMock()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+        ctx.client.live.get_session.return_value = self._null_session()
+
+        def fake_refresh(c):
+            stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            _mod.monitor_routine(ctx, [], opts, session_id='sess-1',
+                                 observer=obs, _stop_event=stop)
+        obs.on_session_change.assert_not_called()
+
+    def test_monitor_routine_keeps_session_id_across_a_null_poll(self):
+        """A null session between two live polls must not re-announce the session
+        or reset the standings baseline once the same session comes back."""
+        stop = threading.Event()
+        obs = MagicMock()
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        opts = _mod.RaceOptions(network_mode=False, interval=0)
+        live = {'Successful': True, 'Session': {
+            'ID': 'sess-1', 'Name': 'S1', 'Competitors': {}, 'Classes': {}}}
+        responses = [live, self._null_session(), live]
+
+        def fake_get_session(race_id):
+            return responses.pop(0) if responses else live
+
+        ctx.client.live.get_session.side_effect = fake_get_session
+
+        polls = 0
+
+        def fake_refresh(c):
+            nonlocal polls
+            polls += 1
+            if polls == 3:
+                stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
+            _mod.monitor_routine(ctx, [], opts, session_id='sess-1',
+                                 observer=obs, _stop_event=stop)
+        obs.on_session_change.assert_not_called()
+
+    def test_live_race_survives_null_session(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 1000)
+        ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=False, interval=30)
+        ctx.client.live.get_session.return_value = self._null_session()
+        ctx.client.live.get_racer.return_value = self._racer_response()
+
+        with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'push_influx_session') as mock_session:
+                with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
+                    _mod.live_race(ctx, opts)
+        mock_session.assert_not_called()  # no session id to write
+        mock_standings.assert_called_once()  # called, but must no-op internally
+
+    def test_resolve_class_live_returns_none_none(self):
+        class_name, class_pos = _mod._resolve_class_live(self._null_session(), '42')
+        assert class_name is None
+        assert class_pos is None
+
+    def test_compute_class_positions_live_returns_empty(self):
+        assert _mod._compute_class_positions_live(self._null_session()) == {}
+
+    def test_push_influx_standings_live_returns_prev_unchanged(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
+        prev = {'42': (1, 5, None, None, None)}
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            result = _mod.push_influx_standings_live(
+                ctx, self._null_session(), 'sess-1', prev)
+        assert result == prev
+        mock_write.assert_not_called()
 
 
 class TestTimeToMs:

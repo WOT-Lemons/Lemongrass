@@ -78,6 +78,21 @@ class TestLapBoardModel:
         m.set_standings({'Successful': False})
         assert m.leaderboard_rows() == []
 
+    def test_set_standings_ignores_null_session(self):
+        # RaceMonitor returns Successful: true with Session: null between sessions;
+        # .get('Session', {}) yields None there, not {}.
+        m = LapBoardModel()
+        m.set_standings({'Successful': True, 'Session': None})
+        assert m.leaderboard_rows() == []
+
+    def test_set_standings_keeps_previous_rows_on_null_session(self):
+        m = LapBoardModel()
+        m.set_standings({'Successful': True, 'Session': {'Competitors': {
+            'a': {'Number': '7', 'Position': '1', 'Laps': '10',
+                  'FirstName': 'Jo', 'LastName': 'X', 'BestLapTime': '1:47.0'}}}})
+        m.set_standings({'Successful': True, 'Session': None})
+        assert [r[1] for r in m.leaderboard_rows()] == ['7']
+
     def test_set_standings_skips_non_numeric_position(self):
         m = LapBoardModel()
         session = {'Successful': True, 'Session': {'Competitors': {
@@ -490,6 +505,19 @@ class TestCarSelectScreen:
             await pilot.pause()
             cars = app.screen.query_one('#cars', ListView)
             assert len(cars.children) == 1
+
+    @pytest.mark.asyncio
+    async def test_null_session_lists_no_competitors(self):
+        # Between sessions the API returns Successful: true with Session: null;
+        # the picker must show an empty list, not crash the worker.
+        client = MagicMock()
+        client.live.get_session.return_value = {'Successful': True, 'Session': None}
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            app.push_screen(CarSelectScreen(client, 42, 'Sears'))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert len(app.screen.query_one('#cars', ListView).children) == 0
 
     @pytest.mark.asyncio
     async def test_typed_number_confirms_with_defaults(self):
