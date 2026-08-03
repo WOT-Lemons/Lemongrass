@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -898,11 +899,14 @@ class TestSpoolDrainsWithNoCar:
         client.__enter__ = lambda s: client
         client.__exit__ = lambda *a: False
 
+        # sleep yields for real rather than being a no-op: the drain runs on
+        # another thread and must do file reads, a write and an unlink. Spinning
+        # the main thread would make the attempt bound below a scheduling race.
         with patch.object(_mod.Spool, "from_config", return_value=spool), \
              patch.object(_mod._influx, "connect", return_value=client), \
              patch.object(_mod, "connect", side_effect=obd_connect), \
              patch.object(_mod, "_configure_obd_logging"), \
-             patch.object(_mod, "sleep"), \
+             patch.object(_mod, "sleep", lambda _s: time.sleep(0.001)), \
              patch.object(_mod, "DRAIN_ACTIVE_S", 0), \
              patch.object(_mod, "DRAIN_IDLE_S", 0):
             with pytest.raises(RuntimeError, match="drained"):
