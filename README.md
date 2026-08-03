@@ -55,9 +55,10 @@ live (lap table, field leaderboard, and a log pane) or import a completed
 race's full field into InfluxDB. A race that isn't live yet offers a third
 choice — enter your car number and wait for the green flag; the UI checks every
 10 seconds, starts monitoring by itself once the race goes live and your car
-appears in the timing feed, and keeps waiting until then. Press `c` while
-waiting to pick a different car from the live field. When a live race ends, the
-UI offers to run the authoritative final import.
+appears in the timing feed, and keeps waiting until then. Once the race is
+live, press `c` to pick a different car from the live field — there is no field
+to choose from before the green flag. When a live race ends, the UI offers to
+run the authoritative final import.
 
 The scripted forms are unchanged: `lemongrass laps <race_id> [car_number]
 [-m] [-n] …` behave exactly as before and are what cron and race-backfill use.
