@@ -152,11 +152,20 @@ class TestMonitorRoutine:
         with patch.object(_mod, 'refresh_competitor', return_value=[{'Lap': 1}]):
             _mod.monitor_routine(ctx, [{'Lap': 1}], opts, _stop_event=stop)
 
-    def test_refresh_competitor_empty_response_returns_empty_list(self):
+    def test_refresh_competitor_response_without_lap_detail_returns_empty_list(self):
+        # 'Successful' is always True by the time a response reaches us (the
+        # client raises otherwise), so the empty case to guard is a response
+        # carrying no lap detail — not a falsy Successful.
         ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
-        ctx.client.live.get_racer.return_value = {'Successful': False}
+        ctx.client.live.get_racer.return_value = {'Successful': True, 'Details': None}
         result = _mod.refresh_competitor(ctx)
         assert result == []
+
+    def test_refresh_competitor_no_laps_yet_returns_empty_list(self):
+        ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        ctx.client.live.get_racer.return_value = {
+            'Successful': True, 'Details': {'Laps': [], 'Competitor': {'Number': '42'}}}
+        assert _mod.refresh_competitor(ctx) == []
 
     def test_collects_all_new_laps_not_just_last(self):
         stop = threading.Event()
@@ -178,7 +187,7 @@ class TestMonitorRoutine:
         existing_laps = [lap1]
         with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
             with patch.object(ctx.client.live, 'get_session',
-                              return_value={'Successful': False}):
+                              return_value={'Successful': True, 'Session': None}):
                 _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=stop)
 
         assert lap2 in existing_laps
@@ -199,7 +208,7 @@ class TestMonitorRoutine:
 
         with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
             with patch.object(ctx.client.live, 'get_session',
-                              return_value={'Successful': False}):
+                              return_value={'Successful': True, 'Session': None}):
                 _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
         # no exception raised is the assertion
 
@@ -269,7 +278,7 @@ class TestMonitorRoutine:
         stop = MagicMock()
         stop.wait.side_effect = fake_wait
 
-        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': None}
         ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
 
         with patch.object(_mod, 'refresh_competitor', return_value=[]):
@@ -292,7 +301,7 @@ class TestMonitorRoutine:
         stop = MagicMock()
         stop.wait.side_effect = fake_wait
 
-        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': None}
         ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
 
         with patch.object(_mod, 'refresh_competitor', return_value=[]):
@@ -306,7 +315,7 @@ class TestMonitorRoutine:
         ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
         opts = _mod.RaceOptions(network_mode=False, interval=0)
 
-        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': None}
 
         def raise_kbi(c):
             raise KeyboardInterrupt
@@ -409,7 +418,7 @@ class TestMonitorRoutine:
             stop.set()
             return [bad_lap]
 
-        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': None}
         with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
             with caplog.at_level(logging.WARNING):
                 _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
@@ -434,7 +443,7 @@ class TestMonitorRoutine:
 
         with patch.object(_mod, 'refresh_competitor', side_effect=flaky_refresh):
             with patch.object(ctx.client.live, 'get_session',
-                              return_value={'Successful': False}):
+                              return_value={'Successful': True, 'Session': None}):
                 result = _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
         assert calls == 2  # survived the first failure and polled again
         assert result is None
@@ -451,7 +460,7 @@ class TestMonitorRoutine:
 
         with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
             with patch.object(ctx.client.live, 'get_session',
-                              return_value={'Successful': False}):
+                              return_value={'Successful': True, 'Session': None}):
                 with patch.object(_mod, 'push_influx_standings_live', return_value={}):
                     _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
         # no exception raised is the assertion
@@ -492,7 +501,7 @@ class TestMonitorRoutine:
 
         stop = MagicMock()
         stop.wait.side_effect = fake_wait
-        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': None}
         ctx.client.race.is_live.side_effect = ConnectionError("wifi blip")
 
         with patch.object(_mod, 'refresh_competitor', return_value=[]):
@@ -608,6 +617,9 @@ class TestRaceEnded:
         assert _mod._race_ended(client, '123') is False
 
     def test_unsuccessful_response_is_unknown(self):
+        # Defensive only: the client raises on a falsy Successful, so this shape
+        # never reaches _race_ended in production. The reachable failure is the
+        # raise below; this pins the guard in case that contract ever changes.
         client = MagicMock()
         client.race.is_live.return_value = {'Successful': False}
         assert _mod._race_ended(client, '123') is None
@@ -649,6 +661,8 @@ class TestWaitForLive:
         client.race.is_live.assert_not_called()
 
     def test_unsuccessful_response_keeps_waiting(self):
+        # Defensive: the client raises rather than returning this. The reachable
+        # failure is covered by test_api_error_is_retried_and_reported.
         client = MagicMock()
         client.race.is_live.side_effect = [
             {'Successful': False},
@@ -738,6 +752,9 @@ class TestWaitForCar:
         assert ticks == [(1, 'no_feed', None)]
 
     def test_unsuccessful_response_reports_no_feed(self):
+        # Defensive, as in wait_for_live: the client raises instead. The real
+        # "nothing to match against" shapes are the null session and the empty
+        # field, both covered above.
         client = MagicMock()
         client.live.get_session.side_effect = [
             {'Successful': False},
@@ -1037,6 +1054,8 @@ class TestResolveClassLive:
         assert class_pos is None
 
     def test_api_failure_returns_none_none(self):
+        # Reachable: monitor_routine substitutes this sentinel when get_session
+        # raises, then passes it to every session reader.
         class_name, class_pos = _mod._resolve_class_live({'Successful': False}, '42')
         assert class_name is None
         assert class_pos is None
@@ -1915,12 +1934,14 @@ class TestLiveRaceMetadataFailure:
         stop = threading.Event()
         ctx = _mod.RaceContext('123', '42', MagicMock(), MagicMock(), 0)
         ctx.metadata = _mod.RaceMetadata('Race', 'Track', None, 9999)
-        ctx.client.race.details.return_value = {'Successful': False}
+        # A race with no start epoch yet: details raise until the race is real,
+        # and the monitor's epoch recheck swallows that as one skipped attempt.
+        ctx.client.race.details.side_effect = RaceMonitorError('no such race')
         opts = _mod.RaceOptions(network_mode=True, interval=0)
 
         def fake_get_session(race_id):
             stop.set()
-            return {'Successful': False}
+            return {'Successful': True, 'Session': None}
 
         ctx.client.live.get_session.side_effect = fake_get_session
 
@@ -2579,6 +2600,10 @@ class TestMonitorRoutineEpocRecheck:
         ctx.delete_api = MagicMock()
         ctx.metadata = _mod.RaceMetadata(
             race_name='Test', track_name='Track', series_name=None, end_time_epoc=0)
+        # Monitor-loop fixture: the epoch recheck reads this and skips. It
+        # swallows a raise into the same sentinel, so either shape exercises the
+        # same branch; the raising form is covered by
+        # test_race_details_exception_does_not_kill_monitor.
         ctx.client.race.details.return_value = {'Successful': False}
         return ctx
 
@@ -2732,6 +2757,8 @@ class TestResolveRaceMetadata:
         assert meta.series_name is None
 
     def test_returns_empty_metadata_when_unsuccessful(self):
+        # Defensive: backfill_race is the only caller and passes a client
+        # response, which is never unsuccessful — the client raises first.
         client = MagicMock()
         meta = _mod._resolve_race_metadata({'Successful': False}, client)
         assert meta.race_name == ''
@@ -3649,6 +3676,7 @@ class TestRunRaceCarNeverAppearsEndsWait:
         tick(30, 'absent', None)
         assert not stop_event.is_set()
 
+    # Defensive counterpart to the raising test above; see TestRaceEnded.
     def test_unsuccessful_recheck_during_wait_does_not_stop_the_wait(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
@@ -4098,7 +4126,7 @@ class TestMonitorRoutineCorruptedLapNumber:
     def _ctx(self):
         write_api = MagicMock()
         ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 0)
-        ctx.client.live.get_session.return_value = {'Successful': False}
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': None}
         return ctx
 
     def test_bad_lap_number_does_not_crash_monitor_in_network_mode(self):
@@ -4399,6 +4427,23 @@ class TestLiveRaceNoData:
                           return_value=_mod.MonitorStatus.NO_LIVE_DATA):
             result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
         assert result == 1
+
+    def test_failed_get_session_does_not_abort_the_live_setup(self):
+        """monitor_routine treats a failed get_session as one skipped poll; the
+        launch that precedes it must be no more fragile. Otherwise a blip in the
+        one call made before monitoring starts ends an unattended capture."""
+        ctx = self._ctx()
+        ctx.client.live.get_session.side_effect = ConnectionError('wifi blip')
+        ctx.client.live.get_racer.return_value = {'Successful': True, 'Details': {
+            'Laps': [],
+            'Competitor': {'FirstName': 'Jo', 'LastName': 'X', 'Number': '99',
+                           'Transponder': 'T', 'BestPosition': '', 'Position': '',
+                           'Laps': '0', 'BestLap': '', 'BestLapTime': '',
+                           'TotalTime': '', 'AdditionalData': None}}}
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'print_rankings'):
+            result = _mod.live_race(ctx, opts)
+        assert result is not _mod.MonitorStatus.NO_LIVE_DATA
 
     def test_wait_for_car_retry_fires_on_a_real_absent_car(self):
         """End to end through the real live_race: an absent car raises out of

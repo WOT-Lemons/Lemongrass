@@ -711,7 +711,18 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     if observer is None:
         observer = _StdoutObserver()
 
-    session_response = ctx.client.live.get_session(ctx.race_id)
+    # A failed session fetch costs the session tag and the class name for this
+    # launch, not the launch itself — monitor_routine already treats the same
+    # failure as one skipped poll and resolves both on a later one. Falling back
+    # to the unsuccessful-response sentinel keeps every downstream reader on the
+    # one path that already handles "no session data".
+    try:
+        session_response = ctx.client.live.get_session(ctx.race_id)
+    except Exception as exc:
+        logging.warning(
+            "Session fetch failed for race %s (%s); starting without session "
+            "detail — the monitor loop will resolve it", ctx.race_id, exc)
+        session_response = {'Successful': False}
 
     live_session_id = None
     live_session_name = None

@@ -74,6 +74,8 @@ class TestLapBoardModel:
         assert rows[0][1] == '9'
 
     def test_set_standings_ignores_unsuccessful(self):
+        # Reachable: monitor_routine hands the observer this sentinel when
+        # get_session raises. The client itself never returns it.
         m = LapBoardModel()
         m.set_standings({'Successful': False})
         assert m.leaderboard_rows() == []
