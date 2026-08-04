@@ -722,18 +722,35 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
 
     observer.on_rankings([], True, opts.selected_class, {})
 
-    # Get lap times from live racer
+    # Get lap times from live racer. A car that is not in the feed comes back as
+    # a raised RaceMonitorError, not as a falsy 'Successful': the client raises on
+    # any unsuccessful response, so that key is always True by the time we see it.
+    # Every wait-for-car retry keys on NO_LIVE_DATA, so the exception has to be
+    # turned into that status here or an unattended capture dies at the green flag
+    # — the exact moment cars are still trickling into the timing feed. Transport
+    # errors are swallowed the same way for the same reason, matching the waits and
+    # the monitor loop, which already treat any single failed call as "not yet".
     logging.debug("Getting lap times for %s from race %s.", ctx.car_number, ctx.race_id)
-    response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
+    try:
+        response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
+    except Exception as exc:
+        logging.error(
+            "No live data for car %s in race %s (%s) — check that the car number "
+            "is registered in the live feed", ctx.car_number, ctx.race_id, exc)
+        return MonitorStatus.NO_LIVE_DATA
 
-    if not response['Successful']:
+    details = response.get('Details') or {}
+    competitor_details = details.get('Competitor') or {}
+    if not competitor_details:
         logging.error(
             "No live data for car %s in race %s — check that the car number is "
             "registered in the live feed", ctx.car_number, ctx.race_id)
         return MonitorStatus.NO_LIVE_DATA
 
-    laps = response['Details']['Laps']
-    competitor_details = response['Details']['Competitor']
+    # An empty lap list is not an absent car: a competitor registered before the
+    # green flag has completed zero laps. Monitoring must start anyway, or the
+    # retry loop would wait for a car that is already sitting on the grid.
+    laps = details.get('Laps') or []
 
     first = competitor_details.get('FirstName', '')
     last = competitor_details.get('LastName', '')
@@ -1225,9 +1242,10 @@ def refresh_competitor(ctx):
     logging.debug("Refreshing lap times for car %s.", ctx.car_number)
     response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
 
-    laps = []
-    if response['Successful']:
-        laps = response['Details']['Laps']
+    # 'Successful' is always True here — the client raises otherwise — so the
+    # only empty case worth guarding is a response without lap detail. The caller
+    # swallows a raised call as one lost poll.
+    laps = (response.get('Details') or {}).get('Laps') or []
 
     if laps:
         logging.debug(

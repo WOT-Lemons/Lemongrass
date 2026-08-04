@@ -8,6 +8,7 @@ from typing import ClassVar
 from unittest.mock import MagicMock, call, mock_open, patch
 
 import pytest
+from race_monitor import RaceMonitorError
 
 import lemongrass._env as _env_mod
 import lemongrass.laps as _mod
@@ -4324,25 +4325,72 @@ class TestMainFluxIdValidation:
 
 
 class TestLiveRaceNoData:
+    """A car that is not in the live feed must reach the caller as NO_LIVE_DATA.
+
+    The client raises on a falsy Successful (race_monitor/_core.py), so an absent
+    car arrives as a RaceMonitorError, never as a {'Successful': False} dict —
+    mocking that dict tests a response the client cannot produce. Every wait-for-car
+    retry in the CLI and the TUI keys on NO_LIVE_DATA, so if live_race lets the
+    exception escape instead, an unattended capture dies at the one moment the
+    waiting exists for: cars trickling into the feed after the green flag.
+    """
+
     def _ctx(self):
         ctx = _mod.RaceContext('123', '99', MagicMock(), None, 0)
-        ctx.client.live.get_session.return_value = {'Successful': False}
-        ctx.client.live.get_racer.return_value = {'Successful': False}
+        ctx.client.live.get_session.return_value = {'Successful': True, 'Session': {
+            'ID': 's1', 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
         return ctx
 
-    def test_unsuccessful_get_racer_returns_no_live_data(self):
-        """A car number missing from the live feed must fail cleanly, not KeyError."""
+    def test_api_error_returns_no_live_data(self):
+        """The real shape of a car missing from the feed: the client raises."""
+        ctx = self._ctx()
+        ctx.client.live.get_racer.side_effect = RaceMonitorError('Racer not found')
         opts = _mod.RaceOptions()
         with patch.object(_mod, 'print_rankings'):
-            result = _mod.live_race(self._ctx(), opts)
+            result = _mod.live_race(ctx, opts)
         assert result is _mod.MonitorStatus.NO_LIVE_DATA
 
-    def test_unsuccessful_get_racer_logs_error(self, caplog):
+    def test_transport_error_returns_no_live_data(self):
+        """A network blip at launch must not kill an unattended run either."""
+        ctx = self._ctx()
+        ctx.client.live.get_racer.side_effect = ConnectionError('wifi blip')
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'print_rankings'):
+            result = _mod.live_race(ctx, opts)
+        assert result is _mod.MonitorStatus.NO_LIVE_DATA
+
+    def test_missing_competitor_detail_returns_no_live_data(self):
+        ctx = self._ctx()
+        ctx.client.live.get_racer.return_value = {'Successful': True, 'Details': {'Laps': []}}
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'print_rankings'):
+            result = _mod.live_race(ctx, opts)
+        assert result is _mod.MonitorStatus.NO_LIVE_DATA
+
+    def test_error_logs_the_car_number(self, caplog):
+        ctx = self._ctx()
+        ctx.client.live.get_racer.side_effect = RaceMonitorError('Racer not found')
         opts = _mod.RaceOptions()
         with patch.object(_mod, 'print_rankings'):
             with caplog.at_level(logging.ERROR):
-                _mod.live_race(self._ctx(), opts)
+                _mod.live_race(ctx, opts)
         assert any('99' in r.message for r in caplog.records)
+
+    def test_registered_car_with_no_laps_yet_is_not_no_live_data(self):
+        """The green-flag case: the car is in the feed but has completed zero
+        laps. That is a race about to start, not an absent car — treating it as
+        NO_LIVE_DATA would re-wait for a car that is already there."""
+        ctx = self._ctx()
+        ctx.client.live.get_racer.return_value = {'Successful': True, 'Details': {
+            'Laps': [],
+            'Competitor': {'FirstName': 'Jo', 'LastName': 'X', 'Number': '99',
+                           'Transponder': 'T', 'BestPosition': '', 'Position': '',
+                           'Laps': '0', 'BestLap': '', 'BestLapTime': '',
+                           'TotalTime': '', 'AdditionalData': None}}}
+        opts = _mod.RaceOptions()
+        with patch.object(_mod, 'print_rankings'):
+            result = _mod.live_race(ctx, opts)
+        assert result is not _mod.MonitorStatus.NO_LIVE_DATA
 
     def test_run_race_returns_1_on_no_live_data(self):
         ctx = self._ctx()
@@ -4351,6 +4399,27 @@ class TestLiveRaceNoData:
                           return_value=_mod.MonitorStatus.NO_LIVE_DATA):
             result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
         assert result == 1
+
+    def test_wait_for_car_retry_fires_on_a_real_absent_car(self):
+        """End to end through the real live_race: an absent car raises out of
+        get_racer, and the wait-for-car loop must still retry. The other retry
+        tests patch live_race to hand back NO_LIVE_DATA directly, so none of them
+        would notice the value becoming unreachable."""
+        ctx = self._ctx()
+        ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': True}
+        ctx.client.live.get_racer.side_effect = RaceMonitorError('Racer not found')
+        opts = _mod.RaceOptions(monitor_mode=True, wait_for_live=True)
+
+        def stop_after_first_wait(*args, **kwargs):
+            # Second live_race attempt reports the race over, ending the loop.
+            ctx.client.race.is_live.return_value = {'Successful': True, 'IsLive': False}
+            return True
+
+        with patch.object(_mod, 'print_rankings'), \
+             patch.object(_mod, 'wait_for_car', side_effect=stop_after_first_wait) as mock_wait:
+            result = _mod._run_race(ctx, opts, {'Successful': True, 'IsLive': True})
+        mock_wait.assert_called_once()
+        assert result == 1  # race ended before the car ever appeared
 
 
 class TestOldRaceSessionFetching:
