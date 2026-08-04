@@ -385,9 +385,11 @@ class WaitForLiveScreen(Screen):
 
     def check_action(self, action, parameters):
         # Hide 'c' from the footer until the race is live: before then there is
-        # no field for CarSelectScreen to list.
-        if action == 'change_car' and not self.live:
-            return None
+        # no field for CarSelectScreen to list. False, not None — Textual drops
+        # a False binding from active_bindings but keeps a None one and merely
+        # dims it, which still advertises the key.
+        if action == 'change_car':
+            return self.live
         return True
 
     def on_input_submitted(self, event):

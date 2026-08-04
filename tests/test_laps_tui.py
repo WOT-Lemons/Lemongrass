@@ -425,6 +425,37 @@ class TestWaitForLiveScreen:
                 assert app.screen is screen
 
     @pytest.mark.asyncio
+    async def test_change_car_is_hidden_from_the_footer_before_green_flag(self):
+        # Not merely disabled: Textual keeps a check_action of None in
+        # active_bindings (dimmed in the footer) and drops only False, so the
+        # footer must not advertise a key that cannot do anything yet.
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass.laps.wait_for_live', return_value=False):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert 'c' not in screen.active_bindings
+
+    @pytest.mark.asyncio
+    async def test_change_car_reaches_the_footer_once_live(self):
+        client = _client_live_session()
+        app = LapsApp(client)
+
+        def fake_wait_for_car(c, race_id, car, stop_event=None, on_tick=None, **kw):
+            on_tick(1, 'absent', None)
+            return False  # stay on the wait screen so the footer can be read
+
+        with patch('lemongrass.laps.wait_for_live', return_value=True), \
+                patch('lemongrass.laps.wait_for_car', side_effect=fake_wait_for_car):
+            async with app.run_test() as pilot:
+                screen = await self._start(pilot, app, client)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert screen.active_bindings['c'].enabled
+
+    @pytest.mark.asyncio
     async def test_escape_stops_the_wait_and_leaves(self):
         client = MagicMock()
         app = LapsApp(client)
