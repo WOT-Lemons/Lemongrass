@@ -12,7 +12,7 @@ from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from lemongrass import _config, _influx
-from lemongrass._spool import Spool
+from lemongrass._spool import DRAINED, RETRY, Spool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('telem')
@@ -46,11 +46,24 @@ WRITE_BUCKET = _influx.BUCKET_TELEM
 
 # Influx client tuning for the 0.5s pump loop. A short per-request timeout and a
 # single retry keep a downed/hung Influx from blocking the hot path — the durable
-# spool (replayed each cycle) is the real retry path, so we fail fast to it
-# rather than the library-default 10s x 3 attempts. Batch commands keep the
-# default (longer timeout, 3 retries) via the unparameterized _influx.connect().
+# spool is the real retry path, drained on its own thread and its own client with
+# the library defaults. Batch commands keep the default (longer timeout, 3
+# retries) via the unparameterized _influx.connect().
 WRITE_TIMEOUT_MS = 3000
 WRITE_RETRIES = _influx.build_retries(1)
+
+# Spool drain cadence. The drain is the slow path: it has no latency
+# requirement, so it idles cheaply and backs off hard rather than hammering a
+# down Influx or competing with the live flush for the car's uplink.
+DRAIN_ACTIVE_S = 0.5    # a file just drained; keep going
+DRAIN_IDLE_S = 30.0     # nothing to do; don't spin the SD card
+DRAIN_RETRY_S = 30.0    # retryable failure, or the live flush is already failing
+DRAIN_JOIN_TIMEOUT_S = 5.0
+# Blocked drain cycles -- a failed replay, or a replay suppressed because the
+# live flush is failing -- repeat-warn (with a cumulative count) rather than
+# edge-trigger: a drain stuck for a week must not produce one line at the start
+# of the week.
+_DRAIN_WARN_INTERVAL_S = 60
 
 FUEL_STATUS_MAP = {
     "Open loop due to insufficient engine temperature": 0,
@@ -77,6 +90,12 @@ _vin = "unknown"  # set by main() via _resolve_vin; tags every queued point
 # and once (INFO) on recovery instead of one line per 0.5s pump cycle. Only
 # touched from the main pump thread (flush_points), so no lock is needed.
 _spooling = False
+# Drain-thread state. Touched only from the drain thread, except _drain_stop.
+_drain_stop = threading.Event()
+_drain_thread = None
+_drain_failures = 0
+_drain_failing_since = None
+_last_drain_warn_monotonic = float('-inf')
 # Both only ever written from the Async callback thread; no lock needed.
 _last_dtc_count = 0
 _dtc_fetch_failures = 0
@@ -412,7 +431,7 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
         logger.info("Flushed %d points to InfluxDB", written)
         if _spooling:
             logger.info(
-                "InfluxDB reachable again; flushed %d points, draining spool",
+                "InfluxDB reachable again; flushed %d points (spool drains separately)",
                 written)
             _spooling = False
         return True
@@ -443,14 +462,124 @@ def flush_points(write_api, batch_size=FLUSH_BATCH_SIZE):
         return False
 
 
-def _pump(write_api):
-    """One service cycle: flush fresh points, then replay one spooled file.
+def _note_drain_blocked(now, reason):
+    """Account for one cycle that made no progress and repeat-warn on cadence.
 
-    Replay runs only when the live flush succeeded — while Influx is down the
-    flush already failed (and spilled), so we skip a second blocking write.
+    Shared by both blocked paths (a RETRY from replay, and the skip taken while
+    the live flush is failing) so neither can go silent for a week: the warning
+    repeats every _DRAIN_WARN_INTERVAL_S with a cumulative cycle count.
     """
-    if flush_points(write_api) and _spool is not None:
-        _spool.replay_oldest(write_api, WRITE_BUCKET)
+    global _drain_failures, _drain_failing_since, _last_drain_warn_monotonic
+    _drain_failures += 1
+    if _drain_failing_since is None:
+        _drain_failing_since = now
+    if now - _last_drain_warn_monotonic >= _DRAIN_WARN_INTERVAL_S:
+        count, size = _spool.pending()
+        logger.warning(
+            "Spool drain %s for %.0fs (%d cycle(s)); %d file(s) / %d bytes pending",
+            reason, now - _drain_failing_since, _drain_failures, count, size)
+        _last_drain_warn_monotonic = now
+
+
+def _drain_once(write_api):
+    """Run one spool-drain cycle; return the seconds to sleep before the next.
+
+    Replay is skipped while the live flush is failing: Influx is unreachable, so
+    draining would fail anyway, and drain POSTs competing with the live flush on
+    one uplink can push it past its own timeout — spilling more to the spool
+    while we try to empty it. The skip still counts as a blocked cycle, because
+    the live-flush outage that causes it is the most likely reason for a drain
+    to stall for days, and that must not be silent (flush_points only logs the
+    outage once, at onset).
+    """
+    global _drain_failures, _drain_failing_since, _last_drain_warn_monotonic
+    now = monotonic()
+    if _spooling:
+        _note_drain_blocked(now, "suppressed (live flush failing)")
+        return DRAIN_RETRY_S
+    result = _spool.replay_oldest(write_api, WRITE_BUCKET)
+    if result == RETRY:
+        _note_drain_blocked(now, "failing")
+        return DRAIN_RETRY_S
+    if _drain_failing_since is not None:
+        logger.info(
+            "Spool drain unblocked after %.0fs and %d failed or suppressed cycle(s)",
+            now - _drain_failing_since, _drain_failures)
+        _drain_failing_since = None
+        _drain_failures = 0
+        _last_drain_warn_monotonic = float('-inf')
+    if result == DRAINED:
+        count, size = _spool.pending()
+        logger.info("Spool drain: %d file(s) / %d bytes remaining", count, size)
+        return DRAIN_ACTIVE_S
+    return DRAIN_IDLE_S
+
+
+def _drain_loop(write_api, stop_event, interval=None):
+    """Replay spooled files until ``stop_event`` is set.
+
+    ``interval`` overrides the computed backoff; tests pass 0 so a cycle does not
+    block. A cycle that raises is logged and the loop continues — a drain thread
+    that dies silently reproduces the very bug this exists to fix.
+    """
+    while not stop_event.is_set():
+        try:
+            delay = _drain_once(write_api)
+        except Exception:
+            logger.exception("Spool drain cycle failed")
+            delay = DRAIN_RETRY_S
+        if stop_event.wait(interval if interval is not None else delay):
+            return
+
+
+def _start_drain():
+    """Start the spool-drain thread on its own InfluxDB client.
+
+    Its own client, not just its own write_api: _influx.connect fixes timeout and
+    retries at construction, so a second write_api off the hot-path client would
+    inherit the 3s/1-retry fail-fast tuning. The drain is the slow path and calls
+    _influx.connect() unparameterized, so it gets the library's 10s timeout
+    default along with the project's INFLUX_RETRIES.
+    """
+    if _spool is None or not _spool.enabled:
+        logger.error("Spool unusable; telemetry durability and drain are disabled")
+        return None, None
+    client = _influx.connect()
+    thread = threading.Thread(
+        target=_drain_loop,
+        args=(client.write_api(write_options=SYNCHRONOUS), _drain_stop),
+        name="spool-drain",
+        daemon=True,
+    )
+    thread.start()
+    return client, thread
+
+
+def _stop_drain(client, thread):
+    """Stop the drain thread and close its client, in that order.
+
+    This is best-effort, not a guarantee: DRAIN_JOIN_TIMEOUT_S (5s) is shorter
+    than the drain client's 10s default write timeout, so on the watchdog's
+    sys.exit path the join can time out while the thread is still mid-POST, and
+    the client gets closed under it anyway. The fallout is bounded — _finish only
+    unlinks after a successful write, and a stranded .replaying claim is picked
+    up by _reclaim_orphans on the next process start — so this produces
+    interpreter-shutdown noise, not data loss.
+    """
+    _drain_stop.set()
+    if thread is not None:
+        thread.join(timeout=DRAIN_JOIN_TIMEOUT_S)
+    if client is not None:
+        client.close()
+
+
+def _pump(write_api):
+    """One service cycle: flush fresh points to InfluxDB.
+
+    Spool replay is NOT done here — it runs on its own thread (see _start_drain)
+    so recovery is not gated on the OBD link being up.
+    """
+    flush_points(write_api)
 
 
 def main():
@@ -462,45 +591,52 @@ def main():
     with _influx.connect(timeout=WRITE_TIMEOUT_MS, retries=WRITE_RETRIES) as influx_client:
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
-        _configure_obd_logging()
-        connection = connect()
-        status = connection.status()
-        while "Car Connected" not in status:
-            connection.close()
-            logger.info("No car connected, sleeping...")
-            sleep(1)
+        # Started before the OBD connect, deliberately: the wait loop below can
+        # block for days with the car switched off, and spool recovery must not
+        # be hostage to it. That coupling is what stranded 4.4h of telemetry.
+        drain_client, drain_thread = _start_drain()
+        try:
+            _configure_obd_logging()
             connection = connect()
             status = connection.status()
+            while "Car Connected" not in status:
+                connection.close()
+                logger.info("No car connected, sleeping...")
+                sleep(1)
+                connection = connect()
+                status = connection.status()
 
-        logger.debug(connection.status())
+            logger.debug(connection.status())
 
-        _connection = connection
-        _vin = _resolve_vin(connection)
-        logger.info("Tagging telemetry with vin=%s", _vin)
-        _query_fuel_type_once(connection)
+            _connection = connection
+            _vin = _resolve_vin(connection)
+            logger.info("Tagging telemetry with vin=%s", _vin)
+            _query_fuel_type_once(connection)
 
-        for command in connection.supported_commands:
-            callback = _route_command(command)
-            if callback is not None:
-                connection.watch(command, callback=callback)
+            for command in connection.supported_commands:
+                callback = _route_command(command)
+                if callback is not None:
+                    connection.watch(command, callback=callback)
 
-        try:
-            connection.watch(obd.commands.ELM_VOLTAGE, callback=new_value)
-        except (AttributeError, KeyError):
-            logger.warning("Could not find voltage monitoring command - skipping")
+            try:
+                connection.watch(obd.commands.ELM_VOLTAGE, callback=new_value)
+            except (AttributeError, KeyError):
+                logger.warning("Could not find voltage monitoring command - skipping")
 
-        connection.start()
-        _last_append_monotonic = monotonic()
+            connection.start()
+            _last_append_monotonic = monotonic()
 
-        while True:
-            sleep(0.5)
-            _pump(write_api)
-            if not _connection_healthy(connection):
-                # Exit nonzero so the container/systemd restart policy re-runs
-                # the well-tested startup connect sequence; _pump at the top of
-                # this iteration already flushed or spilled pending points.
-                logger.error("Exiting for supervisor restart")
-                sys.exit(1)
+            while True:
+                sleep(0.5)
+                _pump(write_api)
+                if not _connection_healthy(connection):
+                    # Exit nonzero so the container/systemd restart policy re-runs
+                    # the well-tested startup connect sequence; _pump at the top of
+                    # this iteration already flushed or spilled pending points.
+                    logger.error("Exiting for supervisor restart")
+                    sys.exit(1)
+        finally:
+            _stop_drain(drain_client, drain_thread)
 
 
 if __name__ == "__main__":
