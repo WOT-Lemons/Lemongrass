@@ -1,5 +1,23 @@
 # Changelog
 
+## [5.4.0](https://github.com/WOT-Lemons/Lemongrass/compare/v5.3.1...v5.4.0) (2026-08-04)
+
+
+### Features
+
+* **laps:** wait for the green flag before monitoring ([#236](https://github.com/WOT-Lemons/Lemongrass/issues/236)) ([57e3acb](https://github.com/WOT-Lemons/Lemongrass/commit/57e3acb2ef5cb70edbe0d465b4e6a63eb58736f4))
+
+
+### Bug Fixes
+
+* **telem:** drain the spool independently of OBD state ([#234](https://github.com/WOT-Lemons/Lemongrass/issues/234)) ([d5f8936](https://github.com/WOT-Lemons/Lemongrass/commit/d5f8936f224d40658f3d2daf86559fa0572867c6))
+
+
+### Dependencies
+
+* lock file maintenance ([#235](https://github.com/WOT-Lemons/Lemongrass/issues/235)) ([5c8c17f](https://github.com/WOT-Lemons/Lemongrass/commit/5c8c17f9205ef7bd03e36518ad8f4b72c49a42ff))
+* lock file maintenance ([#244](https://github.com/WOT-Lemons/Lemongrass/issues/244)) ([36ff100](https://github.com/WOT-Lemons/Lemongrass/commit/36ff100a569a31c6382aaf8932192a6f75cbe57c))
+
 ## [5.3.1](https://github.com/WOT-Lemons/Lemongrass/compare/v5.3.0...v5.3.1) (2026-07-30)
 
 
