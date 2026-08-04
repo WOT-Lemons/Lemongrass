@@ -54,6 +54,16 @@ SCHEMA_VERSION = 4
 _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5
 
+# Cadence for the pre-race waits (wait_for_live / wait_for_car). 10s is 6 checks
+# per minute — exactly one RaceMonitor token's default rate-limit budget, so a
+# multi-hour wait never starves the pool. The client's own limiter blocks rather
+# than 429s if other calls are in flight, which self-throttles the wait.
+_WAIT_POLL_S = 10
+
+# Ticks between a wait's periodic actions: the "still waiting" log line and the
+# in-wait is_live recheck. 30 ticks at the 10s cadence is once every 5 minutes.
+_WAIT_RECHECK_TICKS = 30
+
 # How far in the past a race's stored end time must be before the Influx-only skip
 # will trust it as fully over. Sessions can share one race_id across a multi-day
 # event, so a stored end that is only recently past may still have a later session
@@ -128,6 +138,7 @@ class RaceOptions:
     interval: int = 30
     skip_if_complete: bool = False
     dry_run: bool = False
+    wait_for_live: bool = False
 
 
 class RaceObserver:
@@ -248,8 +259,37 @@ def _build_parser():
         type=int,
         metavar='SECONDS',
         help='Polling interval in seconds for monitor mode (default: 30)')
+    parser.add_argument('--wait-for-live', dest='wait_for_live', default=False,
+                        action='store_true',
+                        help='Implies -m; wait for the race to go live (checked every '
+                             '10s, no timeout), then monitor car_number. If the car is '
+                             'not in the live feed yet, keep waiting for it — unless the '
+                             'race ends first, which stops the wait and exits nonzero.')
     parser.set_defaults(monitor_mode=False, network_mode=False)
     return parser
+
+
+def _parse_args(argv=None):
+    """Parse CLI args and enforce the cross-flag rules argparse can't express.
+
+    --wait-for-live is a live-only prelude to monitoring: it turns on monitor
+    mode the way --dry-run implies -n, and it cannot coexist with either
+    historical-only flag. parser.error() exits 2 with usage, as argparse does
+    for any other bad invocation.
+    """
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.wait_for_live:
+        if args.dry_run:
+            parser.error('--wait-for-live cannot be combined with --dry-run '
+                         '(--dry-run is historical-only)')
+        if args.skip_if_complete:
+            parser.error('--wait-for-live cannot be combined with --skip-if-complete '
+                         '(--skip-if-complete is historical-only)')
+        if args.car_number is None:
+            parser.error('--wait-for-live requires car_number')
+        args.monitor_mode = True
+    return args
 
 
 def main():
@@ -268,7 +308,7 @@ def main():
         from lemongrass._tui import launch_tui
         launch_tui(run_laps_tui)
 
-    args = _build_parser().parse_args()
+    args = _parse_args()
 
     if args.verbose:
         print(args)
@@ -313,6 +353,7 @@ def main():
         interval=args.interval,
         skip_if_complete=args.skip_if_complete,
         dry_run=args.dry_run,
+        wait_for_live=args.wait_for_live,
     )
 
     # Fast path: for the historical backfill (--skip-if-complete), decide whether
@@ -338,6 +379,177 @@ def main():
         sys.exit(130)
 
 
+def _live_session(session_response):
+    """Return the session dict from a ``client.live.get_session`` response, or None.
+
+    A truthy ``Successful`` does not guarantee a session: RaceMonitor answers
+    ``{'Successful': True, 'Session': None}`` while a live race sits between
+    sessions — including the gap before a scheduled race's first session opens —
+    and the client raises on a falsy ``Successful``, so that null is the only
+    shape a "no session right now" poll can take. It is not a signal that the
+    race is over; only ``race.is_live`` (see ``_race_ended``) decides that. Every
+    consumer must treat it like an unsuccessful response rather than indexing
+    ``['Session']``.
+    """
+    if not session_response.get('Successful'):
+        return None
+    return session_response.get('Session') or None
+
+
+def _race_ended(client, race_id):
+    """Has the race definitively ended? True, False, or None for unknown.
+
+    Every wait loop in the CLI and the TUI needs this same decision, and the
+    unknown case is the subtle one: a raised exception or a response without
+    'Successful' means the *check* failed, not that the race is over, and a
+    transient blip must never kill a multi-hour unattended capture. Only an
+    explicit successful-and-not-live response ends a wait.
+    """
+    try:
+        response = client.race.is_live(race_id)
+    except Exception as exc:
+        logging.debug("is_live check failed; treating as unknown: %s", exc)
+        return None
+    if not response.get('Successful'):
+        return None
+    return not response.get('IsLive')
+
+
+def wait_for_live(client, race_id, stop_event=None, on_tick=None, poll_s=_WAIT_POLL_S):
+    """Poll race.is_live until the race goes live.
+
+    Returns True once IsLive is set, or False if stop_event was set first. The
+    wait has no timeout: unattended capture must still be running whenever the
+    green flag actually drops, which can be hours after setup.
+
+    Every failure of the is_live call — RaceMonitorError (including exhausted
+    429 retries), transport errors, anything unexpected — is swallowed and
+    retried on the next tick, because a single bad poll must not end the wait.
+    on_tick(count, error) fires after each check that did not find the race
+    live, where error is None on a clean not-yet-live result and a short reason
+    otherwise; callers use it to render status.
+    """
+    stop = stop_event if stop_event is not None else threading.Event()
+    count = 0
+    while not stop.is_set():
+        error = None
+        try:
+            response = client.race.is_live(race_id)
+            if response.get('Successful') and response.get('IsLive'):
+                return True
+        except Exception as exc:
+            logging.debug("is_live check failed while waiting: %s", exc)
+            error = str(exc) or exc.__class__.__name__
+        count += 1
+        if on_tick is not None:
+            on_tick(count, error)
+        if stop.wait(timeout=poll_s):
+            return False
+    return False
+
+
+def wait_for_car(client, race_id, car_number, stop_event=None, on_tick=None,
+                 poll_s=_WAIT_POLL_S):
+    """Poll live.get_session until car_number appears in the live field.
+
+    A race going live does not mean its timing feed is populated — cars trickle
+    in — so this is a second, separate wait after wait_for_live. Returns True
+    once the number matches a competitor's Number, or False if stop_event was
+    set first. Like wait_for_live it never gives up: an unsuccessful response, a
+    null session (the normal shape before the first session of the day opens),
+    an empty field, a populated field without the car, and an exception are all
+    just "not yet".
+
+    on_tick(count, state, error) fires after each miss. state is 'no_feed' when
+    there is nothing to match against and 'absent' when the field is populated
+    but the car is not in it — the two look identical to the API caller but mean
+    very different things to someone watching the screen.
+    """
+    stop = stop_event if stop_event is not None else threading.Event()
+    wanted = str(car_number)
+    count = 0
+    while not stop.is_set():
+        error = None
+        state = 'no_feed'
+        try:
+            response = client.live.get_session(race_id)
+            session = _live_session(response)
+            competitors = (session or {}).get('Competitors') or {}
+            if competitors:
+                state = 'absent'
+                if any(str(comp.get('Number', '')) == wanted
+                       for comp in competitors.values()):
+                    return True
+        except Exception as exc:
+            logging.debug("get_session failed while waiting for car: %s", exc)
+            error = str(exc) or exc.__class__.__name__
+        count += 1
+        if on_tick is not None:
+            on_tick(count, state, error)
+        if stop.wait(timeout=poll_s):
+            return False
+    return False
+
+
+def _wait_for_live_log_tick(race_id, poll_s):
+    """Build an on_tick(count, error) callback that reports wait_for_live's
+    progress at INFO, so an unattended CLI run under systemd/docker isn't
+    silent between launch and the green flag.
+
+    Logs a start line immediately, then roughly one "still waiting" line every
+    5 minutes at the 10s cadence (first tick, then every 30th). A failing
+    check is always logged the first time it's seen, but a repeated identical
+    error is not re-logged on every tick — only a change in the error is.
+    """
+    logging.info("Waiting for race %s to go live (checking every %ss)…", race_id, poll_s)
+    last_error = None
+
+    def _tick(count, error):
+        nonlocal last_error
+        if count == 1 or count % _WAIT_RECHECK_TICKS == 0:
+            logging.info(
+                "Still waiting for race %s to go live (%d checks so far)", race_id, count)
+        if error is not None and error != last_error:
+            logging.info(
+                "is_live check failing while waiting for race %s: %s", race_id, error)
+        last_error = error
+
+    return _tick
+
+
+def _wait_for_car_log_tick(race_id, car_number, poll_s):
+    """Build an on_tick(count, state, error) callback that reports
+    wait_for_car's progress at INFO — see _wait_for_live_log_tick for the
+    cadence/error-dedup rules, which are the same here.
+
+    state distinguishes 'no_feed' (nothing to match against yet) from 'absent'
+    (the field is populated but car_number isn't in it), the same distinction
+    the TUI's wait screen surfaces.
+    """
+    logging.info(
+        "Waiting for car %s to appear in race %s's timing feed (checking every %ss)…",
+        car_number, race_id, poll_s)
+    last_error = None
+
+    def _tick(count, state, error):
+        nonlocal last_error
+        if count == 1 or count % _WAIT_RECHECK_TICKS == 0:
+            if state == 'no_feed':
+                logging.info(
+                    "Still waiting for the timing feed for race %s (%d checks so far)",
+                    race_id, count)
+            else:
+                logging.info(
+                    "Car %s still not in race %s's field (%d checks so far)",
+                    car_number, race_id, count)
+        if error is not None and error != last_error:
+            logging.info(
+                "get_session check failing while waiting for car %s: %s", car_number, error)
+        last_error = error
+
+    return _tick
+
+
 def backfill_race(race_id, car_number, client, opts, observer=None):
     """Fetch and process one race using an already-open RaceMonitorClient.
 
@@ -350,6 +562,14 @@ def backfill_race(race_id, car_number, client, opts, observer=None):
     any RaceMonitorError, e.g. 429 exhaustion) propagates to the caller so a
     batch loop can decide whether to stop or record-and-continue.
     """
+    # Wait before fetching details: a scheduled-but-not-started race reports a
+    # placeholder start epoch and no metadata, so everything downstream should
+    # read post-green-flag values. Returning 0 on a cancelled wait keeps a
+    # user-initiated stop from looking like a failure.
+    if opts.wait_for_live and not wait_for_live(
+            client, race_id, on_tick=_wait_for_live_log_tick(race_id, _WAIT_POLL_S)):
+        return 0
+
     race_details = client.race.details(race_id)
 
     start_epoc = 0
@@ -421,6 +641,57 @@ def _run_race(ctx, opts, response, observer=None):
                     "--dry-run is historical-only; race %s is live", ctx.race_id)
                 return 1
             result = live_race(ctx, opts, observer=observer)
+            attempts = 0
+            # wait_for_car has no timeout of its own, so a car that never
+            # appears at all (a typo'd number, or the race red-flagged before
+            # it ever got out) would otherwise leave the loop blocked inside
+            # it forever — the per-attempt recheck below only runs at the top
+            # of each retry, before wait_for_car is entered. ended and its
+            # on_tick are built once, right before the retry loop actually
+            # starts, so the "waiting for car" start line isn't re-logged and
+            # last_error dedup holds across every attempt.
+            ended = threading.Event()
+            car_tick = None
+            if result is MonitorStatus.NO_LIVE_DATA and opts.wait_for_live:
+                log_tick = _wait_for_car_log_tick(ctx.race_id, ctx.car_number, _WAIT_POLL_S)
+
+                def car_tick(count, state, error):
+                    log_tick(count, state, error)
+                    # Re-check is_live from inside the wait itself, periodically:
+                    # the car may never appear at all, so this is the only thing
+                    # that ends a wait that outlives the race it's waiting on.
+                    if (count % _WAIT_RECHECK_TICKS == 0
+                            and _race_ended(ctx.client, ctx.race_id)):
+                        logging.error(
+                            "Race %s ended before car %s appeared in the live feed",
+                            ctx.race_id, ctx.car_number)
+                        ended.set()
+
+            while result is MonitorStatus.NO_LIVE_DATA and opts.wait_for_live:
+                # Wait for the *car* to show up in the timing feed, then retry
+                # the whole live setup. get_session (wait_for_car) and
+                # get_racer (live_race) can disagree, so a car listed in the
+                # field but with no racer detail yet must not spin: pace every
+                # retry after the first.
+                if attempts:
+                    time.sleep(_WAIT_POLL_S)
+                attempts += 1
+                # The race can end (or be red-flagged to a finish) before the
+                # car ever appears in the feed — without this check the loop
+                # would poll a rate-limited API forever with no recovery short
+                # of SIGINT.
+                if _race_ended(ctx.client, ctx.race_id):
+                    logging.error(
+                        "Race %s ended before car %s appeared in the live feed",
+                        ctx.race_id, ctx.car_number)
+                    return 1
+                logging.info(
+                    "Car %s is not in the live feed yet — waiting for it to appear.",
+                    ctx.car_number)
+                if not wait_for_car(ctx.client, ctx.race_id, ctx.car_number, ended,
+                                    on_tick=car_tick):
+                    break
+                result = live_race(ctx, opts, observer=observer)
             if result is MonitorStatus.INTERRUPTED:
                 sys.exit(130)
             if result is MonitorStatus.NO_LIVE_DATA:
@@ -440,28 +711,57 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     if observer is None:
         observer = _StdoutObserver()
 
-    session_response = ctx.client.live.get_session(ctx.race_id)
+    # A failed session fetch costs the session tag and the class name for this
+    # launch, not the launch itself — monitor_routine already treats the same
+    # failure as one skipped poll and resolves both on a later one. Falling back
+    # to the unsuccessful-response sentinel keeps every downstream reader on the
+    # one path that already handles "no session data".
+    try:
+        session_response = ctx.client.live.get_session(ctx.race_id)
+    except Exception as exc:
+        logging.warning(
+            "Session fetch failed for race %s (%s); starting without session "
+            "detail — the monitor loop will resolve it", ctx.race_id, exc)
+        session_response = {'Successful': False}
 
     live_session_id = None
     live_session_name = None
-    if session_response.get('Successful'):
-        live_session_id = session_response['Session'].get('ID')
-        live_session_name = session_response['Session'].get('Name')
+    session = _live_session(session_response)
+    if session is not None:
+        live_session_id = session.get('ID')
+        live_session_name = session.get('Name')
 
     observer.on_rankings([], True, opts.selected_class, {})
 
-    # Get lap times from live racer
+    # Get lap times from live racer. A car that is not in the feed comes back as
+    # a raised RaceMonitorError, not as a falsy 'Successful': the client raises on
+    # any unsuccessful response, so that key is always True by the time we see it.
+    # Every wait-for-car retry keys on NO_LIVE_DATA, so the exception has to be
+    # turned into that status here or an unattended capture dies at the green flag
+    # — the exact moment cars are still trickling into the timing feed. Transport
+    # errors are swallowed the same way for the same reason, matching the waits and
+    # the monitor loop, which already treat any single failed call as "not yet".
     logging.debug("Getting lap times for %s from race %s.", ctx.car_number, ctx.race_id)
-    response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
+    try:
+        response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
+    except Exception as exc:
+        logging.error(
+            "No live data for car %s in race %s (%s) — check that the car number "
+            "is registered in the live feed", ctx.car_number, ctx.race_id, exc)
+        return MonitorStatus.NO_LIVE_DATA
 
-    if not response['Successful']:
+    details = response.get('Details') or {}
+    competitor_details = details.get('Competitor') or {}
+    if not competitor_details:
         logging.error(
             "No live data for car %s in race %s — check that the car number is "
             "registered in the live feed", ctx.car_number, ctx.race_id)
         return MonitorStatus.NO_LIVE_DATA
 
-    laps = response['Details']['Laps']
-    competitor_details = response['Details']['Competitor']
+    # An empty lap list is not an absent car: a competitor registered before the
+    # green flag has completed zero laps. Monitoring must start anyway, or the
+    # retry loop would wait for a car that is already sitting on the grid.
+    laps = details.get('Laps') or []
 
     first = competitor_details.get('FirstName', '')
     last = competitor_details.get('LastName', '')
@@ -871,17 +1171,18 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             except Exception:
                 logging.debug("get_session failed; skipping session check")
                 session_response = {'Successful': False}
-            if session_response.get('Successful'):
-                new_session_id = session_response['Session'].get('ID')
+            session = _live_session(session_response)
+            if session is not None:
+                new_session_id = session.get('ID')
                 if new_session_id and new_session_id != session_id:
-                    observer.on_session_change(session_response['Session'].get('Name', ''))
+                    observer.on_session_change(session.get('Name', ''))
                     session_id = new_session_id
                     prev_standings = {}
                     if opts.network_mode:
                         push_influx_session(
-                            ctx, session_id, session_response['Session'].get('Name'), None)
+                            ctx, session_id, session.get('Name'), None)
             else:
-                logging.debug("get_session returned unsuccessful; may be between sessions")
+                logging.debug("get_session returned no session; may be between sessions")
 
             if opts.network_mode:
                 prev_standings = push_influx_standings_live(
@@ -952,9 +1253,10 @@ def refresh_competitor(ctx):
     logging.debug("Refreshing lap times for car %s.", ctx.car_number)
     response = ctx.client.live.get_racer(ctx.race_id, ctx.car_number)
 
-    laps = []
-    if response['Successful']:
-        laps = response['Details']['Laps']
+    # 'Successful' is always True here — the client raises otherwise — so the
+    # only empty case worth guarding is a response without lap detail. The caller
+    # swallows a raised call as one lost poll.
+    laps = (response.get('Details') or {}).get('Laps') or []
 
     if laps:
         logging.debug(
@@ -1409,9 +1711,9 @@ def _resolve_class_live(session_response, car_number):
     Takes the response from ``client.live.get_session`` so the caller can fetch the
     session once and reuse it.
     """
-    if not session_response.get('Successful'):
+    session = _live_session(session_response)
+    if session is None:
         return None, None
-    session = session_response['Session']
     classes = session['Classes']
     competitors = session['Competitors']
 
@@ -1462,9 +1764,10 @@ def _resolve_class_live(session_response, car_number):
 
 def _compute_class_positions_live(session_response):
     """Return {car_number: class_position} for all live competitors in one pass."""
-    if not session_response.get('Successful'):
+    session = _live_session(session_response)
+    if session is None:
         return {}
-    competitors = session_response['Session']['Competitors']
+    competitors = session['Competitors']
     by_class = defaultdict(list)
     for comp in competitors.values():
         try:
@@ -1513,11 +1816,12 @@ def push_influx_standings_live(ctx, session_response, session_id, prev_standings
     Pass None to write all competitors unconditionally (e.g. at race startup).
     Returns the current standings snapshot dict for the caller to pass next poll.
     """
-    if not session_response.get('Successful'):
-        logging.debug("push_influx_standings_live: unsuccessful session response, skipping")
+    session = _live_session(session_response)
+    if session is None:
+        logging.debug("push_influx_standings_live: no live session in response, skipping")
         return prev_standings if prev_standings is not None else {}
-    competitors = session_response['Session']['Competitors']
-    classes = session_response['Session']['Classes']
+    competitors = session['Competitors']
+    classes = session['Classes']
     class_positions = _compute_class_positions_live(session_response)
     timestamp_ms = int(time.time() * 1000)
     curr_standings = {}

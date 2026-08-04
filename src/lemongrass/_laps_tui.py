@@ -7,6 +7,8 @@ below drive it from a background worker via _TuiObserver.
 
 import logging
 import threading
+import time
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from race_monitor import RaceMonitorError
@@ -27,7 +29,20 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
+from lemongrass import _influx
 from lemongrass._tui import _LogSink, _race_label, _routed_output, _sink_bound
+
+
+def _bad_car_number(car_number):
+    """Reject a typed car number the CLI's own validation would reject.
+
+    laps.main() runs every identifier through _influx.invalid_flux_ids before
+    touching RaceMonitor or Influx, since they end up interpolated into Flux
+    predicates; the TUI reaches the same code without argparse in front of it.
+    Checking at entry also turns a typo into an immediate error rather than a
+    wait for a car that can never appear.
+    """
+    return bool(_influx.invalid_flux_ids([car_number]))
 
 
 def _as_int(value):
@@ -70,7 +85,12 @@ class LapBoardModel:
         """Store leaderboard rows from a live get_session response."""
         if not session_response.get('Successful'):
             return
-        competitors = session_response.get('Session', {}).get('Competitors', {})
+        # Session is null between sessions, so .get('Session', {}) yields None
+        # rather than the default — keep the last standings instead of crashing.
+        session = session_response.get('Session') or {}
+        competitors = session.get('Competitors') or {}
+        if not competitors:
+            return
         rows = []
         for comp in competitors.values():
             pos = _as_int(comp.get('Position'))
@@ -109,7 +129,16 @@ class LapsFlowMixin:
         if is_live:
             self.push_screen(CarSelectScreen(self.client, race_id, name))
         else:
-            self.push_screen(ImportConfirmScreen(self.client, race_id, name))
+            # Not live covers two very different races — one that has not started
+            # yet and one that finished — and is_live cannot tell them apart, so
+            # let the user choose instead of assuming the race is over.
+            self.push_screen(NotLiveScreen(self.client, race_id, name, details))
+
+    def _confirm_import(self, race_id, race_name):
+        self.push_screen(ImportConfirmScreen(self.client, race_id, race_name))
+
+    def _start_wait(self, race_id, race_name):
+        self.push_screen(WaitForLiveScreen(self.client, race_id, race_name))
 
     def _start_monitor(self, race_id, car_number, network, interval):
         self.monitor_args = (race_id, car_number, network, interval)
@@ -265,6 +294,222 @@ class PickerScreen(Screen):
         self.app.call_from_thread(self.app._on_race_resolved, details, is_live, race_id)
 
 
+class NotLiveScreen(Screen):
+    """A race that isn't live: wait for the green flag, or import it as completed."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('escape', 'app.pop_screen', 'Back'),
+    ]
+
+    def __init__(self, client, race_id, race_name, race_details=None):
+        super().__init__()
+        self.client = client
+        self.race_id = race_id
+        self.race_name = race_name
+        self._race = (race_details or {}).get('Race', {})
+
+    def compose(self):
+        yield Label(f'{self.race_name} (#{self.race_id}) is not live right now.')
+        yield Label(f'Scheduled start: {self._scheduled()}', id='scheduled')
+        yield ListView(
+            ListItem(Label('Wait for the green flag, then monitor'), id='wait'),
+            ListItem(Label('Import as a completed race'), id='import'),
+            id='menu')
+        yield Footer()
+
+    def _scheduled(self):
+        start = self._race.get('StartDateEpoc') or 0
+        if not start:
+            return 'unknown'
+        return datetime.fromtimestamp(start, tz=UTC).strftime('%Y-%m-%d %H:%M UTC')
+
+    def _upcoming(self):
+        """True if the race's stored end time hasn't passed (0 = unknown, treat
+        as upcoming)."""
+        end = self._race.get('EndDateEpoc') or 0
+        return end == 0 or end > time.time()
+
+    def on_mount(self):
+        # Focus is a hint about which choice is likely, never a decision — both
+        # rows stay one arrow key apart because RaceMonitor's dates can be wrong.
+        view = self.query_one('#menu', ListView)
+        view.index = 0 if self._upcoming() else 1
+        view.focus()
+
+    def on_list_view_selected(self, event):
+        if event.item.id == 'wait':
+            self.app._start_wait(self.race_id, self.race_name)
+        elif event.item.id == 'import':
+            self.app._confirm_import(self.race_id, self.race_name)
+
+
+class WaitForLiveScreen(Screen):
+    """Wait for a race to go live, then start monitoring a pre-chosen car.
+
+    One worker, two phases: laps.wait_for_live for the green flag, then
+    laps.wait_for_car until the number appears in the timing feed. Neither phase
+    ever gives up — the point of this screen is that lap capture starts while
+    nobody is at the keyboard — so the only exits are the car being found, 'c'
+    (open the car picker), and escape/unmount.
+
+    The car list CarSelectScreen shows cannot exist before the feed is live,
+    which is why the number is typed here instead.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding('escape', 'cancel', 'Cancel'),
+        Binding('c', 'change_car', 'Change car'),
+    ]
+
+    def __init__(self, client, race_id, race_name):
+        super().__init__()
+        self.client = client
+        self.race_id = race_id
+        self.race_name = race_name
+        self.car_number = None   # set once the wait starts; also the "started" flag
+        self.network = True
+        self.interval = 30
+        self.live = False        # phase flag: gates the 'c' binding
+        self._stop = threading.Event()
+
+    def compose(self):
+        yield Label(f'{self.race_name} (#{self.race_id}) — wait for the green flag.')
+        yield Input(placeholder='car number to monitor…', id='car-number')
+        yield Checkbox('Write to InfluxDB', value=True, id='write')
+        yield Input(value='30', id='interval')
+        yield Label('enter a car number to start waiting', id='status')
+        yield Footer()
+
+    def on_mount(self):
+        self.query_one('#car-number', Input).focus()
+
+    def check_action(self, action, parameters):
+        # Hide 'c' from the footer until the race is live: before then there is
+        # no field for CarSelectScreen to list. False, not None — Textual drops
+        # a False binding from active_bindings but keeps a None one and merely
+        # dims it, which still advertises the key.
+        if action == 'change_car':
+            return self.live
+        return True
+
+    def on_input_submitted(self, event):
+        # Only the car-number Input starts the wait; Enter in the interval Input
+        # is inert, mirroring CarSelectScreen.
+        event.stop()
+        if event.input.id == 'car-number':
+            self._begin(event.value.strip())
+
+    def _begin(self, car_number):
+        if self.car_number is not None:
+            return  # already waiting
+        if not car_number:
+            self._status('enter a car number to start waiting')
+            return
+        if _bad_car_number(car_number):
+            self._status(f'invalid car number: {car_number!r}')
+            return
+        # Read the settings once and freeze the widgets: the wait can run for
+        # hours, and the worker must not query widgets that may be torn down.
+        self.car_number = car_number
+        self.network = self.query_one('#write', Checkbox).value
+        self.interval = _as_int(self.query_one('#interval', Input).value) or 30
+        for widget_id in ('#car-number', '#write', '#interval'):
+            self.query_one(widget_id).disabled = True
+        self._status('waiting for green flag…')
+        self._wait()
+
+    # --- main-thread UI updates ---
+    def _status(self, text):
+        self.query_one('#status', Label).update(text)
+
+    def _mark_live(self):
+        self.live = True
+        self.refresh_bindings()  # 'c' becomes available now that a field exists
+
+    def _go_live(self):
+        # Guarded here (main thread), not on the worker thread: _go_live runs
+        # via call_from_thread, so by the time it actually executes,
+        # action_change_car may already have popped this screen and pushed
+        # CarSelectScreen. Checking self.app.screen is not self catches that —
+        # a worker-side is_set() check does not, because it runs earlier and
+        # Textual's screen prune is deferred.
+        if self._stop.is_set() or self.app.screen is not self:
+            return
+        # Pop first so quitting the monitor lands back on NotLiveScreen rather
+        # than on a wait screen whose worker is already finished.
+        self.app.pop_screen()
+        self.app._start_monitor(self.race_id, self.car_number, self.network, self.interval)
+
+    # --- background wait ---
+    def _call(self, fn, *args):
+        # Same guard as _TuiObserver._call: never marshal into a torn-down event
+        # loop or against removed widgets.
+        if get_current_worker().is_cancelled or not self.is_mounted:
+            return
+        self.app.call_from_thread(fn, *args)
+
+    def _tick_live(self, count, error):
+        text = f'waiting for green flag — {count} checks, last {self._stamp()}'
+        if error:
+            text += f' (last check failed: {error})'
+        self._call(self._status, text)
+
+    def _tick_car(self, count, state, error):
+        if state == 'no_feed':
+            text = f'live — waiting for the timing feed… {count} checks, last {self._stamp()}'
+        else:
+            text = (f'live — car #{self.car_number} not in the field yet — '
+                    f'{count} checks, last {self._stamp()}')
+        if error:
+            text += f' (last check failed: {error})'
+        self._call(self._status, text)
+
+    @staticmethod
+    def _stamp():
+        return datetime.now().strftime('%H:%M:%S')
+
+    @work(thread=True, exit_on_error=False)
+    def _wait(self):
+        # exit_on_error=False: call_from_thread re-raises the callback's
+        # exception in this worker thread, and the default exit_on_error=True
+        # would route that into app._handle_exception and kill the app — the
+        # opposite of the "must never crash the app" guarantee below.
+        from lemongrass import laps as laps_mod
+        try:
+            if not laps_mod.wait_for_live(self.client, self.race_id, self._stop,
+                                          on_tick=self._tick_live):
+                return
+            self._call(self._mark_live)
+            if not laps_mod.wait_for_car(self.client, self.race_id, self.car_number,
+                                         self._stop, on_tick=self._tick_car):
+                return
+        except Exception as exc:  # last resort: a TUI worker must never crash the app
+            logging.exception("wait worker failed")
+            self._call(self._status, f'wait failed: {exc}')
+            return
+        # The invariant (don't pop/push behind a user who already left via 'c'
+        # or escape) is enforced inside _go_live itself, on the main thread —
+        # see its docstring/comment for why a worker-side check here would not
+        # be race-free.
+        self._call(self._go_live)
+
+    # --- user exits ---
+    def action_cancel(self):
+        self._stop.set()
+        self.app.pop_screen()
+
+    def action_change_car(self):
+        if not self.live:
+            return
+        self._stop.set()
+        self.app.pop_screen()
+        self.app.push_screen(CarSelectScreen(self.client, self.race_id, self.race_name))
+
+    def on_unmount(self):
+        # End the wait on ANY teardown (app exit, ctrl+c), not just escape.
+        self._stop.set()
+
+
 class CarSelectScreen(Screen):
     """Pick the tracked car from the live feed (or type a number) + options."""
 
@@ -307,7 +552,9 @@ class CarSelectScreen(Screen):
             return
         if worker.is_cancelled:
             return
-        comps = list(resp.get('Session', {}).get('Competitors', {}).values())
+        # Session is null while the race is between sessions — show an empty
+        # picker (the car number can still be typed in) rather than crashing.
+        comps = list(((resp.get('Session') or {}).get('Competitors') or {}).values())
         self.app.call_from_thread(self._show, comps)
 
     def _show(self, competitors):
@@ -327,8 +574,16 @@ class CarSelectScreen(Screen):
         # Only the car-number Input confirms; Enter in the interval Input is inert
         # (its value must not be mistaken for a car number).
         event.stop()
-        if event.input.id == 'car-number':
-            self._confirm(event.value.strip())
+        if event.input.id != 'car-number':
+            return
+        car_number = event.value.strip()
+        # Only the *typed* path is validated: a number selected from the list
+        # came from the live feed, and rejecting it would make a real car
+        # unmonitorable rather than prevent anything.
+        if car_number and _bad_car_number(car_number):
+            self.query_one('#status', Label).update(f'invalid car number: {car_number!r}')
+            return
+        self._confirm(car_number)
 
     def _confirm(self, car_number):
         if not car_number:
@@ -491,13 +746,11 @@ class MonitorScreen(Screen):
                     # connection stays open for the whole poll loop.
                     with _influx.connect() as influx_client:
                         ctx = self._network_ctx(laps_mod, influx_client)
-                        laps_mod.live_race(ctx, opts, observer=observer,
-                                           _stop_event=self._stop)
+                        self._monitor_until_done(laps_mod, ctx, opts, observer)
                 else:
                     ctx = laps_mod.RaceContext(
                         str(self.race_id), str(self.car_number), self.client, None, 0)
-                    laps_mod.live_race(ctx, opts, observer=observer,
-                                       _stop_event=self._stop)
+                    self._monitor_until_done(laps_mod, ctx, opts, observer)
             except RaceMonitorError as exc:
                 if not get_current_worker().is_cancelled:
                     self.app.call_from_thread(self.log_line, f'error: {exc}')
@@ -522,6 +775,65 @@ class MonitorScreen(Screen):
             metadata=metadata,
             delete_api=influx_client.delete_api(),
             query_api=influx_client.query_api())
+
+    def _monitor_until_done(self, laps_mod, ctx, opts, observer):
+        """Run live_race, re-waiting for the car whenever it isn't in the feed.
+
+        Cars trickle into the timing feed after the green flag, so a
+        NO_LIVE_DATA at launch is a "not yet", not a failure — returning here
+        would leave an unattended session collecting nothing. Every other
+        outcome (race ended, stop event, error) is returned to _run unchanged.
+        Each retry re-checks is_live: the race can end (or be red-flagged to a
+        finish) before the car ever appears, and without that check this would
+        poll a rate-limited API forever."""
+        attempts = 0
+        while not self._stop.is_set():
+            result = laps_mod.live_race(ctx, opts, observer=observer,
+                                        _stop_event=self._stop)
+            if result is not laps_mod.MonitorStatus.NO_LIVE_DATA:
+                return result
+            if attempts and self._stop.wait(laps_mod._WAIT_POLL_S):
+                # get_session and get_racer can disagree; pace the retry so a car
+                # listed in the field but with no racer detail yet doesn't spin.
+                return None
+            attempts += 1
+            if laps_mod._race_ended(self.client, self.race_id):
+                self._call(
+                    self.log_line,
+                    f'race {self.race_id} ended before car #{self.car_number} appeared')
+                return None
+            self._call(self.log_line,
+                       f'car #{self.car_number} is not in the live feed yet — waiting…')
+            if not laps_mod.wait_for_car(self.client, self.race_id, self.car_number,
+                                         self._stop, on_tick=self._car_tick):
+                return None
+        return None
+
+    def _call(self, fn, *args):
+        # Same guard as _TuiObserver._call: never marshal into a torn-down loop.
+        if get_current_worker().is_cancelled or not self.is_mounted:
+            return
+        self.app.call_from_thread(fn, *args)
+
+    def _car_tick(self, count, state, error):
+        if state == 'absent':
+            text = f'car #{self.car_number} still not in the field — {count} checks'
+        else:
+            text = f'waiting for the timing feed — {count} checks'
+        if error:
+            text += f' (last check failed: {error})'
+        self._call(self.log_line, text)
+        # Re-check is_live from inside the wait itself, periodically: the car may
+        # never appear at all (wrong number, or the race red-flagged before it
+        # got out), and wait_for_car has no timeout of its own — without this the
+        # wait outlives the race it's waiting on.
+        from lemongrass import laps as laps_mod
+        if (count % laps_mod._WAIT_RECHECK_TICKS == 0
+                and laps_mod._race_ended(self.client, self.race_id)):
+            self._call(
+                self.log_line,
+                f'race {self.race_id} ended before car #{self.car_number} appeared')
+            self._stop.set()
 
     def action_quit_monitor(self):
         self._stop.set()

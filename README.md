@@ -52,8 +52,13 @@ docker pull ghcr.io/wot-lemons/lemongrass:latest
 Run `lemongrass laps` with no arguments in a terminal to open an interactive
 UI: search for a race by name or paste its numeric ID, then either watch it
 live (lap table, field leaderboard, and a log pane) or import a completed
-race's full field into InfluxDB. When a live race ends, the UI offers to run
-the authoritative final import.
+race's full field into InfluxDB. A race that isn't live yet offers a third
+choice — enter your car number and wait for the green flag; the UI checks every
+10 seconds, starts monitoring by itself once the race goes live and your car
+appears in the timing feed, and keeps waiting until then. Once the race is
+live, press `c` to pick a different car from the live field — there is no field
+to choose from before the green flag. When a live race ends, the UI offers to
+run the authoritative final import.
 
 The scripted forms are unchanged: `lemongrass laps <race_id> [car_number]
 [-m] [-n] …` behave exactly as before and are what cron and race-backfill use.
@@ -92,6 +97,17 @@ uvx lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
 
 > **Graceful exit:** Press Ctrl-C at any time to stop monitoring cleanly (exits 130). The monitor also exits automatically when the race ends.
+
+> **Starting before the green flag:** add `--wait-for-live` to poll the race
+> every 10 seconds and begin monitoring as soon as it goes live — useful when
+> you set the capture up and then leave for the grid. It implies `-m`, requires
+> `CAR_NUMBER`, and never times out; if the car isn't in the timing feed yet, it
+> keeps waiting for it, unless the race ends before the car ever appears, which
+> stops the wait and exits nonzero. Ctrl-C stops the wait (exits 130).
+>
+> ```shell
+> lemongrass laps RACE_ID CAR_NUMBER -n --wait-for-live
+> ```
 
 Real example:
 
