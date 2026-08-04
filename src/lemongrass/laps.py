@@ -982,6 +982,7 @@ def old_race(ctx, opts):
             len(pending_writes), total_competitors)
 
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
+        _apply_total_time_offsets(pending_writes)
         try:
             for session in pending_writes:
                 session_points = []
@@ -989,7 +990,8 @@ def old_race(ctx, opts):
                     session_points.extend(_build_lap_points(
                         ctx, comp['influx_laps'], comp['competitor_name'], comp['car_info'],
                         comp['class_name'], comp['class_positions'], session['start_epoc'],
-                        comp['car_number'], session['session_id']))
+                        comp['car_number'], session['session_id'],
+                        comp['total_time_offset_ms']))
                 _write_points_chunked(ctx.write_api, session_points)
             logging.info("All lap data written successfully")
         except Exception as e:
@@ -1302,8 +1304,31 @@ def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
             logging.info("Batch %d of %d written successfully", batch_num, total)
 
 
+def _apply_total_time_offsets(pending_writes):
+    """Annotate every competitor with the elapsed ms it banked in earlier sessions.
+
+    RaceMonitor's TotalTime is a car's elapsed race clock across the *whole* race,
+    but each session's laps anchor on that session's own SessionStartDateEpoc.
+    Subtracting the earlier sessions' elapsed time is what keeps a multi-day race's
+    later sessions from landing hours past their own green flag. The tally is per
+    car because each car has its own clock and may sit a session out entirely.
+    """
+    banked = {}
+    for session in sorted(pending_writes, key=lambda s: s['start_epoc'] or 0):
+        for comp in session['competitors']:
+            car_number = comp['car_number']
+            comp['total_time_offset_ms'] = banked.get(car_number, 0)
+            # influx_laps is pre-filtered to parseable TotalTime values, so max()
+            # sees only ints; default guards the can't-happen empty case.
+            last_total_ms = max(
+                (_time_to_ms(lap['TotalTime']) for lap in comp['influx_laps']),
+                default=None)
+            if last_total_ms is not None:
+                banked[car_number] = last_total_ms
+
+
 def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_positions,
-                      start_epoc, car_number, session_id=None):
+                      start_epoc, car_number, session_id=None, total_time_offset_ms=0):
     """Build InfluxDB Point objects for one competitor's laps."""
     effective_epoc = start_epoc if start_epoc is not None else ctx.start_epoc
     if effective_epoc == 0:
@@ -1316,7 +1341,7 @@ def _build_lap_points(ctx, laps, competitor_name, car_info, class_name, class_po
             logging.warning("%s for %s; skipping lap",
                             _describe_bad_value(lap['TotalTime'], 'TotalTime'), competitor_name)
             continue
-        time_lap_completed_ms = start_epoc_ms + total_time_ms
+        time_lap_completed_ms = start_epoc_ms + total_time_ms - total_time_offset_ms
         lap_time_ms = _time_to_ms(lap['LapTime'])
         try:
             lap_num = int(lap['Lap'])
