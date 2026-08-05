@@ -1232,9 +1232,9 @@
           "type": "influxdb",
           "uid": "wotl-races-flux"
         },
-        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 - 259200000)})) |> keep(columns: [\"_value\"])",
+        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])",
         "query": {
-          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 - 259200000)})) |> keep(columns: [\"_value\"])"
+          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])"
         },
         "refresh": 2,
         "sort": 0,
