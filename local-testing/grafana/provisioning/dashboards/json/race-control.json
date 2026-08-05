@@ -384,7 +384,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
-          "rawQuery": false,
+          "query": "SELECT LAST(\"position\") FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -487,7 +488,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
-          "rawQuery": false,
+          "query": "SELECT LAST(\"class_position\") FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -594,7 +596,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
-          "rawQuery": false,
+          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' GROUP BY \"class\"::tag",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -695,6 +698,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
+          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -787,6 +792,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -876,6 +883,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
