@@ -3334,9 +3334,10 @@ class TestMultiSessionLapTimestamps:
     """
 
     DAY1_EPOC = 1785589317   # 2026-08-01T13:01:57Z
+    MID_EPOC = 1785637000    # overnight session car 252 sits out
     DAY2_EPOC = 1785685338   # 2026-08-02T15:42:18Z
 
-    def _session(self, session_id, start_epoc, lap_times):
+    def _session(self, session_id, start_epoc, lap_times, car_number='252'):
         return {
             'Successful': True,
             'Session': {
@@ -3344,7 +3345,7 @@ class TestMultiSessionLapTimestamps:
                 'SessionStartDateEpoc': start_epoc,
                 'Categories': {'1': {'ID': '1', 'Name': 'B'}},
                 'SortedCompetitors': [{
-                    'Number': '252', 'Category': '1', 'ID': 1,
+                    'Number': car_number, 'Category': '1', 'ID': 1,
                     'SessionID': session_id, 'RaceID': 999,
                     'FirstName': 'Church', 'LastName': 'of Focism',
                     'Position': '8', 'Laps': str(len(lap_times)),
@@ -3360,7 +3361,7 @@ class TestMultiSessionLapTimestamps:
         return {'Lap': str(lap_no), 'LapTime': '0:01:36.704', 'Position': '8',
                 'FlagStatus': 0, 'TotalTime': total_time}
 
-    def _run(self):
+    def _run(self, skipped_session=False):
         day1 = self._session(8715594, self.DAY1_EPOC, [
             self._lap(1, '00:02:04.021'),
             self._lap(305, '09:01:02.620'),
@@ -3369,11 +3370,18 @@ class TestMultiSessionLapTimestamps:
             self._lap(306, '09:03:03.234'),
             self._lap(405, '13:53:14.036'),
         ])
+        sessions = [day1, day2]
+        if skipped_session:
+            # Car 77 only, banking far more elapsed time than 252 ever has.
+            sessions.insert(1, self._session(8716660, self.MID_EPOC, [
+                self._lap(900, '11:00:00.000'),
+                self._lap(901, '12:00:00.000'),
+            ], car_number='77'))
         ctx = _mod.RaceContext('999', '252', MagicMock(), MagicMock(), self.DAY1_EPOC)
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {
-            'Sessions': [{'ID': 8715594}, {'ID': 8717727}]}
-        ctx.client.results.session_details.side_effect = [day1, day2]
+            'Sessions': [{'ID': s['Session']['ID']} for s in sessions]}
+        ctx.client.results.session_details.side_effect = sessions
         captured, cm = _capture_lap_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('B', {})):
             with cm:
@@ -3409,6 +3417,15 @@ class TestMultiSessionLapTimestamps:
         points = self._run()
         last_ts = self._ts_for_lap(points, 405)
         assert last_ts - self.DAY2_EPOC * 1000 == 17531416   # 4:52:11.416
+
+    def test_offset_is_per_car_when_a_car_sits_a_session_out(self):
+        # Car 252 misses the overnight session where car 77 banks 12 hours. Its
+        # day-2 laps must still subtract its own 9:01:02.620, not 77's clock.
+        points = self._run(skipped_session=True)
+        assert self._ts_for_lap(points, 306) == self.DAY2_EPOC * 1000 + 120614
+        assert self._ts_for_lap(points, 405) - self.DAY2_EPOC * 1000 == 17531416
+        # And the sat-out session's own car anchors on that session's start.
+        assert self._ts_for_lap(points, 900) == self.MID_EPOC * 1000 + 39600000
 
 
 class TestBuildLapPointsNonNumericPosition:
