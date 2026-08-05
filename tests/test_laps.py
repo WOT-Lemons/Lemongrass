@@ -3326,6 +3326,108 @@ class TestBuildLapPointsSessionId:
         assert (substr in self._build(session_id)) is present
 
 
+class TestMultiSessionLapTimestamps:
+    """RaceMonitor's TotalTime accumulates across every session of a race, so a
+    later session's laps must be anchored to that session's own start minus the
+    time already banked in earlier sessions. Shapes mirror a real two-day race:
+    day 1 ends at TotalTime 9:01:02, day 2 opens at 9:03:03 the next morning.
+    """
+
+    DAY1_EPOC = 1785589317   # 2026-08-01T13:01:57Z
+    MID_EPOC = 1785637000    # overnight session car 252 sits out
+    DAY2_EPOC = 1785685338   # 2026-08-02T15:42:18Z
+
+    def _session(self, session_id, start_epoc, lap_times, car_number='252'):
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': session_id, 'RaceID': 999, 'Name': 'GP',
+                'SessionStartDateEpoc': start_epoc,
+                'Categories': {'1': {'ID': '1', 'Name': 'B'}},
+                'SortedCompetitors': [{
+                    'Number': car_number, 'Category': '1', 'ID': 1,
+                    'SessionID': session_id, 'RaceID': 999,
+                    'FirstName': 'Church', 'LastName': 'of Focism',
+                    'Position': '8', 'Laps': str(len(lap_times)),
+                    'LastLapTime': '', 'BestPosition': '8', 'BestLap': '1',
+                    'BestLapTime': '0:01:31.631', 'TotalTime': lap_times[-1]['TotalTime'],
+                    'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+                    'LapTimes': lap_times,
+                }],
+            },
+        }
+
+    def _lap(self, lap_no, total_time):
+        return {'Lap': str(lap_no), 'LapTime': '0:01:36.704', 'Position': '8',
+                'FlagStatus': 0, 'TotalTime': total_time}
+
+    def _run(self, skipped_session=False):
+        day1 = self._session(8715594, self.DAY1_EPOC, [
+            self._lap(1, '00:02:04.021'),
+            self._lap(305, '09:01:02.620'),
+        ])
+        day2 = self._session(8717727, self.DAY2_EPOC, [
+            self._lap(306, '09:03:03.234'),
+            self._lap(405, '13:53:14.036'),
+        ])
+        sessions = [day1, day2]
+        if skipped_session:
+            # Car 77 only, banking far more elapsed time than 252 ever has.
+            sessions.insert(1, self._session(8716660, self.MID_EPOC, [
+                self._lap(900, '11:00:00.000'),
+                self._lap(901, '12:00:00.000'),
+            ], car_number='77'))
+        ctx = _mod.RaceContext('999', '252', MagicMock(), MagicMock(), self.DAY1_EPOC)
+        opts = _mod.RaceOptions(network_mode=True)
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': s['Session']['ID']} for s in sessions]}
+        ctx.client.results.session_details.side_effect = sessions
+        captured, cm = _capture_lap_points()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('B', {})):
+            with cm:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'push_influx_session'):
+                        with patch.object(_mod, 'delete_existing_laps'):
+                            with patch.object(_mod, 'delete_existing_standings'):
+                                with patch.object(
+                                        _mod, 'push_influx_standings_historical'):
+                                    with patch.object(_mod, 'print_rankings'):
+                                        _mod.old_race(ctx, opts)
+        return {int(str(p.to_line_protocol()).split()[-1]): p for p in captured}
+
+    def _ts_for_lap(self, points_by_ts, lap_no):
+        for ts, point in points_by_ts.items():
+            if f'lap_no={lap_no}i' in point.to_line_protocol():
+                return ts
+        raise AssertionError(f'lap {lap_no} not written')
+
+    def test_first_session_laps_anchor_on_their_own_session_start(self):
+        points = self._run()
+        assert self._ts_for_lap(points, 1) == self.DAY1_EPOC * 1000 + 124021
+
+    def test_later_session_laps_subtract_elapsed_banked_in_earlier_sessions(self):
+        # Lap 306's TotalTime of 9:03:03.234 is cumulative; only 2:00.614 of it
+        # elapsed during day 2, so it lands 2 minutes after day 2's green flag.
+        points = self._run()
+        assert self._ts_for_lap(points, 306) == self.DAY2_EPOC * 1000 + 120614
+
+    def test_later_session_laps_stay_within_their_session_day(self):
+        # Regression guard: the unoffset arithmetic pushed day 2 roughly nine
+        # hours past the flag, out of any dashboard window covering the race.
+        points = self._run()
+        last_ts = self._ts_for_lap(points, 405)
+        assert last_ts - self.DAY2_EPOC * 1000 == 17531416   # 4:52:11.416
+
+    def test_offset_is_per_car_when_a_car_sits_a_session_out(self):
+        # Car 252 misses the overnight session where car 77 banks 12 hours. Its
+        # day-2 laps must still subtract its own 9:01:02.620, not 77's clock.
+        points = self._run(skipped_session=True)
+        assert self._ts_for_lap(points, 306) == self.DAY2_EPOC * 1000 + 120614
+        assert self._ts_for_lap(points, 405) - self.DAY2_EPOC * 1000 == 17531416
+        # And the sat-out session's own car anchors on that session's start.
+        assert self._ts_for_lap(points, 900) == self.MID_EPOC * 1000 + 39600000
+
+
 class TestBuildLapPointsNonNumericPosition:
     def _ctx(self):
         return _mod.RaceContext('138911', '77', MagicMock(), MagicMock(), 0)

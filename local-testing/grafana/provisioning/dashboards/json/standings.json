@@ -30,7 +30,7 @@
       "tags": [],
       "targetBlank": false,
       "title": "Set time to race",
-      "tooltip": "Set the time range to the selected race's 3-day window",
+      "tooltip": "Set the time range to the selected race",
       "type": "link",
       "url": "/d/wotl-standings/standings?from=${race_from}&to=${race_to}"
     }
@@ -296,9 +296,9 @@
           "type": "influxdb",
           "uid": "wotl-races-flux"
         },
-        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 - 259200000)})) |> keep(columns: [\"_value\"])",
+        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])",
         "query": {
-          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 - 259200000)})) |> keep(columns: [\"_value\"])"
+          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])"
         },
         "refresh": 2,
         "sort": 0,
@@ -313,9 +313,9 @@
           "type": "influxdb",
           "uid": "wotl-races-flux"
         },
-        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])",
+        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: if int(v: r._value) == 0 then \"now\" else string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])",
         "query": {
-          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])"
+          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: if int(v: r._value) == 0 then \"now\" else string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])"
         },
         "refresh": 2,
         "sort": 0,

@@ -33,7 +33,7 @@
       "tags": [],
       "targetBlank": false,
       "title": "Set time to race",
-      "tooltip": "Set the time range to the selected race's 3-day window",
+      "tooltip": "Set the time range to the selected race",
       "type": "link",
       "url": "/d/afsBO4IGz/race-control?from=${race_from}&to=${race_to}"
     }
@@ -353,7 +353,6 @@
         "x": 0,
         "y": 4
       },
-      "hideTimeOverride": true,
       "id": 40,
       "maxDataPoints": 100,
       "options": {
@@ -385,7 +384,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
-          "rawQuery": false,
+          "query": "SELECT LAST(\"position\") FROM \"lap\" WHERE time >= ${race_from}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -417,8 +417,6 @@
           ]
         }
       ],
-      "timeFrom": "1d",
-      "timeShift": "1d",
       "title": "Overall Position",
       "type": "stat"
     },
@@ -459,7 +457,6 @@
         "x": 4,
         "y": 4
       },
-      "hideTimeOverride": true,
       "id": 54,
       "maxDataPoints": 100,
       "options": {
@@ -491,7 +488,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
-          "rawQuery": false,
+          "query": "SELECT LAST(\"class_position\") FROM \"lap\" WHERE time >= ${race_from}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -523,8 +521,6 @@
           ]
         }
       ],
-      "timeFrom": "1d",
-      "timeShift": "1d",
       "title": "Class Position",
       "type": "stat"
     },
@@ -565,7 +561,6 @@
         "x": 8,
         "y": 4
       },
-      "hideTimeOverride": true,
       "id": 56,
       "maxDataPoints": 100,
       "options": {
@@ -601,7 +596,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
-          "rawQuery": false,
+          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE time >= ${race_from}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' GROUP BY \"class\"::tag",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -633,8 +629,6 @@
           ]
         }
       ],
-      "timeFrom": "1d",
-      "timeShift": "1d",
       "title": "Class",
       "type": "stat",
       "transformations": [
@@ -675,7 +669,6 @@
         "x": 11,
         "y": 4
       },
-      "hideTimeOverride": true,
       "id": 55,
       "options": {
         "colorMode": "value",
@@ -705,6 +698,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
+          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE time >= ${race_from}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -736,8 +731,6 @@
           ]
         }
       ],
-      "timeFrom": "1d",
-      "timeShift": "1d",
       "title": "Laps",
       "type": "stat"
     },
@@ -769,7 +762,6 @@
         "x": 16,
         "y": 4
       },
-      "hideTimeOverride": true,
       "id": 53,
       "options": {
         "colorMode": "value",
@@ -800,6 +792,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE time >= ${race_from}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -827,8 +821,6 @@
           ]
         }
       ],
-      "timeFrom": "2d",
-      "timeShift": "1d",
       "title": "Best Lap Time",
       "transparent": true,
       "type": "stat"
@@ -862,7 +854,6 @@
         "x": 20,
         "y": 4
       },
-      "hideTimeOverride": true,
       "options": {
         "colorMode": "value",
         "graphMode": "none",
@@ -892,6 +883,8 @@
           "measurement": "lap",
           "orderByTime": "ASC",
           "policy": "default",
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE time >= ${race_from}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
+          "rawQuery": true,
           "refId": "A",
           "resultFormat": "time_series",
           "select": [
@@ -919,8 +912,6 @@
           ]
         }
       ],
-      "timeFrom": "1d",
-      "timeShift": "1d",
       "title": "Last Lap Time",
       "transparent": true,
       "type": "stat",
@@ -1332,7 +1323,6 @@
         "x": 0,
         "y": 12
       },
-      "hideTimeOverride": false,
       "id": 44,
       "options": {
         "alignValue": "left",
@@ -1384,8 +1374,6 @@
           ]
         }
       ],
-      "timeFrom": "1d",
-      "timeShift": "12h",
       "title": "Flag",
       "type": "state-timeline"
     },
@@ -3571,9 +3559,9 @@
           "type": "influxdb",
           "uid": "wotl-races-flux"
         },
-        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000 - 3600000)})) |> keep(columns: [\"_value\"])",
+        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])",
         "query": {
-          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000 - 3600000)})) |> keep(columns: [\"_value\"])"
+          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])"
         },
         "refresh": 2,
         "sort": 0,
@@ -3588,9 +3576,9 @@
           "type": "influxdb",
           "uid": "wotl-races-flux"
         },
-        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000 - 3600000 + 259200000)})) |> keep(columns: [\"_value\"])",
+        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: if int(v: r._value) == 0 then \"now\" else string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])",
         "query": {
-          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000 - 3600000 + 259200000)})) |> keep(columns: [\"_value\"])"
+          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: if int(v: r._value) == 0 then \"now\" else string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])"
         },
         "refresh": 2,
         "sort": 0,
