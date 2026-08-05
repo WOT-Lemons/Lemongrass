@@ -96,7 +96,7 @@
           "orderByTime": "ASC",
           "policy": "default",
           "rawQuery": true,
-          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
           "refId": "A",
           "resultFormat": "time_series"
         }
@@ -163,7 +163,7 @@
           "orderByTime": "ASC",
           "policy": "default",
           "rawQuery": true,
-          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
           "refId": "A",
           "resultFormat": "time_series"
         }
@@ -227,7 +227,7 @@
           "orderByTime": "ASC",
           "policy": "default",
           "rawQuery": true,
-          "query": "SELECT \"position\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "query": "SELECT \"position\" FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
           "refId": "A",
           "resultFormat": "time_series"
         }
@@ -291,7 +291,7 @@
           "orderByTime": "ASC",
           "policy": "default",
           "rawQuery": true,
-          "query": "SELECT LAST(\"class_position\") FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "query": "SELECT LAST(\"class_position\") FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
           "refId": "A",
           "resultFormat": "time_series"
         }
@@ -352,7 +352,7 @@
           "orderByTime": "ASC",
           "policy": "default",
           "rawQuery": true,
-          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/ GROUP BY \"class\"::tag",
+          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/ GROUP BY \"class\"::tag",
           "refId": "A",
           "resultFormat": "time_series"
         }
@@ -424,7 +424,7 @@
           "orderByTime": "ASC",
           "policy": "default",
           "rawQuery": true,
-          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
+          "query": "SELECT LAST(\"lap_no\") FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"session_id\" =~ /^(${session:regex})$/",
           "refId": "A",
           "resultFormat": "time_series"
         }
@@ -722,7 +722,7 @@
           "orderByTime": "ASC",
           "policy": "default",
           "rawQuery": true,
-          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE $timeFilter AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"flag_status\" = 'Green' AND \"session_id\" =~ /^(${session:regex})$/",
+          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE time >= ${race_from}ms AND time <= ${race_to}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno' AND \"flag_status\" = 'Green' AND \"session_id\" =~ /^(${session:regex})$/",
           "refId": "A",
           "resultFormat": "time_series"
         }
