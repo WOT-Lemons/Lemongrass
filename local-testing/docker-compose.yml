@@ -37,6 +37,22 @@ services:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
 
+  # Grafana has no file provisioning for library panels — they live only in its
+  # database. This one-shot container pushes them over the HTTP API so the
+  # provisioned dashboards' library-panel-ref tiles resolve, mirroring prod.
+  grafana-library-panels:
+    image: curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+    depends_on:
+      - grafana
+    environment:
+      GRAFANA_URL: http://grafana:3000
+      GRAFANA_AUTH: admin:local-dev-password
+    volumes:
+      - ./grafana/library_panels:/library_panels:ro
+      - ./grafana/bootstrap-library-panels.sh:/bootstrap-library-panels.sh:ro
+    entrypoint: ["sh", "/bootstrap-library-panels.sh"]
+    restart: on-failure:3
+
   elm327:
     build:
       context: elm327
