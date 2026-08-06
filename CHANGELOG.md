@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.4.1](https://github.com/WOT-Lemons/Lemongrass/compare/v5.4.0...v5.4.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **laps:** anchor multi-session laps and scope race dashboards to the whole race ([f114a06](https://github.com/WOT-Lemons/Lemongrass/commit/f114a061944c828ed91266e1d229de3fa05f17dd))
+* **laps:** anchor multi-session laps and scope race dashboards to the whole race ([f114a06](https://github.com/WOT-Lemons/Lemongrass/commit/f114a061944c828ed91266e1d229de3fa05f17dd))
+
 ## [5.4.0](https://github.com/WOT-Lemons/Lemongrass/compare/v5.3.1...v5.4.0) (2026-08-04)
 
 
