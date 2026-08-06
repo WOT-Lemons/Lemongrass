@@ -1,0 +1,115 @@
+{
+  "datasource": {
+    "type": "influxdb",
+    "uid": "wotl-pisugar-ql"
+  },
+  "description": "",
+  "fieldConfig": {
+    "defaults": {
+      "color": {
+        "mode": "thresholds"
+      },
+      "mappings": [
+        {
+          "options": {
+            "false": {
+              "color": "red",
+              "index": 1,
+              "text": "Power Loss"
+            },
+            "true": {
+              "color": "green",
+              "index": 0,
+              "text": "Power Connected"
+            }
+          },
+          "type": "value"
+        }
+      ],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "red",
+            "value": null
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 0,
+    "y": 1
+  },
+  "options": {
+    "colorMode": "background",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "percentChangeColorMode": "standard",
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "/^pisugar\\-battery\\-power\\-plugged\\.last$/",
+      "values": false
+    },
+    "showPercentChange": false,
+    "textMode": "auto",
+    "wideLayout": true
+  },
+  "pluginVersion": "11.4.0",
+  "targets": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-pisugar-ql"
+      },
+      "groupBy": [
+        {
+          "params": [
+            "$__interval"
+          ],
+          "type": "time"
+        },
+        {
+          "params": [
+            "null"
+          ],
+          "type": "fill"
+        }
+      ],
+      "measurement": "pisugar-battery-power-plugged",
+      "orderByTime": "ASC",
+      "policy": "default",
+      "refId": "A",
+      "resultFormat": "time_series",
+      "select": [
+        [
+          {
+            "params": [
+              "value"
+            ],
+            "type": "field"
+          },
+          {
+            "params": [],
+            "type": "last"
+          }
+        ]
+      ],
+      "tags": [
+        {
+          "key": "host",
+          "operator": "=~",
+          "value": "/^$host$/"
+        }
+      ]
+    }
+  ],
+  "title": "PiSugar Power Status",
+  "type": "stat"
+}

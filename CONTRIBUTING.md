@@ -30,6 +30,14 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
    `pisugar`, and legacy `stats_252/autogen` buckets. These are non-secret,
    local-only values.
 
+   A one-shot `grafana-library-panels` container also runs on every `up`. Grafana
+   provisions dashboards and datasources from files but has no file provisioning
+   for library panels, so this container pushes them into Grafana over its HTTP
+   API instead; it exits with code 0 once done, which is normal. The models it
+   pushes, under `local-testing/grafana/library_panels/`, are copies of the
+   prod library panels — update both together whenever either side changes, or
+   the local stack stops reproducing prod.
+
 2. Point the CLI at the local stack by sourcing the committed app env:
 
    ```bash
