@@ -41,7 +41,7 @@ services:
   # database. This one-shot container pushes them over the HTTP API so the
   # provisioned dashboards' library-panel-ref tiles resolve, mirroring prod.
   grafana-library-panels:
-    image: curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+    image: curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13
     depends_on:
       - grafana
     environment:
