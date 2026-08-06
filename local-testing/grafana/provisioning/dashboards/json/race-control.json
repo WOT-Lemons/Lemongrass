@@ -826,96 +826,19 @@
       "type": "stat"
     },
     {
-      "datasource": {
-        "type": "influxdb",
-        "uid": "wotl-laps-ql"
-      },
-      "description": "",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 3,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "rgb(255, 255, 255)",
-                "value": null
-              }
-            ]
-          },
-          "unit": "clockms"
-        },
-        "overrides": []
-      },
       "gridPos": {
         "h": 4,
         "w": 4,
         "x": 20,
         "y": 4
       },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "last"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "text": {},
-        "textMode": "auto",
-        "wideLayout": true
+      "id": 52,
+      "libraryPanel": {
+        "name": "Last Lap Time",
+        "uid": "aetsk34lvq22of"
       },
-      "pluginVersion": "12.4.3",
-      "targets": [
-        {
-          "datasource": {
-            "type": "influxdb",
-            "uid": "wotl-laps-ql"
-          },
-          "groupBy": [],
-          "measurement": "lap",
-          "orderByTime": "ASC",
-          "policy": "default",
-          "query": "SELECT \"lap_time\" FROM \"lap\" WHERE time >= ${race_from}ms AND \"race_id\" = '$raceid' AND \"car_number\" = '$carno'",
-          "rawQuery": true,
-          "refId": "A",
-          "resultFormat": "time_series",
-          "select": [
-            [
-              {
-                "params": [
-                  "lap_time"
-                ],
-                "type": "field"
-              }
-            ]
-          ],
-          "tags": [
-            {
-              "key": "race_id",
-              "operator": "=",
-              "value": "$raceid"
-            },
-            {
-              "condition": "AND",
-              "key": "car_number",
-              "operator": "=",
-              "value": "$carno"
-            }
-          ]
-        }
-      ],
       "title": "Last Lap Time",
-      "transparent": true,
-      "type": "stat",
-      "id": 52
+      "type": "library-panel-ref"
     },
     {
       "datasource": {
@@ -1034,114 +957,19 @@
       "type": "stat"
     },
     {
-      "datasource": {
-        "type": "influxdb",
-        "uid": "wotl-pisugar-ql"
-      },
-      "description": "",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "options": {
-                "false": {
-                  "color": "red",
-                  "index": 1,
-                  "text": "Power Loss"
-                },
-                "true": {
-                  "color": "green",
-                  "index": 0,
-                  "text": "Power Connected"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
       "gridPos": {
         "h": 4,
         "w": 4,
         "x": 4,
         "y": 8
       },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "/^pisugar\\-battery\\-power\\-plugged\\.last$/",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
+      "id": 50,
+      "libraryPanel": {
+        "name": "PiSugar Power Status",
+        "uid": "aek7q7arua7swe"
       },
-      "pluginVersion": "11.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "influxdb",
-            "uid": "wotl-pisugar-ql"
-          },
-          "groupBy": [
-            {
-              "params": [
-                "$__interval"
-              ],
-              "type": "time"
-            },
-            {
-              "params": [
-                "null"
-              ],
-              "type": "fill"
-            }
-          ],
-          "measurement": "pisugar-battery-power-plugged",
-          "orderByTime": "ASC",
-          "policy": "default",
-          "refId": "A",
-          "resultFormat": "time_series",
-          "select": [
-            [
-              {
-                "params": [
-                  "value"
-                ],
-                "type": "field"
-              },
-              {
-                "params": [],
-                "type": "last"
-              }
-            ]
-          ],
-          "tags": []
-        }
-      ],
       "title": "PiSugar Power Status",
-      "type": "stat",
-      "id": 50
+      "type": "library-panel-ref"
     },
     {
       "datasource": {
@@ -3523,6 +3351,19 @@
           "uid": "wotl-telem-ql"
         },
         "query": "SHOW TAG VALUES FROM \"-Engine-RPM\" WITH KEY = \"vin\"",
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-pisugar-ql"
+        },
+        "query": "SHOW TAG VALUES FROM \"pisugar-battery-level\" WITH KEY = \"host\"",
         "refresh": 1,
         "includeAll": false,
         "multi": false
