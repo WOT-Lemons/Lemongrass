@@ -3517,19 +3517,13 @@
       {
         "name": "vin",
         "label": "Car",
-        "type": "custom",
-        "query": "Test Car : WP0ZZZ99ZTS39",
-        "current": {
-          "text": "Test Car",
-          "value": "WP0ZZZ99ZTS39"
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "wotl-telem-ql"
         },
-        "options": [
-          {
-            "text": "Test Car",
-            "value": "WP0ZZZ99ZTS39",
-            "selected": true
-          }
-        ],
+        "query": "SHOW TAG VALUES FROM \"-Engine-RPM\" WITH KEY = \"vin\"",
+        "refresh": 1,
         "includeAll": false,
         "multi": false
       },
