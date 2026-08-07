@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.4.2](https://github.com/WOT-Lemons/Lemongrass/compare/v5.4.1...v5.4.2) (2026-08-07)
+
+
+### Bug Fixes
+
+* **telem:** recover full VIN truncated by python-obd decoder ([#254](https://github.com/WOT-Lemons/Lemongrass/issues/254)) ([86bc08b](https://github.com/WOT-Lemons/Lemongrass/commit/86bc08bf3ad64307202c805a43b5813e38745c57))
+
+
+### Dependencies
+
+* update python:3.14-slim-trixie docker digest to a7fb1e6 ([#250](https://github.com/WOT-Lemons/Lemongrass/issues/250)) ([3200547](https://github.com/WOT-Lemons/Lemongrass/commit/32005478545b8e828d827f140745e2184781e5ce))
+
 ## [5.4.1](https://github.com/WOT-Lemons/Lemongrass/compare/v5.4.0...v5.4.1) (2026-08-06)
 
 
