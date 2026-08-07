@@ -224,6 +224,42 @@ def _query_fuel_type_once(connection):
     _queue_point(Point(measurement).field("value", r.value).time(ts))
 
 
+# A VIN has been 17 characters since 1981, so anything else means a lossy decode.
+_VIN_LENGTH = 17
+# Mode 09 pads its payload with control bytes; none are valid VIN characters.
+_VIN_PADDING = b"\x00\x01\x02 \t\r\n"
+
+
+def _is_vin(candidate):
+    """True if candidate looks like a complete VIN (17 alphanumeric characters)."""
+    return len(candidate) == _VIN_LENGTH and candidate.isalnum()
+
+
+def _decode_vin(response):
+    """Decode the Mode 09 VIN from a response's raw messages, or None.
+
+    We deliberately ignore response.value: python-obd 0.7.3 decodes Mode 09
+    strings with
+
+        d.strip().strip(b'\\x00' b'\\x01' b'\\x02' b'\\\\x00' b'\\\\x01' b'\\\\x02')
+
+    (obd/decoders.py:508). Adjacent bytes literals concatenate, and the last
+    three are the *characters* backslash, x, 0, 1 and 2 rather than escapes, so
+    the strip set is {0x00, 0x01, 0x02, '0', '1', '2', '\\\\', 'x'} -- applied to
+    both ends. Any VIN starting or ending in 0/1/2 therefore comes back
+    truncated: the ELM327 emulator's WP0ZZZ99ZTS390000 arrives as
+    WP0ZZZ99ZTS39. Upstream fix brendan-w/python-OBD#276 has been open since
+    2024 with no release, so we decode off the wire ourselves.
+    """
+    for message in getattr(response, "messages", None) or []:
+        # data[:2] is the mode/PID echo; the remainder is padded ASCII.
+        candidate = bytes(message.data[2:]).strip(_VIN_PADDING).decode(
+            "ascii", errors="ignore")
+        if _is_vin(candidate):
+            return candidate
+    return None
+
+
 def _resolve_vin(connection):
     """Resolve the car VIN for tagging: OBD Mode 09, then the configured VIN, then 'unknown'.
 
@@ -241,12 +277,22 @@ def _resolve_vin(connection):
     obd_vin = None
     try:
         r = obd.OBD.query(connection, obd.commands.VIN, force=True)
-        if r.value:
+        obd_vin = _decode_vin(r)
+        if obd_vin is None and r.value:
+            # No usable raw message, but the library decoded something. Accept it
+            # only if it is a complete VIN -- a short one is python-obd's
+            # truncation bug (see _decode_vin), and tagging telemetry with a
+            # partial VIN risks colliding with another car's prefix.
             val = r.value
             if isinstance(val, (bytes, bytearray)):
                 val = val.decode("ascii", errors="ignore")
-            # Mode 09 VINs can arrive null-padded; strip whitespace and NULs.
-            obd_vin = str(val).strip().strip("\x00").strip()
+            val = str(val).strip().strip("\x00").strip()
+            if _is_vin(val):
+                obd_vin = val
+            else:
+                logger.warning(
+                    "Discarding malformed OBD VIN %r (expected %d characters); "
+                    "falling back to the configured VIN", val, _VIN_LENGTH)
     except Exception:
         logger.exception("VIN query failed; falling back to configured VIN")
 

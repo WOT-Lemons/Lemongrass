@@ -108,6 +108,35 @@ def test_new_value_queues_point_from_real_rpm(emulator, connection):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("attempt", range(3))
+def test_decode_vin_recovers_what_the_obd_decoder_truncates(emulator, connection, attempt):
+    """Decode a real Mode 09 response off the wire and beat python-obd's decoder.
+
+    The emulator serves a different sample VIN on each query (WP0ZZZ99ZTS390000,
+    MAT403096BNL00000, SB1ZS3JE60E282102, ...), all of which end in digits that
+    obd 0.7.3 strips -- so this is parametrized over several rather than pinned
+    to one. Both values come from the SAME response, which makes the comparison
+    deterministic despite the rotation.
+    """
+    r = emulator.obd.OBD.query(connection, emulator.obd.commands.VIN, force=True)
+    library_value = bytes(r.value).decode("ascii")
+    decoded = telem._decode_vin(r)
+
+    assert len(decoded) == 17 and decoded.isalnum()
+    # The library's value is what's left after its strip() eats VIN characters,
+    # so it is always a substring of the true VIN -- and here, a shorter one.
+    assert library_value in decoded
+    assert len(library_value) < len(decoded), "expected the upstream bug to truncate"
+
+
+@pytest.mark.integration
+def test_resolve_vin_tags_a_complete_vin_from_emulator(emulator, connection, monkeypatch):
+    monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
+    vin = telem._resolve_vin(connection)
+    assert len(vin) == 17 and vin.isalnum()
+
+
+@pytest.mark.integration
 def test_query_fuel_type_once_matches_support(emulator, connection):
     telem.pending_points.clear()
     telem._query_fuel_type_once(connection)

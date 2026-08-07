@@ -270,9 +270,46 @@ class TestQueryFuelTypeOnce:
         assert any("Fuel-type query failed" in r.message for r in caplog.records)
 
 
+class _Msg:
+    """Stand-in for obd.Message, which only needs to expose .data here."""
+
+    def __init__(self, data):
+        self.data = bytearray(data)
+
+
+class _VinResponse:
+    """A Mode 09 VIN response shaped like python-obd builds one.
+
+    `value` is what obd 0.7.3's decode_encoded_string produces (truncated, see
+    TestResolveVin.test_recovers_vin_truncated_by_obd_decoder); `messages`
+    carries the intact bytes off the wire.
+    """
+
+    def __init__(self, value, raw):
+        self.value = value
+        self.messages = [_Msg(raw)]
+
+
 class TestResolveVin:
     def setup_method(self):
         _reset()
+
+    def test_recovers_vin_truncated_by_obd_decoder(self, monkeypatch):
+        # python-obd 0.7.3 decoders.py:508 strips b'\x00\x01\x02\\x00\\x01\\x02'
+        # from BOTH ends of the decoded string. Those last three literals are the
+        # characters \, x, 0, 1 and 2 -- not escapes -- so the strip set includes
+        # the ASCII digits '0', '1' and '2' and eats them off a VIN's tail. This
+        # is the exact byte sequence the ELM327 emulator puts on the wire, whose
+        # real VIN is WP0ZZZ99ZTS390000 but which we tag as WP0ZZZ99ZTS39.
+        monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
+        connection = MagicMock()
+        r = _VinResponse(
+            value=bytearray(b"WP0ZZZ99ZTS39"),
+            raw=b"I\x02\x01WP0ZZZ99ZTS390000\x00\x00",
+        )
+        with patch.object(_mod.obd.OBD, "query", return_value=r):
+            vin = _mod._resolve_vin(connection)
+        assert vin == "WP0ZZZ99ZTS390000"
 
     def test_uses_obd_vin_when_available(self, monkeypatch):
         # python-obd returns Mode 09 VIN as a bytearray; it must be decoded, not
@@ -297,6 +334,22 @@ class TestResolveVin:
         with patch.object(_mod.obd.OBD, "query", return_value=r):
             vin = _mod._resolve_vin(connection)
         assert vin == "1FATESTVIN0000001"
+
+    def test_discards_truncated_vin_when_raw_message_is_unavailable(
+            self, monkeypatch, tmp_path, caplog):
+        # If the raw message can't be decoded we fall back to python-obd's value,
+        # which may still be truncated. A partial VIN must not become a tag: it
+        # could collide with another car's prefix. Prefer the configured VIN.
+        cfg = tmp_path / "c.toml"
+        cfg.write_text('[telem]\nvin = "CFGVIN00000000004"\n')
+        monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+        connection = MagicMock()
+        r = _VinResponse(value=bytearray(b"WP0ZZZ99ZTS39"), raw=b"")
+        with patch.object(_mod.obd.OBD, "query", return_value=r), \
+                caplog.at_level(logging.WARNING):
+            vin = _mod._resolve_vin(connection)
+        assert vin == "CFGVIN00000000004"
+        assert any("malformed OBD VIN" in m for m in caplog.messages)
 
     def test_force_queries_vin_even_when_supports_false(self, monkeypatch):
         monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
