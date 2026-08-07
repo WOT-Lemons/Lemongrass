@@ -140,7 +140,7 @@ wheels = [
 
 [[package]]
 name = "lemongrass"
-version = "5.4.1"
+version = "5.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "influxdb-client" },
