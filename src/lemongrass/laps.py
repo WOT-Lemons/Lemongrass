@@ -924,6 +924,12 @@ def old_race(ctx, opts):
                 })
             pending_writes.append(session_entry)
 
+    # Collapse sessions RaceMonitor returned more than once BEFORE anything reads
+    # pending_writes: expected must count what actually gets written, and
+    # _apply_total_time_offsets must bank elapsed time across real sessions rather
+    # than treating N copies of one session as N sequential ones.
+    pending_writes = _merge_duplicate_sessions(pending_writes)
+
     no_data = not pending_writes or not any(s['competitors'] for s in pending_writes)
     if opts.network_mode and no_data:
         logging.warning(

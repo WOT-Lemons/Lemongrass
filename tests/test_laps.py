@@ -3402,7 +3402,12 @@ class TestOldRaceFullField:
     def test_push_influx_session_called_once_per_session(self):
         ctx = self._ctx(self._session_details_two_cars())
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}, {'ID': 2}]}
-        ctx.client.results.session_details.return_value = self._session_details_two_cars()
+        # Two genuinely different sessions (distinct start epochs) so the
+        # duplicate-session merge does not collapse them into one.
+        other_session = self._session_details_two_cars()
+        other_session['Session']['SessionStartDateEpoc'] = 1000
+        ctx.client.results.session_details.side_effect = [
+            self._session_details_two_cars(), other_session]
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx_session') as mock_session:
@@ -3448,6 +3453,54 @@ class TestOldRaceFullField:
         # session_id tag comes from the session details ID=1
         for point in captured:
             assert 'session_id=1' in point.to_line_protocol()
+
+    def _duplicated_session_details(self):
+        """Two session IDs describing the same session — same name, same start."""
+        return {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 500,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [self._make_competitor('42', 1, '1')],
+            },
+        }
+
+    def test_duplicate_sessions_write_laps_once(self):
+        details = self._duplicated_session_details()
+        ctx = self._ctx(details)
+        # RaceMonitor hands back four IDs for one real session
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}, {'ID': 3}, {'ID': 4}]}
+        ctx.client.results.session_details.return_value = details
+        opts = _mod.RaceOptions(network_mode=True)
+        captured, cm = self._capture_points()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with cm:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        # one competitor, one lap, four duplicate session ids -> one point
+        assert len(captured) == 1
+
+    def test_expected_lap_count_matches_merged_writes(self):
+        details = self._duplicated_session_details()
+        ctx = self._ctx(details)
+        ctx.client.results.sessions_for_race.return_value = {
+            'Sessions': [{'ID': 1}, {'ID': 2}, {'ID': 3}, {'ID': 4}]}
+        ctx.client.results.session_details.return_value = details
+        opts = _mod.RaceOptions(network_mode=True)
+        captured, cm = self._capture_points()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with cm:
+                with patch.object(_mod, 'push_influx_race') as mock_stamp:
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        expected_arg = mock_stamp.call_args[0][2]
+        session_count_arg = mock_stamp.call_args[0][3]
+        assert expected_arg == len(captured)
+        assert session_count_arg == 1
 
 
 class TestBuildLapPointsSessionId:
