@@ -1010,16 +1010,16 @@ def old_race(ctx, opts):
             logging.warning("Skipping race stamp so next run will re-backfill")
             return 1
 
+        delete_existing_sessions(ctx)
+        for session in pending_writes:
+            push_influx_session(
+                ctx, session['session_id'], session['session_name'], session['start_epoc'])
+
         if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
             logging.error(
                 "Race metadata write failed for race %s — failing the run so the "
                 "next backfill retries", ctx.race_id)
             return 1
-
-        delete_existing_sessions(ctx)
-        for session in pending_writes:
-            push_influx_session(
-                ctx, session['session_id'], session['session_name'], session['start_epoc'])
 
         standings_ok = delete_existing_standings(ctx)
         for session in pending_writes:

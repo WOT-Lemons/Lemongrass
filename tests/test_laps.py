@@ -3595,13 +3595,44 @@ class TestOldRaceFullField:
     def test_sessions_cleared_before_rewrite(self):
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
+        parent = MagicMock()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx_race'):
                 with patch.object(_mod, 'delete_existing_laps'):
                     with patch.object(_mod, 'delete_existing_sessions') as mock_del:
-                        with patch.object(_mod, 'print_rankings'):
-                            _mod.old_race(ctx, opts)
+                        with patch.object(_mod, 'push_influx_session') as mock_push:
+                            with patch.object(_mod, 'print_rankings'):
+                                parent.attach_mock(mock_del, 'delete_existing_sessions')
+                                parent.attach_mock(mock_push, 'push_influx_session')
+                                _mod.old_race(ctx, opts)
         mock_del.assert_called_once_with(ctx)
+        assert mock_push.called
+        # Delete must fire before any session is rewritten, so a failure between
+        # them leaves no session records rather than a half-rewritten set.
+        method_order = [c[0] for c in parent.mock_calls]
+        assert method_order.index('delete_existing_sessions') < method_order.index(
+            'push_influx_session')
+
+    def test_sessions_cleared_before_race_stamp(self):
+        """delete_existing_sessions + the session rewrite must happen before
+        push_influx_race stamps the race complete — otherwise a write failure in
+        between leaves a race stamped complete with zero session records, and
+        --skip-if-complete never repairs it (it never checks sessions).
+        """
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        parent = MagicMock()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'delete_existing_laps'):
+                    with patch.object(_mod, 'delete_existing_sessions') as mock_del:
+                        with patch.object(_mod, 'print_rankings'):
+                            parent.attach_mock(mock_del, 'delete_existing_sessions')
+                            parent.attach_mock(mock_race, 'push_influx_race')
+                            _mod.old_race(ctx, opts)
+        method_order = [c[0] for c in parent.mock_calls]
+        assert method_order.index('delete_existing_sessions') < method_order.index(
+            'push_influx_race')
 
 
 class TestBuildLapPointsSessionId:
