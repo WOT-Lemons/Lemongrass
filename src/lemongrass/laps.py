@@ -1339,7 +1339,9 @@ def _merge_duplicate_sessions(pending_writes):
     for key in order:
         siblings = groups[key]
         if len(siblings) == 1:
-            merged.append(siblings[0])
+            entry = dict(siblings[0])
+            entry['competitors'] = [dict(comp) for comp in entry['competitors']]
+            merged.append(entry)
             continue
 
         by_car = {}

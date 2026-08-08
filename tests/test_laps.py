@@ -3219,6 +3219,13 @@ class TestMergeDuplicateSessions:
         merged = _mod._merge_duplicate_sessions(pending)
         assert merged == pending
 
+    def test_single_session_competitor_dicts_are_not_shared(self):
+        original = self._session(10, [self._comp('42', [1, 2])])
+        pending = [original]
+        merged = _mod._merge_duplicate_sessions(pending)
+        merged[0]['competitors'][0]['competitor_name'] = 'Mutated'
+        assert original['competitors'][0]['competitor_name'] == 'Driver'
+
 
 class TestOldRaceFullField:
     def _make_competitor(self, number, comp_id, position):
