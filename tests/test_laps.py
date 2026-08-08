@@ -3248,6 +3248,35 @@ class TestMergeDuplicateSessions:
         merged = _mod._merge_duplicate_sessions(pending)
         assert merged == pending
 
+    def test_same_name_none_start_epoc_not_merged(self):
+        """Two real heats both named 'Race' with no start epoch must stay separate —
+        merging would silently drop one heat's laps (union-by-lap-number picks a
+        winner per lap number). A session with no start epoch can't be time-anchored
+        anyway, so refusing to merge it costs nothing.
+        """
+        pending = [
+            self._session(1, [self._comp('42', [1, 2, 3, 4, 5])], name='Race', start=None),
+            self._session(2, [self._comp('42', [1, 2, 3, 4, 5])], name='Race', start=None),
+        ]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert len(merged) == 2
+
+    def test_same_name_zero_start_epoc_not_merged(self):
+        pending = [
+            self._session(1, [self._comp('42', [1, 2, 3])], name='Race', start=0),
+            self._session(2, [self._comp('42', [1, 2, 3])], name='Race', start=0),
+        ]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert len(merged) == 2
+
+    def test_empty_session_name_not_merged(self):
+        pending = [
+            self._session(1, [self._comp('42', [1, 2, 3])], name='', start=1000),
+            self._session(2, [self._comp('42', [1, 2, 3])], name='', start=1000),
+        ]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert len(merged) == 2
+
     def test_single_session_competitor_dicts_are_not_shared(self):
         original = self._session(10, [self._comp('42', [1, 2])])
         pending = [original]

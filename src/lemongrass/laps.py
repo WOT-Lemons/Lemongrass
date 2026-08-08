@@ -1329,14 +1329,33 @@ def _merge_duplicate_sessions(pending_writes):
     than picking one copy wholesale. Selection is per car: a sibling can be the
     base for one car and not another.
 
+    Either key component being falsy (missing session_name, or start_epoc of
+    None or 0) makes the entry unmergeable — it groups only with itself, keyed
+    by its own session_id. Without this, two distinct sessions that happen to
+    share a name and lack a start epoch (e.g. two heats both named "Race")
+    would collapse, and the per-lap union would silently discard whichever
+    heat's lap didn't win the tie for a given lap number. A session with no
+    start epoch can't be time-anchored anyway (_build_lap_points warns and
+    anchors to the Unix epoch), so treating it as unmergeable costs nothing.
+
     Returns a new list, leaving pending_writes untouched. Group order follows first
     appearance so the caller's session ordering survives — _apply_total_time_offsets
     depends on it.
+
+    Laps are keyed by int(lap['Lap']); this is safe only because the caller
+    pre-filters non-numeric Lap values before building pending_writes and drops
+    any competitor whose laps are all filtered out, so every 'Lap' seen here is
+    already known to parse as an int.
     """
     groups = {}
     order = []
     for entry in pending_writes:
-        key = (entry['session_name'], entry['start_epoc'])
+        if entry['session_name'] and entry['start_epoc']:
+            key = (entry['session_name'], entry['start_epoc'])
+        else:
+            # No real (name, start_epoc) identity to group on — group with
+            # nothing else by keying on this entry's own identity.
+            key = object()
         if key not in groups:
             groups[key] = []
             order.append(key)
