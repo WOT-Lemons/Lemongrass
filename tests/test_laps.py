@@ -1389,6 +1389,7 @@ class TestOldRaceSkip:
     def _ctx(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
         ctx.query_api = MagicMock()
+        ctx.delete_api = MagicMock()
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
         return ctx
@@ -1979,6 +1980,7 @@ class TestOldRaceClassWiring:
 
     def test_passes_class_name_to_build_lap_points(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
@@ -1994,6 +1996,7 @@ class TestOldRaceClassWiring:
         # ctx.start_epoc=9999 is intentionally different from SessionStartDateEpoc=5555;
         # the emitted timestamp must anchor on the session epoch (5555*1000 + 90000ms).
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 9999)
+        ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         session = self._session_details()
         session['Session']['SessionStartDateEpoc'] = 5555
@@ -2011,6 +2014,7 @@ class TestOldRaceClassWiring:
         # Missing SessionStartDateEpoc -> None passed through -> _build_lap_points
         # falls back to ctx.start_epoc (7000 here), anchoring at 7000*1000 + 90000ms.
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 7000)
+        ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         session = self._session_details()
         del session['Session']['SessionStartDateEpoc']
@@ -2036,6 +2040,7 @@ class TestOldRaceClassWiring:
 
     def test_passes_competitor_name_to_build_lap_points(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
@@ -2049,6 +2054,7 @@ class TestOldRaceClassWiring:
 
     def test_passes_car_info_to_build_lap_points(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         session = self._session_details()
         session['Session']['SortedCompetitors'][0]['AdditionalData'] = '2005/Toy/Celica'
@@ -2064,6 +2070,7 @@ class TestOldRaceClassWiring:
 
     def test_competitor_name_none_when_both_name_fields_empty(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         session = self._session_details()
         session['Session']['SortedCompetitors'][0]['FirstName'] = ''
@@ -2135,8 +2142,12 @@ class TestOldRaceClassWiring:
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
         order = []
+        def _delete_laps(c):
+            order.append('delete')
+            return True
+
         with patch.object(_mod, 'delete_existing_laps',
-                          side_effect=lambda c: order.append('delete')) as mock_del:
+                          side_effect=_delete_laps) as mock_del:
             with patch.object(_mod, '_write_points_chunked',
                               side_effect=lambda *a, **k: order.append('write')):
                 with patch.object(_mod, 'push_influx_race'):
@@ -2980,6 +2991,31 @@ class TestOldRaceMetadataFailure:
                     with patch.object(_mod, 'print_rankings'):
                         result = _mod.old_race(ctx, opts)
         assert result == 1
+
+    def test_lap_delete_failure_fails_run_before_any_write(self):
+        """A failed lap delete can leave stale points behind; bail out before
+        writing new laps or stamping the race complete, so the next backfill
+        retries the whole rewrite instead of reporting false success."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'delete_existing_laps', return_value=False):
+            with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'print_rankings'):
+                    result = _mod.old_race(ctx, opts)
+        assert result == 1
+        mock_race.assert_not_called()
+        assert not ctx.write_api.write.called
+
+    def test_lap_delete_success_still_writes_and_stamps(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'delete_existing_laps', return_value=True):
+            with patch.object(_mod, 'push_influx_race', return_value=True) as mock_race:
+                with patch.object(_mod, 'print_rankings'):
+                    result = _mod.old_race(ctx, opts)
+        assert result is None
+        mock_race.assert_called_once()
+        assert ctx.write_api.write.called
 
 
 class TestPushInfluxSession:

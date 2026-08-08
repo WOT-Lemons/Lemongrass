@@ -986,7 +986,12 @@ def old_race(ctx, opts):
                     "Race %s laps complete but standings stale/missing (%d of %d "
                     "current) — rewriting", ctx.race_id, std_current, std_total)
 
-        delete_existing_laps(ctx)
+        if not delete_existing_laps(ctx):
+            logging.error(
+                "Deleting existing laps failed for race %s — failing the run so "
+                "the next backfill retries", ctx.race_id)
+            return 1
+
         total_competitors = sum(len(s['competitors']) for s in pending_writes)
         logging.info(
             "Writing %d session(s), %d competitor(s)...",
@@ -1659,7 +1664,12 @@ def existing_lap_counts_fieldwide(ctx):
 
 
 def delete_existing_laps(ctx):
-    """Delete all lap points for this race so a backfill can replace them."""
+    """Delete all lap points for this race so a backfill can replace them.
+
+    Returns True on success, False if the delete failed (logged, not raised) —
+    old_race treats a failed delete the same as a failed session write: it
+    aborts before stamping the race complete.
+    """
     try:
         ctx.delete_api.delete(
             start='1970-01-01T00:00:00Z',
@@ -1667,8 +1677,10 @@ def delete_existing_laps(ctx):
             predicate=f'_measurement="lap" AND race_id="{ctx.race_id}"',
             bucket=_influx.BUCKET_LAPS,
         )
+        return True
     except Exception as e:
         logging.error("Deleting existing laps failed: %s", e)
+        return False
 
 
 def delete_existing_sessions(ctx):
