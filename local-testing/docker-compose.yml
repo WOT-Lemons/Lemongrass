@@ -25,7 +25,7 @@ services:
       retries: 12
 
   grafana:
-    image: grafana/grafana:12.4@sha256:0b059afc13dc5bd60ac35b8655976faa1b6f61ef83fc87491a03a7cdb8bf9d18
+    image: grafana/grafana:12.4@sha256:7753ad493720e33560077e8bc5e05fbce4ade777f1387b19ab5050b6777111dd
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
