@@ -1,5 +1,21 @@
 # Changelog
 
+## [6.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v5.4.2...v6.0.0) (2026-08-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **laps:** `SCHEMA_VERSION` goes 4 → 5. Stored races must be re-backfilled with `lemongrass race-backfill --upgrade-stored` after this merges, and saved `$session` selections in Grafana reset because the canonical session IDs change.
+
+### Features
+
+* **laps:** collapse duplicate sessions and correct car_number tags ([#258](https://github.com/WOT-Lemons/Lemongrass/issues/258)) ([c4e8223](https://github.com/WOT-Lemons/Lemongrass/commit/c4e822311a90205e35b74c74813a4d6ac3a302e1))
+
+
+### Dependencies
+
+* lock file maintenance ([#260](https://github.com/WOT-Lemons/Lemongrass/issues/260)) ([17a3f1e](https://github.com/WOT-Lemons/Lemongrass/commit/17a3f1e3f2e21217ff94018bb330eb7cd0260a47))
+
 ## [5.4.2](https://github.com/WOT-Lemons/Lemongrass/compare/v5.4.1...v5.4.2) (2026-08-07)
 
 
