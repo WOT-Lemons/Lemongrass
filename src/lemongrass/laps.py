@@ -49,7 +49,7 @@ EPOCH_START = '1970-01-01T00:00:00Z'
 # them, rewriting historical data under the new schema. That "rewrite everything"
 # behavior is itself a useful migration tool — bump the version and re-run the
 # backfill to bring all historical races up to the current schema.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5

@@ -5322,3 +5322,9 @@ class TestMainTuiLaunch:
         monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
         with pytest.raises(SystemExit):
             _mod.main()  # argparse errors on the required race_id
+
+
+class TestSchemaVersionBump:
+    def test_schema_version_is_five(self):
+        """Deduped laps are a new data shape; stored races must re-backfill."""
+        assert _mod.SCHEMA_VERSION == 5
