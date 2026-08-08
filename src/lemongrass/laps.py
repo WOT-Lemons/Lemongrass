@@ -49,7 +49,7 @@ EPOCH_START = '1970-01-01T00:00:00Z'
 # them, rewriting historical data under the new schema. That "rewrite everything"
 # behavior is itself a useful migration tool — bump the version and re-run the
 # backfill to bring all historical races up to the current schema.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _WRITE_BATCH_SIZE = 5000
 _LIVE_CHECK_INTERVAL = 5
@@ -862,7 +862,12 @@ def old_race(ctx, opts):
                 comp_laps = competitor.get('LapTimes', [])
                 if not comp_laps:
                     continue
-                comp_number = competitor['Number']
+                # Trim before use: RaceMonitor pads some numbers (e.g. ' 2') and
+                # Python's int() accepts the padding, so the guard below would let
+                # it through and the space would survive into the car_number tag.
+                # Flux's int() rejects surrounding whitespace, which kills the
+                # dashboard's $carno variable outright and blanks the whole race.
+                comp_number = str(competitor['Number']).strip()
                 try:
                     int(comp_number)
                 except (ValueError, TypeError):
@@ -918,6 +923,12 @@ def old_race(ctx, opts):
                     'last_lap_time': competitor.get('LastLapTime', ''),
                 })
             pending_writes.append(session_entry)
+
+    # Collapse sessions RaceMonitor returned more than once BEFORE anything reads
+    # pending_writes: expected must count what actually gets written, and
+    # _apply_total_time_offsets must bank elapsed time across real sessions rather
+    # than treating N copies of one session as N sequential ones.
+    pending_writes = _merge_duplicate_sessions(pending_writes)
 
     no_data = not pending_writes or not any(s['competitors'] for s in pending_writes)
     if opts.network_mode and no_data:
@@ -975,7 +986,12 @@ def old_race(ctx, opts):
                     "Race %s laps complete but standings stale/missing (%d of %d "
                     "current) — rewriting", ctx.race_id, std_current, std_total)
 
-        delete_existing_laps(ctx)
+        if not delete_existing_laps(ctx):
+            logging.error(
+                "Deleting existing laps failed for race %s — failing the run so "
+                "the next backfill retries", ctx.race_id)
+            return 1
+
         total_competitors = sum(len(s['competitors']) for s in pending_writes)
         logging.info(
             "Writing %d session(s), %d competitor(s)...",
@@ -999,15 +1015,28 @@ def old_race(ctx, opts):
             logging.warning("Skipping race stamp so next run will re-backfill")
             return 1
 
+        sessions_ok = delete_existing_sessions(ctx)
+        for session in pending_writes:
+            if not push_influx_session(
+                    ctx, session['session_id'], session['session_name'],
+                    session['start_epoc']):
+                sessions_ok = False
+        if not sessions_ok:
+            # A failed delete or a failed session write can leave the sessions
+            # bucket holding stale, partial, or mixed records. Bail out here,
+            # before the race is stamped complete, so the next backfill redoes
+            # the whole rewrite instead of leaving an unrepairable session gap
+            # that --skip-if-complete can't detect (it never checks sessions).
+            logging.error(
+                "Session write incomplete for race %s — failing the run so the "
+                "next backfill retries", ctx.race_id)
+            return 1
+
         if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
             logging.error(
                 "Race metadata write failed for race %s — failing the run so the "
                 "next backfill retries", ctx.race_id)
             return 1
-
-        for session in pending_writes:
-            push_influx_session(
-                ctx, session['session_id'], session['session_name'], session['start_epoc'])
 
         standings_ok = delete_existing_standings(ctx)
         for session in pending_writes:
@@ -1304,6 +1333,97 @@ def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
             logging.info("Batch %d of %d written successfully", batch_num, total)
 
 
+def _merge_duplicate_sessions(pending_writes):
+    """Collapse sessions RaceMonitor returned under more than one ID.
+
+    RaceMonitor can hand back the same session several times with different IDs.
+    session_id is an Influx tag, so writing each copy stores the same laps again as
+    a fresh series — race 64202 held 88,907 points for 33,935 real laps that way.
+
+    Sessions are grouped by (session_name, start_epoc) and the lowest ID wins as
+    canonical. Copies are usually identical, but some are stubs holding a lap or
+    two the full copy lacks, so each car's laps are unioned across the group rather
+    than picking one copy wholesale. Selection is per car: a sibling can be the
+    base for one car and not another.
+
+    Either key component being falsy (missing session_name, or start_epoc of
+    None or 0) makes the entry unmergeable — it groups only with itself, keyed
+    by a fresh sentinel unique to that entry. Without this, two distinct sessions
+    that happen to share a name and lack a start epoch (e.g. two heats both named "Race")
+    would collapse, and the per-lap union would silently discard whichever
+    heat's lap didn't win the tie for a given lap number. A session with no
+    start epoch can't be time-anchored anyway (_build_lap_points warns and
+    anchors to the Unix epoch), so treating it as unmergeable costs nothing.
+
+    Returns a new list, leaving pending_writes untouched. Group order follows first
+    appearance so the caller's session ordering survives — _apply_total_time_offsets
+    depends on it.
+
+    Laps are keyed by int(lap['Lap']); this is safe only because the caller
+    pre-filters non-numeric Lap values before building pending_writes and drops
+    any competitor whose laps are all filtered out, so every 'Lap' seen here is
+    already known to parse as an int.
+    """
+    groups = {}
+    order = []
+    for entry in pending_writes:
+        if entry['session_name'] and entry['start_epoc']:
+            key = (entry['session_name'], entry['start_epoc'])
+        else:
+            # No real (name, start_epoc) identity to group on — group with
+            # nothing else by keying on this entry's own identity.
+            key = object()
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(entry)
+
+    merged = []
+    for key in order:
+        siblings = groups[key]
+        if len(siblings) == 1:
+            entry = dict(siblings[0])
+            entry['competitors'] = [dict(comp) for comp in entry['competitors']]
+            merged.append(entry)
+            continue
+
+        by_car = {}
+        car_order = []
+        for sib in siblings:
+            for comp in sib['competitors']:
+                car = comp['car_number']
+                if car not in by_car:
+                    by_car[car] = []
+                    car_order.append(car)
+                by_car[car].append((int(sib['session_id']), comp))
+
+        competitors = []
+        for car in car_order:
+            # richest first so the fullest copy supplies the scalars; session id
+            # breaks ties so the merge is deterministic run to run.
+            ranked = sorted(by_car[car], key=lambda pair: (-len(pair[1]['influx_laps']),
+                                                           pair[0]))
+            base = dict(ranked[0][1])
+            laps = {int(lap['Lap']): lap for lap in base['influx_laps']}
+            class_positions = dict(base['class_positions'])
+            for _, other in ranked[1:]:
+                for lap in other['influx_laps']:
+                    laps.setdefault(int(lap['Lap']), lap)
+                for lap_num, position in other['class_positions'].items():
+                    class_positions.setdefault(lap_num, position)
+            base['influx_laps'] = [laps[n] for n in sorted(laps)]
+            base['class_positions'] = class_positions
+            competitors.append(base)
+
+        merged.append({
+            'session_id': min(int(s['session_id']) for s in siblings),
+            'session_name': key[0],
+            'start_epoc': key[1],
+            'competitors': competitors,
+        })
+    return merged
+
+
 def _apply_total_time_offsets(pending_writes):
     """Annotate every competitor with the elapsed ms it banked in earlier sessions.
 
@@ -1458,7 +1578,12 @@ def push_influx_race(ctx, timestamp_ms, expected_lap_count=None, session_count=N
 
 
 def push_influx_session(ctx, session_id, session_name, start_epoc):
-    """Write one session metadata point to the race_sessions bucket, replacing any prior point."""
+    """Write one session metadata point to the race_sessions bucket, replacing any prior point.
+
+    Returns True on success, False if the delete or write failed (logged, not
+    raised) so callers that need every session to land — such as old_race's
+    rewrite loop — can tell a partial write from a complete one.
+    """
     try:
         ctx.delete_api.delete(
             start=EPOCH_START,
@@ -1476,8 +1601,13 @@ def push_influx_session(ctx, session_id, session_name, start_epoc):
             .time(start_epoc_ms, WritePrecision.MS)
         )
         ctx.write_api.write(bucket=_influx.BUCKET_SESSIONS, record=point)
+        return True
     except Exception as e:
-        logging.error("Writing session failed: %s", e)
+        logging.error(
+            "Writing session failed for race %s session %s: %s",
+            ctx.race_id, session_id, e,
+        )
+        return False
 
 
 def existing_lap_counts(ctx):
@@ -1537,16 +1667,52 @@ def existing_lap_counts_fieldwide(ctx):
 
 
 def delete_existing_laps(ctx):
-    """Delete all lap points for this race so a backfill can replace them."""
+    """Delete all lap points for this race so a backfill can replace them.
+
+    Returns True on success, False if the delete failed (logged, not raised) —
+    old_race treats a failed delete the same as a failed session write: it
+    aborts before stamping the race complete.
+    """
     try:
         ctx.delete_api.delete(
-            start='1970-01-01T00:00:00Z',
+            start=EPOCH_START,
             stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="lap" AND race_id="{ctx.race_id}"',
             bucket=_influx.BUCKET_LAPS,
         )
+        return True
     except Exception as e:
         logging.error("Deleting existing laps failed: %s", e)
+        return False
+
+
+def delete_existing_sessions(ctx):
+    """Delete all session points for this race so a backfill can replace them.
+
+    push_influx_session only deletes the session_id it is about to rewrite, so a
+    session that dedupe collapsed away would otherwise linger in the bucket and
+    keep showing up in the dashboard's session picker.
+
+    The delete predicate is race_id-only, so despite the name it also removes
+    session records written by the live-monitor path, which tags race_id
+    identically. This self-heals: old_race always rewrites every session for
+    the race afterward. But the name suggests a narrower scope than it has.
+
+    Returns True on success, False if the delete failed (logged, not raised) —
+    old_race treats a failed delete the same as a failed session write: it
+    aborts before stamping the race complete.
+    """
+    try:
+        ctx.delete_api.delete(
+            start=EPOCH_START,
+            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            predicate=f'_measurement="session" AND race_id="{ctx.race_id}"',
+            bucket=_influx.BUCKET_SESSIONS,
+        )
+        return True
+    except Exception as e:
+        logging.error("Deleting existing sessions failed: %s", e)
+        return False
 
 
 def delete_existing_standings(ctx):
@@ -1684,7 +1850,10 @@ def _build_class_index(session_details):
     laps_by_car = {}
     positions_by_category = defaultdict(lambda: defaultdict(list))
     for competitor in session['SortedCompetitors']:
-        number = competitor['Number']
+        # Trim to match the lookup key: callers pass the already-trimmed
+        # car_number (RaceMonitor pads some numbers, e.g. ' 2'), so an
+        # untrimmed index key here would always miss for those cars.
+        number = str(competitor['Number']).strip()
         category_by_car[number] = competitor['Category']
         lap_positions = {}
         for lap in competitor.get('LapTimes', []):
@@ -1788,7 +1957,11 @@ def _resolve_class_live(session_response, car_number):
 
 
 def _compute_class_positions_live(session_response):
-    """Return {car_number: class_position} for all live competitors in one pass."""
+    """Return {car_number: class_position} for all live competitors in one pass.
+
+    Keys are trimmed to match the trimmed car_number used at the call site
+    (RaceMonitor pads some numbers, e.g. ' 2'), so the lookup there hits.
+    """
     session = _live_session(session_response)
     if session is None:
         return {}
@@ -1799,7 +1972,7 @@ def _compute_class_positions_live(session_response):
             pos = int(comp['Position'])
         except (ValueError, TypeError):
             continue
-        by_class[comp['ClassID']].append((pos, comp['Number']))
+        by_class[comp['ClassID']].append((pos, str(comp['Number']).strip()))
     result = {}
     for entries in by_class.values():
         entries.sort()
@@ -1866,7 +2039,9 @@ def push_influx_standings_live(ctx, session_response, session_id, prev_standings
             f"{comp.get('FirstName', '')} {comp.get('LastName', '')}".strip() or None
         )
         car_info = comp.get('AdditionalData') or None
-        car_number = comp['Number']
+        # Trim to match the lap write path; an untrimmed ' 2' would tag standings
+        # as a different car than its own laps.
+        car_number = str(comp['Number']).strip()
         best_lap_ms = _time_to_ms(comp.get('BestLapTime', ''))
         last_lap_ms = _time_to_ms(comp.get('LastLapTime', ''))
         class_position = class_positions.get(car_number)
