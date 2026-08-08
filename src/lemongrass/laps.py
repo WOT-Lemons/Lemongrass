@@ -1786,7 +1786,10 @@ def _build_class_index(session_details):
     laps_by_car = {}
     positions_by_category = defaultdict(lambda: defaultdict(list))
     for competitor in session['SortedCompetitors']:
-        number = competitor['Number']
+        # Trim to match the lookup key: callers pass the already-trimmed
+        # car_number (RaceMonitor pads some numbers, e.g. ' 2'), so an
+        # untrimmed index key here would always miss for those cars.
+        number = str(competitor['Number']).strip()
         category_by_car[number] = competitor['Category']
         lap_positions = {}
         for lap in competitor.get('LapTimes', []):
@@ -1890,7 +1893,11 @@ def _resolve_class_live(session_response, car_number):
 
 
 def _compute_class_positions_live(session_response):
-    """Return {car_number: class_position} for all live competitors in one pass."""
+    """Return {car_number: class_position} for all live competitors in one pass.
+
+    Keys are trimmed to match the trimmed car_number used at the call site
+    (RaceMonitor pads some numbers, e.g. ' 2'), so the lookup there hits.
+    """
     session = _live_session(session_response)
     if session is None:
         return {}
@@ -1901,7 +1908,7 @@ def _compute_class_positions_live(session_response):
             pos = int(comp['Position'])
         except (ValueError, TypeError):
             continue
-        by_class[comp['ClassID']].append((pos, comp['Number']))
+        by_class[comp['ClassID']].append((pos, str(comp['Number']).strip()))
     result = {}
     for entries in by_class.values():
         entries.sort()

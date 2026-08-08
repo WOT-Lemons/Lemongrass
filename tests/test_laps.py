@@ -3407,6 +3407,38 @@ class TestOldRaceFullField:
                             _mod.old_race(ctx, opts)
         assert {self._car_number(p) for p in captured} == {'42', '2'}
 
+    def test_padded_car_number_class_resolved_without_mocking_resolve(self):
+        """_build_class_index must key on the trimmed number, matching the trimmed
+        lookup key used by _resolve_class_historical — otherwise a padded car's
+        class tag and class_position field are silently dropped.
+
+        Unlike test_padded_car_number_written_trimmed, this does NOT patch
+        _resolve_class_historical, so it exercises the real index-then-lookup path.
+        """
+        session = {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [
+                    self._make_competitor('42', 1, '1'),
+                    self._make_competitor(' 2', 2, '2'),
+                ],
+            },
+        }
+        ctx = self._ctx(session)
+        opts = _mod.RaceOptions(network_mode=True)
+        captured, cm = self._capture_points()
+        with cm:
+            with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'delete_existing_laps'):
+                    with patch.object(_mod, 'print_rankings'):
+                        _mod.old_race(ctx, opts)
+        padded_point = next(p for p in captured if self._car_number(p) == '2')
+        line = padded_point.to_line_protocol()
+        assert 'class=A' in line
+        assert 'class_position=' in line
+
     def test_validation_aborts_when_no_laps_collected(self):
         """Tracked car found but has zero laps — do not touch InfluxDB."""
         competitor_no_laps = self._make_competitor('42', 1, '1')
@@ -4146,6 +4178,21 @@ class TestPushInfluxStandingsLive:
             _mod.push_influx_standings_live(ctx, resp, 'sess-1')
         lp = mock_write.call_args[0][1][0].to_line_protocol()
         assert 'car_number=2,' in lp
+
+    def test_padded_car_number_class_position_survives(self):
+        """_compute_class_positions_live must key on the trimmed number so the
+        lookup at car_number (already trimmed) hits, and class_position is
+        written instead of silently dropped.
+        """
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp(' 2', class_id='A', position='1'),
+                           self._comp('7', class_id='A', position='2')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        points = mock_write.call_args[0][1]
+        padded_point = next(
+            p for p in points if 'car_number=2,' in p.to_line_protocol())
+        assert 'class_position=' in padded_point.to_line_protocol()
 
     def test_session_id_tagged(self):
         ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
