@@ -1603,7 +1603,10 @@ def push_influx_session(ctx, session_id, session_name, start_epoc):
         ctx.write_api.write(bucket=_influx.BUCKET_SESSIONS, record=point)
         return True
     except Exception as e:
-        logging.error("Writing session failed: %s", e)
+        logging.error(
+            "Writing session failed for race %s session %s: %s",
+            ctx.race_id, session_id, e,
+        )
         return False
 
 
@@ -1672,7 +1675,7 @@ def delete_existing_laps(ctx):
     """
     try:
         ctx.delete_api.delete(
-            start='1970-01-01T00:00:00Z',
+            start=EPOCH_START,
             stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="lap" AND race_id="{ctx.race_id}"',
             bucket=_influx.BUCKET_LAPS,
@@ -1701,7 +1704,7 @@ def delete_existing_sessions(ctx):
     """
     try:
         ctx.delete_api.delete(
-            start='1970-01-01T00:00:00Z',
+            start=EPOCH_START,
             stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
             predicate=f'_measurement="session" AND race_id="{ctx.race_id}"',
             bucket=_influx.BUCKET_SESSIONS,

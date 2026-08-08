@@ -3134,7 +3134,7 @@ class TestDeleteExistingSessions:
 
     def test_predicate_targets_measurement_and_race(self):
         ctx, delete_api = self._ctx()
-        _mod.delete_existing_sessions(ctx)
+        assert _mod.delete_existing_sessions(ctx) is True
         predicate = delete_api.delete.call_args.kwargs['predicate']
         assert '_measurement="session"' in predicate
         assert 'race_id="999"' in predicate
@@ -3148,7 +3148,7 @@ class TestDeleteExistingSessions:
     def test_delete_failure_is_swallowed_and_logged(self, caplog):
         ctx, delete_api = self._ctx()
         delete_api.delete.side_effect = Exception("network error")
-        _mod.delete_existing_sessions(ctx)  # must not raise
+        assert _mod.delete_existing_sessions(ctx) is False  # must not raise
         assert "Deleting existing sessions failed" in caplog.text
 
 
