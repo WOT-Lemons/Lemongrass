@@ -1016,6 +1016,7 @@ def old_race(ctx, opts):
                 "next backfill retries", ctx.race_id)
             return 1
 
+        delete_existing_sessions(ctx)
         for session in pending_writes:
             push_influx_session(
                 ctx, session['session_id'], session['session_name'], session['start_epoc'])
@@ -1630,6 +1631,24 @@ def delete_existing_laps(ctx):
         )
     except Exception as e:
         logging.error("Deleting existing laps failed: %s", e)
+
+
+def delete_existing_sessions(ctx):
+    """Delete all session points for this race so a backfill can replace them.
+
+    push_influx_session only deletes the session_id it is about to rewrite, so a
+    session that dedupe collapsed away would otherwise linger in the bucket and
+    keep showing up in the dashboard's session picker.
+    """
+    try:
+        ctx.delete_api.delete(
+            start='1970-01-01T00:00:00Z',
+            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            predicate=f'_measurement="session" AND race_id="{ctx.race_id}"',
+            bucket=_influx.BUCKET_SESSIONS,
+        )
+    except Exception as e:
+        logging.error("Deleting existing sessions failed: %s", e)
 
 
 def delete_existing_standings(ctx):

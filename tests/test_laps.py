@@ -3084,6 +3084,35 @@ class TestDeleteExistingLaps:
         assert "Deleting existing laps failed" in caplog.text
 
 
+class TestDeleteExistingSessions:
+    """Dedupe leaves session records with no matching laps; they must be cleared."""
+
+    def _ctx(self):
+        delete_api = MagicMock()
+        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = delete_api
+        return ctx, delete_api
+
+    def test_predicate_targets_measurement_and_race(self):
+        ctx, delete_api = self._ctx()
+        _mod.delete_existing_sessions(ctx)
+        predicate = delete_api.delete.call_args.kwargs['predicate']
+        assert '_measurement="session"' in predicate
+        assert 'race_id="999"' in predicate
+        assert 'session_id' not in predicate
+
+    def test_targets_sessions_bucket(self):
+        ctx, delete_api = self._ctx()
+        _mod.delete_existing_sessions(ctx)
+        assert delete_api.delete.call_args.kwargs['bucket'] == 'race_sessions'
+
+    def test_delete_failure_is_swallowed_and_logged(self, caplog):
+        ctx, delete_api = self._ctx()
+        delete_api.delete.side_effect = Exception("network error")
+        _mod.delete_existing_sessions(ctx)  # must not raise
+        assert "Deleting existing sessions failed" in caplog.text
+
+
 class TestDeleteExistingStandings:
     def test_deletes_standings_measurement_for_race(self):
         ctx = _mod.RaceContext('777', None, MagicMock(), MagicMock(), 0)
@@ -3501,6 +3530,17 @@ class TestOldRaceFullField:
         session_count_arg = mock_stamp.call_args[0][3]
         assert expected_arg == len(captured)
         assert session_count_arg == 1
+
+    def test_sessions_cleared_before_rewrite(self):
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'delete_existing_laps'):
+                    with patch.object(_mod, 'delete_existing_sessions') as mock_del:
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        mock_del.assert_called_once_with(ctx)
 
 
 class TestBuildLapPointsSessionId:
