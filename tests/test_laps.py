@@ -3113,6 +3113,113 @@ class TestDeleteExistingStandings:
         assert _mod.delete_existing_standings(ctx) is False
 
 
+class TestMergeDuplicateSessions:
+    """RaceMonitor returns the same session under several IDs; they must collapse."""
+
+    def _lap(self, n):
+        return {'Lap': str(n), 'LapTime': '0:01:30.000', 'Position': '1',
+                'FlagStatus': 'Green', 'TotalTime': f'0:{n:02d}:00.000'}
+
+    def _comp(self, car, lap_numbers, name='Driver'):
+        return {
+            'influx_laps': [self._lap(n) for n in lap_numbers],
+            'competitor_name': name,
+            'car_info': None,
+            'class_name': 'A',
+            'class_positions': dict.fromkeys(lap_numbers, 1),
+            'car_number': car,
+            'final_position': '1',
+            'final_laps': str(len(lap_numbers)),
+            'best_lap_time': '0:01:30.000',
+            'last_lap_time': '0:01:30.000',
+        }
+
+    def _session(self, sid, competitors, name='S1', start=1000):
+        return {'session_id': sid, 'session_name': name,
+                'start_epoc': start, 'competitors': competitors}
+
+    def _laps_for(self, entry, car):
+        for comp in entry['competitors']:
+            if comp['car_number'] == car:
+                return [int(lap['Lap']) for lap in comp['influx_laps']]
+        return None
+
+    def test_identical_siblings_collapse_to_one(self):
+        pending = [self._session(sid, [self._comp('42', [1, 2, 3])])
+                   for sid in (10, 11, 12, 13)]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert len(merged) == 1
+        assert self._laps_for(merged[0], '42') == [1, 2, 3]
+
+    def test_canonical_session_id_is_lowest(self):
+        pending = [self._session(sid, [self._comp('42', [1])])
+                   for sid in (77, 12, 45)]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert merged[0]['session_id'] == 12
+
+    def test_distinct_sessions_are_not_merged(self):
+        pending = [
+            self._session(1, [self._comp('42', [1])], name='S1', start=1000),
+            self._session(2, [self._comp('42', [1])], name='S2', start=1000),
+            self._session(3, [self._comp('42', [1])], name='S1', start=2000),
+        ]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert len(merged) == 3
+
+    def test_lap_present_only_in_a_stub_survives(self):
+        pending = [
+            self._session(10, [self._comp('42', [1, 2, 3])]),
+            self._session(11, [self._comp('42', [9])]),
+        ]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert self._laps_for(merged[0], '42') == [1, 2, 3, 9]
+
+    def test_scalars_come_from_the_richest_sibling(self):
+        rich = self._comp('42', [1, 2, 3], name='Real Driver')
+        stub = self._comp('42', [9], name='Stub Driver')
+        merged = _mod._merge_duplicate_sessions(
+            [self._session(10, [stub]), self._session(11, [rich])])
+        assert merged[0]['competitors'][0]['competitor_name'] == 'Real Driver'
+
+    def test_base_is_chosen_per_car_not_per_session(self):
+        # sibling 10 is richer for car 42; sibling 11 is richer for car 99
+        pending = [
+            self._session(10, [self._comp('42', [1, 2, 3]), self._comp('99', [1])]),
+            self._session(11, [self._comp('42', [1]), self._comp('99', [1, 2, 3, 4])]),
+        ]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert self._laps_for(merged[0], '42') == [1, 2, 3]
+        assert self._laps_for(merged[0], '99') == [1, 2, 3, 4]
+
+    def test_class_positions_merge_with_base_winning(self):
+        rich = self._comp('42', [1, 2])
+        rich['class_positions'] = {1: 5, 2: 5}
+        stub = self._comp('42', [1, 7])
+        stub['class_positions'] = {1: 99, 7: 3}
+        merged = _mod._merge_duplicate_sessions(
+            [self._session(10, [rich]), self._session(11, [stub])])
+        assert merged[0]['competitors'][0]['class_positions'] == {1: 5, 2: 5, 7: 3}
+
+    def test_all_empty_group_keeps_one_entry(self):
+        pending = [self._session(sid, []) for sid in (10, 11, 12, 13)]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert len(merged) == 1
+        assert merged[0]['competitors'] == []
+        assert merged[0]['session_id'] == 10
+
+    def test_input_is_not_mutated(self):
+        original = self._session(10, [self._comp('42', [1, 2, 3])])
+        pending = [original, self._session(11, [self._comp('42', [9])])]
+        _mod._merge_duplicate_sessions(pending)
+        assert [int(lap['Lap']) for lap in original['competitors'][0]['influx_laps']] \
+            == [1, 2, 3]
+
+    def test_single_session_race_passes_through_unchanged(self):
+        pending = [self._session(10, [self._comp('42', [1, 2])])]
+        merged = _mod._merge_duplicate_sessions(pending)
+        assert merged == pending
+
+
 class TestOldRaceFullField:
     def _make_competitor(self, number, comp_id, position):
         return {

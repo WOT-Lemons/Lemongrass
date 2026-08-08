@@ -1309,6 +1309,76 @@ def _write_points_chunked(write_api, points, batch_size=_WRITE_BATCH_SIZE):
             logging.info("Batch %d of %d written successfully", batch_num, total)
 
 
+def _merge_duplicate_sessions(pending_writes):
+    """Collapse sessions RaceMonitor returned under more than one ID.
+
+    RaceMonitor can hand back the same session several times with different IDs.
+    session_id is an Influx tag, so writing each copy stores the same laps again as
+    a fresh series — race 64202 held 88,907 points for 33,935 real laps that way.
+
+    Sessions are grouped by (session_name, start_epoc) and the lowest ID wins as
+    canonical. Copies are usually identical, but some are stubs holding a lap or
+    two the full copy lacks, so each car's laps are unioned across the group rather
+    than picking one copy wholesale. Selection is per car: a sibling can be the
+    base for one car and not another.
+
+    Returns a new list, leaving pending_writes untouched. Group order follows first
+    appearance so the caller's session ordering survives — _apply_total_time_offsets
+    depends on it.
+    """
+    groups = {}
+    order = []
+    for entry in pending_writes:
+        key = (entry['session_name'], entry['start_epoc'])
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(entry)
+
+    merged = []
+    for key in order:
+        siblings = groups[key]
+        if len(siblings) == 1:
+            merged.append(siblings[0])
+            continue
+
+        by_car = {}
+        car_order = []
+        for sib in siblings:
+            for comp in sib['competitors']:
+                car = comp['car_number']
+                if car not in by_car:
+                    by_car[car] = []
+                    car_order.append(car)
+                by_car[car].append((int(sib['session_id']), comp))
+
+        competitors = []
+        for car in car_order:
+            # richest first so the fullest copy supplies the scalars; session id
+            # breaks ties so the merge is deterministic run to run.
+            ranked = sorted(by_car[car], key=lambda pair: (-len(pair[1]['influx_laps']),
+                                                           pair[0]))
+            base = dict(ranked[0][1])
+            laps = {int(lap['Lap']): lap for lap in base['influx_laps']}
+            class_positions = dict(base['class_positions'])
+            for _, other in ranked[1:]:
+                for lap in other['influx_laps']:
+                    laps.setdefault(int(lap['Lap']), lap)
+                for lap_num, position in other['class_positions'].items():
+                    class_positions.setdefault(lap_num, position)
+            base['influx_laps'] = [laps[n] for n in sorted(laps)]
+            base['class_positions'] = class_positions
+            competitors.append(base)
+
+        merged.append({
+            'session_id': min(int(s['session_id']) for s in siblings),
+            'session_name': key[0],
+            'start_epoc': key[1],
+            'competitors': competitors,
+        })
+    return merged
+
+
 def _apply_total_time_offsets(pending_writes):
     """Annotate every competitor with the elapsed ms it banked in earlier sessions.
 
