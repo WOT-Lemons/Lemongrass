@@ -862,7 +862,12 @@ def old_race(ctx, opts):
                 comp_laps = competitor.get('LapTimes', [])
                 if not comp_laps:
                     continue
-                comp_number = competitor['Number']
+                # Trim before use: RaceMonitor pads some numbers (e.g. ' 2') and
+                # Python's int() accepts the padding, so the guard below would let
+                # it through and the space would survive into the car_number tag.
+                # Flux's int() rejects surrounding whitespace, which kills the
+                # dashboard's $carno variable outright and blanks the whole race.
+                comp_number = str(competitor['Number']).strip()
                 try:
                     int(comp_number)
                 except (ValueError, TypeError):
@@ -1866,7 +1871,9 @@ def push_influx_standings_live(ctx, session_response, session_id, prev_standings
             f"{comp.get('FirstName', '')} {comp.get('LastName', '')}".strip() or None
         )
         car_info = comp.get('AdditionalData') or None
-        car_number = comp['Number']
+        # Trim to match the lap write path; an untrimmed ' 2' would tag standings
+        # as a different car than its own laps.
+        car_number = str(comp['Number']).strip()
         best_lap_ms = _time_to_ms(comp.get('BestLapTime', ''))
         last_lap_ms = _time_to_ms(comp.get('LastLapTime', ''))
         class_position = class_positions.get(car_number)

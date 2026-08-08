@@ -3234,6 +3234,36 @@ class TestOldRaceFullField:
         assert 'SC' not in built_car_numbers
         assert '42' in built_car_numbers
 
+    def test_padded_car_number_written_trimmed(self):
+        """RaceMonitor pads some numbers (e.g. ' 2'); the tag must be trimmed.
+
+        Python's int(' 2') succeeds, so the non-integer guard admits the padded
+        value and it reaches InfluxDB verbatim. Flux's int() does NOT accept
+        surrounding whitespace, so the dashboard's $carno variable dies on the
+        first such row and the whole race renders empty.
+        """
+        session = {
+            'Successful': True,
+            'Session': {
+                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+                'SortedCompetitors': [
+                    self._make_competitor('42', 1, '1'),
+                    self._make_competitor(' 2', 2, '2'),
+                ],
+            },
+        }
+        ctx = self._ctx(session)
+        opts = _mod.RaceOptions(network_mode=True)
+        captured, cm = self._capture_points()
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with cm:
+                with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'delete_existing_laps'):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
+        assert {self._car_number(p) for p in captured} == {'42', '2'}
+
     def test_validation_aborts_when_no_laps_collected(self):
         """Tracked car found but has zero laps — do not touch InfluxDB."""
         competitor_no_laps = self._make_competitor('42', 1, '1')
@@ -3896,6 +3926,19 @@ class TestPushInfluxStandingsLive:
             _mod.push_influx_standings_live(ctx, resp, 'sess-1')
         lp = mock_write.call_args[0][1][0].to_line_protocol()
         assert lp.startswith('standings,')
+
+    def test_padded_car_number_written_trimmed(self):
+        """A padded number (' 2') must reach the car_number tag trimmed.
+
+        Standings share the car_number tag with laps, so an untrimmed value here
+        would split a car into two series and break joins against lap data.
+        """
+        ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
+        resp = self._resp([self._comp(' 2')])
+        with patch.object(_mod, '_write_points_chunked') as mock_write:
+            _mod.push_influx_standings_live(ctx, resp, 'sess-1')
+        lp = mock_write.call_args[0][1][0].to_line_protocol()
+        assert 'car_number=2,' in lp
 
     def test_session_id_tagged(self):
         ctx = _mod.RaceContext('123', None, MagicMock(), MagicMock(), 0)
