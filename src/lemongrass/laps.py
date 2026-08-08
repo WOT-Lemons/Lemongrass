@@ -1010,10 +1010,22 @@ def old_race(ctx, opts):
             logging.warning("Skipping race stamp so next run will re-backfill")
             return 1
 
-        delete_existing_sessions(ctx)
+        sessions_ok = delete_existing_sessions(ctx)
         for session in pending_writes:
-            push_influx_session(
-                ctx, session['session_id'], session['session_name'], session['start_epoc'])
+            if not push_influx_session(
+                    ctx, session['session_id'], session['session_name'],
+                    session['start_epoc']):
+                sessions_ok = False
+        if not sessions_ok:
+            # A failed delete or a failed session write can leave the sessions
+            # bucket holding stale, partial, or mixed records. Bail out here,
+            # before the race is stamped complete, so the next backfill redoes
+            # the whole rewrite instead of leaving an unrepairable session gap
+            # that --skip-if-complete can't detect (it never checks sessions).
+            logging.error(
+                "Session write incomplete for race %s — failing the run so the "
+                "next backfill retries", ctx.race_id)
+            return 1
 
         if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
             logging.error(
@@ -1331,8 +1343,8 @@ def _merge_duplicate_sessions(pending_writes):
 
     Either key component being falsy (missing session_name, or start_epoc of
     None or 0) makes the entry unmergeable — it groups only with itself, keyed
-    by its own session_id. Without this, two distinct sessions that happen to
-    share a name and lack a start epoch (e.g. two heats both named "Race")
+    by a fresh sentinel unique to that entry. Without this, two distinct sessions
+    that happen to share a name and lack a start epoch (e.g. two heats both named "Race")
     would collapse, and the per-lap union would silently discard whichever
     heat's lap didn't win the tie for a given lap number. A session with no
     start epoch can't be time-anchored anyway (_build_lap_points warns and
@@ -1561,7 +1573,12 @@ def push_influx_race(ctx, timestamp_ms, expected_lap_count=None, session_count=N
 
 
 def push_influx_session(ctx, session_id, session_name, start_epoc):
-    """Write one session metadata point to the race_sessions bucket, replacing any prior point."""
+    """Write one session metadata point to the race_sessions bucket, replacing any prior point.
+
+    Returns True on success, False if the delete or write failed (logged, not
+    raised) so callers that need every session to land — such as old_race's
+    rewrite loop — can tell a partial write from a complete one.
+    """
     try:
         ctx.delete_api.delete(
             start=EPOCH_START,
@@ -1579,8 +1596,10 @@ def push_influx_session(ctx, session_id, session_name, start_epoc):
             .time(start_epoc_ms, WritePrecision.MS)
         )
         ctx.write_api.write(bucket=_influx.BUCKET_SESSIONS, record=point)
+        return True
     except Exception as e:
         logging.error("Writing session failed: %s", e)
+        return False
 
 
 def existing_lap_counts(ctx):
@@ -1663,6 +1682,10 @@ def delete_existing_sessions(ctx):
     session records written by the live-monitor path, which tags race_id
     identically. This self-heals: old_race always rewrites every session for
     the race afterward. But the name suggests a narrower scope than it has.
+
+    Returns True on success, False if the delete failed (logged, not raised) —
+    old_race treats a failed delete the same as a failed session write: it
+    aborts before stamping the race complete.
     """
     try:
         ctx.delete_api.delete(
@@ -1671,8 +1694,10 @@ def delete_existing_sessions(ctx):
             predicate=f'_measurement="session" AND race_id="{ctx.race_id}"',
             bucket=_influx.BUCKET_SESSIONS,
         )
+        return True
     except Exception as e:
         logging.error("Deleting existing sessions failed: %s", e)
+        return False
 
 
 def delete_existing_standings(ctx):

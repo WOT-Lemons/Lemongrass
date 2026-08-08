@@ -2080,6 +2080,7 @@ class TestOldRaceClassWiring:
 
     def test_old_race_calls_push_influx_race_once_across_multiple_sessions(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000)
+        ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}, {'ID': 2}]}
         ctx.client.results.session_details.return_value = self._session_details()
@@ -2092,6 +2093,7 @@ class TestOldRaceClassWiring:
 
     def test_old_race_push_influx_race_timestamp_uses_start_epoc(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 5000)
+        ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
@@ -2104,6 +2106,7 @@ class TestOldRaceClassWiring:
 
     def test_old_race_push_influx_race_uses_wall_clock_when_start_epoc_zero(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+        ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
@@ -3633,6 +3636,57 @@ class TestOldRaceFullField:
         method_order = [c[0] for c in parent.mock_calls]
         assert method_order.index('delete_existing_sessions') < method_order.index(
             'push_influx_race')
+
+    def test_session_write_failure_leaves_race_unstamped(self):
+        """push_influx_session swallows Influx exceptions and returns False on
+        failure. old_race must treat that as fatal and abort BEFORE stamping the
+        race complete — otherwise the race is marked complete with zero session
+        records, and --skip-if-complete (which never checks sessions) can never
+        repair it.
+        """
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'delete_existing_laps'):
+                    with patch.object(_mod, 'delete_existing_sessions', return_value=True):
+                        with patch.object(_mod, 'push_influx_session', return_value=False):
+                            with patch.object(_mod, 'print_rankings'):
+                                result = _mod.old_race(ctx, opts)
+        mock_race.assert_not_called()
+        assert result == 1
+
+    def test_all_sessions_succeed_stamps_race(self):
+        """The happy path: every session write succeeds, so the race is still
+        stamped complete exactly as before this fix.
+        """
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'delete_existing_laps'):
+                    with patch.object(_mod, 'delete_existing_sessions', return_value=True):
+                        with patch.object(_mod, 'push_influx_session', return_value=True):
+                            with patch.object(_mod, 'print_rankings'):
+                                _mod.old_race(ctx, opts)
+        mock_race.assert_called_once()
+
+    def test_sessions_delete_failure_leaves_race_unstamped(self):
+        """A failed delete_existing_sessions is treated the same as a failed
+        session write: it must also abort before the race stamp, since a failed
+        delete can leave stale records mixed with whatever gets rewritten.
+        """
+        ctx = self._ctx(self._session_details_two_cars())
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
+            with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'delete_existing_laps'):
+                    with patch.object(_mod, 'delete_existing_sessions', return_value=False):
+                        with patch.object(_mod, 'push_influx_session', return_value=True):
+                            with patch.object(_mod, 'print_rankings'):
+                                result = _mod.old_race(ctx, opts)
+        mock_race.assert_not_called()
+        assert result == 1
 
 
 class TestBuildLapPointsSessionId:
