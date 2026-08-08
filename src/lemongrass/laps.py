@@ -1658,6 +1658,11 @@ def delete_existing_sessions(ctx):
     push_influx_session only deletes the session_id it is about to rewrite, so a
     session that dedupe collapsed away would otherwise linger in the bucket and
     keep showing up in the dashboard's session picker.
+
+    The delete predicate is race_id-only, so despite the name it also removes
+    session records written by the live-monitor path, which tags race_id
+    identically. This self-heals: old_race always rewrites every session for
+    the race afterward. But the name suggests a narrower scope than it has.
     """
     try:
         ctx.delete_api.delete(
