@@ -1,0 +1,82 @@
+"""PostgreSQL engine and connection handling for lemongrass.
+
+Mirrors the shape of ``_influx``: settings come from the config layer, the
+secret is read from the env var the config names, and nothing connects until a
+caller asks. Unlike ``_influx`` the engine is built lazily rather than at import
+— every command imports the CLI, and a command that never touches the database
+must not require a password to be set.
+
+All SQL statements belong in this module. Keeping that boundary is what would
+make a later move to the SQLAlchemy ORM a one-module change.
+"""
+import logging
+import os
+import sys
+from contextlib import contextmanager
+
+from lemongrass import _config
+
+_engine = None
+
+
+def database_url():
+    """Build the SQLAlchemy URL from config plus the configured password env var.
+
+    Logs an error and exits with status 1 when the password variable is unset,
+    matching ``_influx.connect``'s handling of a missing token.
+    """
+    from sqlalchemy import URL
+    cfg = _config.load_config().postgres
+    password = os.environ.get(cfg.password_env)
+    if not password:
+        logging.error("%s environment variable not set", cfg.password_env)
+        sys.exit(1)
+    return URL.create(
+        'postgresql+psycopg',
+        username=cfg.user,
+        password=password,
+        host=cfg.host,
+        port=cfg.port,
+        database=cfg.database,
+    )
+
+
+def engine():
+    """Return the process-wide Engine, creating it on first use.
+
+    ``pool_pre_ping`` is on because the monitor runs for hours: an idle pooled
+    connection reaped by the server or a NAT timeout becomes a transparent
+    reconnect instead of a mid-race exception.
+    """
+    global _engine
+    if _engine is None:
+        from sqlalchemy import create_engine
+        _engine = create_engine(database_url(), pool_pre_ping=True)
+    return _engine
+
+
+def reset_engine():
+    """Dispose and forget the memoized engine (tests, and config changes)."""
+    global _engine
+    if _engine is not None:
+        _engine.dispose()
+        _engine = None
+
+
+@contextmanager
+def connect():
+    """Yield a Connection inside a transaction, committing on clean exit.
+
+    Rolls back if the body raises, so a partial write is never left behind.
+    """
+    with engine().begin() as conn:
+        yield conn
+
+
+def db_password_present():
+    """True iff the configured database password env var is set.
+
+    Cheap check (no connection, no sys.exit) so a TUI can validate up front and
+    surface a clean error instead of a worker-thread SystemExit.
+    """
+    return bool(os.environ.get(_config.load_config().postgres.password_env))
