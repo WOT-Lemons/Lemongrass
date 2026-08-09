@@ -393,6 +393,25 @@ file — environment variables are not used for any non-secret setting. Copy
 `lemongrass.toml.sample` to get started. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for
 the full key reference.
 
+## Database Schema
+
+lemongrass also uses a PostgreSQL database for race and session metadata. Before
+running any command against a fresh database, set the password env var named by
+`postgres.password_env` (`LEMONGRASS_DB_PASSWORD` by default — see `.env.sample`)
+and apply the schema:
+
+```shell
+lemongrass db upgrade
+```
+
+Verify it landed:
+
+```shell
+lemongrass db current
+```
+
+Run `db upgrade` again after upgrading lemongrass whenever a new migration ships.
+
 ## Contributing
 
 For development setup, running the test suite, and testing against a local

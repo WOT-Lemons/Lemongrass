@@ -19,6 +19,7 @@ variable that holds each secret (`*_env` directives):
 |---|---|---|
 | InfluxDB token | `influx.token_env` = `"INFLUX_TELEMETRY_TOKEN"` | value of that var |
 | RaceMonitor token pool | `racemonitor.tokens_env` = `"RACEMONITOR_TOKENS"` | comma-separated; legacy singular `RACEMONITOR_TOKEN` also honored |
+| PostgreSQL password | `postgres.password_env` = `"LEMONGRASS_DB_PASSWORD"` | value of that var |
 
 ## Migrating from environment variables
 

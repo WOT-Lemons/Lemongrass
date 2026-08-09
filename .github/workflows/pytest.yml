@@ -45,6 +45,7 @@ jobs:
       - name: Run tests
         env:
           LEMONGRASS_TEST_DATABASE_URL: postgresql+psycopg://lemongrass:local-dev-password@localhost:5432/lemongrass
+          LEMONGRASS_TEST_DB_ALLOW_WIPE: "1"
         run: uv run --frozen --with pytest pytest tests/
 
   integration:

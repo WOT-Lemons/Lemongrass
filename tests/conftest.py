@@ -27,7 +27,27 @@ def clean_db(postgres_url):
     Dropping and recreating the schema is faster and more thorough than
     truncating: it also removes the alembic_version table, which the migration
     tests need gone between runs.
+
+    Requires LEMONGRASS_TEST_DB_ALLOW_WIPE=1 as an explicit, conscious opt-in.
+    LEMONGRASS_TEST_DATABASE_URL alone is not enough to trust: the URL a
+    developer would naturally copy out of .github/workflows/pytest.yml
+    (postgresql+psycopg://lemongrass:local-dev-password@localhost:5432/lemongrass)
+    is character-for-character identical to the local-testing docker-compose
+    stack's Postgres — same host, port, credentials, and database name — so
+    pointing the test suite at it without a second, distinct confirmation
+    would silently wipe a developer's local races and sessions. A
+    name-substring check on the database name would not catch this, since the
+    colliding name is literally "lemongrass" in both places.
     """
+    if not os.environ.get("LEMONGRASS_TEST_DB_ALLOW_WIPE"):
+        pytest.fail(
+            "clean_db drops and recreates the public schema on the database "
+            "named by LEMONGRASS_TEST_DATABASE_URL. Refusing to run: set "
+            "LEMONGRASS_TEST_DB_ALLOW_WIPE=1 to confirm that database is a "
+            "disposable test instance, not the local-testing stack. See "
+            "CONTRIBUTING.md for how to start a throwaway Postgres for these "
+            "tests."
+        )
     from sqlalchemy import create_engine, text
     engine = create_engine(postgres_url)
     with engine.begin() as conn:

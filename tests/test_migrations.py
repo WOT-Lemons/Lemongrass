@@ -29,6 +29,10 @@ def test_script_location_is_inside_the_installed_package():
     assert loc.is_dir()
     assert loc.is_relative_to(pathlib.Path(lemongrass.__file__).parent)
     assert (loc / "versions").is_dir()
+    # A future [tool.uv.build-backend] exclude could silently drop this out of
+    # the wheel; the Dockerfile builds that same wheel, so `alembic revision`
+    # against an installed lemongrass would fail with no template to render.
+    assert (loc / "script.py.mako").is_file()
 
 
 def test_upgrade_creates_the_expected_tables(clean_db, postgres_url):

@@ -89,11 +89,16 @@ def test_connect_rolls_back_on_error(monkeypatch, postgres_url, clean_db):
         assert conn.execute(text("SELECT count(*) FROM t")).scalar() == 0
 
 
-@pytest.mark.parametrize("module", ["lemongrass.telem", "lemongrass.pisugar_monitor"])
+@pytest.mark.parametrize(
+    "module", ["lemongrass.telem", "lemongrass.pisugar_monitor", "lemongrass.cli"])
 def test_pi_commands_do_not_import_db(module):
     # telem and pisugar-monitor run on the Raspberry Pi, which reaches InfluxDB
     # through an HTTP tunnel that cannot carry the Postgres wire protocol. They
-    # must never acquire a database dependency, even transitively.
+    # must never acquire a database dependency, even transitively. cli.py is
+    # included because that's the actual entry point the Pi runs
+    # (`lemongrass telem`) — it dispatches to telem.py, so a stray top-level
+    # `from lemongrass import _db` added to the dispatcher itself would slip
+    # past a check of telem/pisugar_monitor alone.
     code = (
         f"import sys, {module}; "
         "sys.exit(1 if 'lemongrass._db' in sys.modules else 0)"

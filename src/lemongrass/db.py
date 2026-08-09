@@ -22,10 +22,24 @@ def main():
 
 
 def _handle_upgrade():
-    """Apply every migration that has not yet been applied."""
+    """Apply every migration that has not yet been applied.
+
+    Alembic reports what it did through the ``alembic.runtime.migration``
+    logger, not through print. Config's fileConfig-based logging setup only
+    runs inside `alembic.config.CommandLine.main`, which this CLI never
+    calls, so without configuring logging here the command would run
+    silently whether it applied revision 0001, found nothing to do, or
+    reached the wrong database. Configured here, not in
+    `_db.alembic_config`, so importing `_db` never mutates global logging
+    state.
+    """
+    import logging
+
     from alembic import command
 
     from lemongrass import _db
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    logging.getLogger('alembic').setLevel(logging.INFO)
     command.upgrade(_db.alembic_config(), 'head')
     return 0
 
