@@ -8,3 +8,9 @@ org = "lemongrass"
 # Pin discovery to a RaceMonitor series (0 = disabled; find it with the
 # race-backfill TUI's 's' key, which offers to save it here).
 # series_id = 0
+
+[postgres]
+host = "localhost"
+port = 5432
+database = "lemongrass"
+user = "lemongrass"

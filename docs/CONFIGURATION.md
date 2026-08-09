@@ -19,6 +19,7 @@ variable that holds each secret (`*_env` directives):
 |---|---|---|
 | InfluxDB token | `influx.token_env` = `"INFLUX_TELEMETRY_TOKEN"` | value of that var |
 | RaceMonitor token pool | `racemonitor.tokens_env` = `"RACEMONITOR_TOKENS"` | comma-separated; legacy singular `RACEMONITOR_TOKEN` also honored |
+| PostgreSQL password | `postgres.password_env` = `"LEMONGRASS_DB_PASSWORD"` | value of that var |
 
 ## Migrating from environment variables
 
@@ -75,6 +76,11 @@ Config is validated on load and fails loud rather than silently misbehaving:
 | `pisugar.host` | string | `""` | host tag (`""` = system hostname) |
 | `pisugar.api_url` | string | `http://localhost:8421` | pisugar-server base URL |
 | `pisugar.config_path` | string | `/etc/pisugar-server/config.json` | pisugar credentials file |
+| `postgres.host` | string | `localhost` | PostgreSQL host |
+| `postgres.port` | int | `5432` | PostgreSQL port |
+| `postgres.database` | string | `lemongrass` | database name |
+| `postgres.user` | string | `lemongrass` | database user |
+| `postgres.password_env` | string | `LEMONGRASS_DB_PASSWORD` | env var holding the DB password |
 
 ## Interactive search-term refinement
 

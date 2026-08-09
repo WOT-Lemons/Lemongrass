@@ -56,6 +56,11 @@ class TestDefaults:
         assert c.pisugar.host == ""
         assert c.pisugar.api_url == "http://localhost:8421"
         assert c.pisugar.config_path == "/etc/pisugar-server/config.json"
+        assert c.postgres.host == "localhost"
+        assert c.postgres.port == 5432
+        assert c.postgres.database == "lemongrass"
+        assert c.postgres.user == "lemongrass"
+        assert c.postgres.password_env == "LEMONGRASS_DB_PASSWORD"
 
 
 def _write_cfg(tmp_path, monkeypatch, body):
@@ -266,3 +271,67 @@ def test_sample_file_lists_every_key():
                 assert_covered(child, section[f.name], f"{key}.")
 
     assert_covered(_config.Config(), data, "")
+
+
+class TestPostgresSection:
+    def test_overlay_replaces_values(self, tmp_path, monkeypatch):
+        _write_cfg(tmp_path, monkeypatch, """
+            [postgres]
+            host = "db.internal"
+            port = 6543
+            database = "lg"
+            user = "svc"
+            password_env = "PGPASS"
+        """)
+        c = _config.load_config()
+        assert c.postgres.host == "db.internal"
+        assert c.postgres.port == 6543
+        assert c.postgres.database == "lg"
+        assert c.postgres.user == "svc"
+        assert c.postgres.password_env == "PGPASS"
+
+    def test_partial_overlay_keeps_defaults(self, tmp_path, monkeypatch):
+        _write_cfg(tmp_path, monkeypatch, """
+            [postgres]
+            host = "db.internal"
+        """)
+        c = _config.load_config()
+        assert c.postgres.host == "db.internal"
+        assert c.postgres.port == 5432
+        assert c.postgres.user == "lemongrass"
+
+    def test_unknown_key_raises(self, tmp_path, monkeypatch):
+        _write_cfg(tmp_path, monkeypatch, """
+            [postgres]
+            hostname = "db.internal"
+        """)
+        with pytest.raises(_config.ConfigError, match=r"unknown key.*postgres"):
+            _config.load_config()
+
+    def test_wrong_type_raises(self, tmp_path, monkeypatch):
+        _write_cfg(tmp_path, monkeypatch, """
+            [postgres]
+            port = "5432"
+        """)
+        with pytest.raises(_config.ConfigError,
+                          match=r"postgres\.port must be an integer"):
+            _config.load_config()
+
+    @pytest.mark.parametrize("port", [0, -1, 65536, 70000])
+    def test_out_of_range_port_raises(self, tmp_path, monkeypatch, port):
+        _write_cfg(tmp_path, monkeypatch, f"[postgres]\nport = {port}\n")
+        with pytest.raises(_config.ConfigError,
+                           match=r"postgres\.port must be between 1 and 65535"):
+            _config.load_config()
+
+    @pytest.mark.parametrize("port", [1, 5432, 65535])
+    def test_boundary_ports_are_accepted(self, tmp_path, monkeypatch, port):
+        _write_cfg(tmp_path, monkeypatch, f"[postgres]\nport = {port}\n")
+        assert _config.load_config().postgres.port == port
+
+    def test_password_is_never_read_from_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LEMONGRASS_DB_PASSWORD", "hunter2")
+        _write_cfg(tmp_path, monkeypatch, "[postgres]\nhost = 'db'\n")
+        c = _config.load_config()
+        # The config layer names the env var; it must never carry the secret.
+        assert not any("hunter2" in str(v) for v in vars(c.postgres).values())

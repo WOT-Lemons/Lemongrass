@@ -270,6 +270,74 @@ class TestRaceMonitorErrors:
         assert 'no tokens configured' in capsys.readouterr().err
 
 
+def test_db_is_a_registered_command():
+    from lemongrass import cli
+    assert cli._COMMANDS["db"] == "lemongrass.db"
+
+
+def _run_cli_raising(monkeypatch, capsys, tmp_path, exc_to_raise):
+    """Run cli.main() with a stubbed command that raises, returning (code, stderr).
+
+    The [postgres] endpoint is pinned so the caller can assert the CLI reports the
+    host and port it actually tried.
+    """
+    import sys as _sys
+
+    import pytest as _pytest
+
+    from lemongrass import cli
+
+    cfg = tmp_path / "lemongrass.toml"
+    cfg.write_text('[postgres]\nhost = "db.example"\nport = 6543\n')
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+
+    class _Mod:
+        @staticmethod
+        def main():
+            raise exc_to_raise
+
+    monkeypatch.setattr(cli.importlib, "import_module", lambda name: _Mod)
+    monkeypatch.setattr(_sys, "argv", ["lemongrass", "db", "upgrade"])
+    with _pytest.raises(SystemExit) as exc:
+        cli.main()
+    return exc.value.code, capsys.readouterr().err
+
+
+class _PgError(Exception):
+    """Stand-in for a psycopg error, whose sqlstate is what the CLI branches on."""
+
+    def __init__(self, message, sqlstate):
+        super().__init__(message)
+        self.sqlstate = sqlstate
+
+
+def test_operational_error_reports_cleanly(monkeypatch, capsys, tmp_path):
+    from sqlalchemy.exc import OperationalError
+
+    # A connection-phase failure: psycopg leaves sqlstate unset.
+    orig = _PgError("connection refused", None)
+    code, err = _run_cli_raising(
+        monkeypatch, capsys, tmp_path, OperationalError("SELECT 1", {}, orig))
+    assert code == 1
+    assert "cannot reach PostgreSQL at db.example:6543" in err
+    assert "connection refused" in err
+
+
+def test_operational_error_after_connecting_is_not_reported_as_unreachable(
+        monkeypatch, capsys, tmp_path):
+    from sqlalchemy.exc import OperationalError
+
+    # The server accepted the connection and then cancelled the statement
+    # (SQLSTATE 57014). Calling that "cannot reach PostgreSQL" would be wrong.
+    orig = _PgError("canceling statement due to statement timeout", "57014")
+    code, err = _run_cli_raising(
+        monkeypatch, capsys, tmp_path, OperationalError("SELECT 1", {}, orig))
+    assert code == 1
+    assert "cannot reach" not in err
+    assert "PostgreSQL request failed at db.example:6543" in err
+    assert "statement timeout" in err
+
+
 class TestExitCodePropagation:
     def test_subcommand_return_value_becomes_exit_code(self):
         """laps.main() returns 1 on failure; the dispatcher must not swallow it."""

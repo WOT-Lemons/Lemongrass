@@ -5,6 +5,7 @@ import sys
 
 from influxdb_client.rest import ApiException
 from race_monitor import RaceMonitorError, RaceMonitorHTTPError
+from sqlalchemy.exc import OperationalError
 from urllib3.exceptions import HTTPError
 
 # _influx is imported lazily inside main(): importing it loads the config file,
@@ -13,6 +14,7 @@ from urllib3.exceptions import HTTPError
 from lemongrass._config import ConfigError, warn_dropped_env_vars
 
 _COMMANDS = {
+    "db": "lemongrass.db",
     "laps": "lemongrass.laps",
     "race-backfill": "lemongrass.race_backfill",
     "races": "lemongrass.races",
@@ -31,6 +33,18 @@ def _influx_unreachable(exc):
         # which is a connectivity failure, not a reached-but-rejected request.
         return exc.status in (None, 0) or exc.status >= 500
     return True  # a urllib3 HTTPError is a connection-level failure
+
+
+def _postgres_unreachable(exc):
+    """True if exc means PostgreSQL could not be reached, False if the server
+    responded and then failed the operation.
+
+    psycopg raises connection-phase failures with no SQLSTATE — nothing listening,
+    a refused handshake, a rejected password, a missing database. A server that
+    accepted the connection and then failed mid-statement (a cancelled statement,
+    exhausted connections, an administrative shutdown) always carries one.
+    """
+    return getattr(exc.orig, 'sqlstate', None) is None
 
 
 def _format_influx_error(exc):
@@ -113,6 +127,15 @@ def main():
         else:
             print(f"Error: InfluxDB request failed at {_influx.INFLUX_URL}", file=sys.stderr)
         print(f"  {_format_influx_error(exc)}", file=sys.stderr)
+        sys.exit(1)
+    except OperationalError as exc:
+        from lemongrass import _config
+        pg = _config.load_config().postgres
+        if _postgres_unreachable(exc):
+            print(f"Error: cannot reach PostgreSQL at {pg.host}:{pg.port}", file=sys.stderr)
+        else:
+            print(f"Error: PostgreSQL request failed at {pg.host}:{pg.port}", file=sys.stderr)
+        print(f"  {' '.join(str(exc.orig or exc).split())}", file=sys.stderr)
         sys.exit(1)
     except RaceMonitorError as exc:
         _report_race_monitor_error(exc)

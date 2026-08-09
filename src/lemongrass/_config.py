@@ -154,6 +154,17 @@ class PisugarConfig:
 
 
 @dataclass(frozen=True)
+class PostgresConfig:
+    """PostgreSQL connection settings and the password env-var name."""
+
+    host: str = 'localhost'
+    port: int = 5432
+    database: str = 'lemongrass'
+    user: str = 'lemongrass'
+    password_env: str = 'LEMONGRASS_DB_PASSWORD'
+
+
+@dataclass(frozen=True)
 class Config:
     """Top-level lemongrass configuration aggregating all sections."""
 
@@ -162,6 +173,7 @@ class Config:
     racemonitor: RaceMonitorConfig = field(default_factory=RaceMonitorConfig)
     telem: TelemConfig = field(default_factory=TelemConfig)
     pisugar: PisugarConfig = field(default_factory=PisugarConfig)
+    postgres: PostgresConfig = field(default_factory=PostgresConfig)
 
 
 def load_config():
@@ -232,14 +244,16 @@ def _typed(d, key, default, kind, where):
 
 def _build_config(data):
     """Validate the top-level table and build a Config from its sections."""
-    _reject_unknown(data, {'influx', 'races', 'racemonitor', 'telem', 'pisugar'},
-                    'top level')
+    _reject_unknown(
+        data, {'influx', 'races', 'racemonitor', 'telem', 'pisugar', 'postgres'},
+        'top level')
     return Config(
         influx=_build_influx(data.get('influx', {})),
         races=_build_races(data.get('races', {})),
         racemonitor=_build_racemonitor(data.get('racemonitor', {})),
         telem=_build_telem(data.get('telem', {})),
         pisugar=_build_pisugar(data.get('pisugar', {})),
+        postgres=_build_postgres(data.get('postgres', {})),
     )
 
 
@@ -286,6 +300,23 @@ def _build_racemonitor(d):
     dflt = RaceMonitorConfig()
     return RaceMonitorConfig(
         tokens_env=_typed(d, 'tokens_env', dflt.tokens_env, str, 'racemonitor'))
+
+
+def _build_postgres(d):
+    """Build PostgresConfig from the [postgres] table."""
+    _reject_unknown(d, {'host', 'port', 'database', 'user', 'password_env'},
+                    'postgres')
+    dflt = PostgresConfig()
+    port = _typed(d, 'port', dflt.port, int, 'postgres')
+    if not 1 <= port <= 65535:
+        raise ConfigError(f'postgres.port must be between 1 and 65535: {port!r}')
+    return PostgresConfig(
+        host=_typed(d, 'host', dflt.host, str, 'postgres'),
+        port=port,
+        database=_typed(d, 'database', dflt.database, str, 'postgres'),
+        user=_typed(d, 'user', dflt.user, str, 'postgres'),
+        password_env=_typed(d, 'password_env', dflt.password_env, str, 'postgres'),
+    )
 
 
 def _build_telem(d):

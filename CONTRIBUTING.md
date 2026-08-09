@@ -13,6 +13,41 @@ uv run ruff check
 CI runs lint separately from the test suite, so a green `pytest` does not imply a
 green lint — run both before pushing.
 
+## Running the PostgreSQL-backed tests
+
+Tests that touch PostgreSQL are skipped unless `LEMONGRASS_TEST_DATABASE_URL` is
+set. Point it at a **throwaway** database on a non-default port — never at the
+local-testing stack's Postgres (below), which uses the same port, credentials,
+and database name that CI's URL does, and whose data these tests would destroy:
+
+```bash
+docker run --rm -d --name lg-test-pg -p 127.0.0.1:55432:5432 \
+  --health-cmd='pg_isready -U lemongrass -d lemongrass' \
+  --health-interval=1s --health-timeout=5s --health-retries=30 \
+  -e POSTGRES_USER=lemongrass -e POSTGRES_PASSWORD=local-dev-password \
+  -e POSTGRES_DB=lemongrass postgres:18
+
+until [ "$(docker inspect -f '{{.State.Health.Status}}' lg-test-pg)" = healthy ]; do sleep 1; done
+```
+
+`docker run -d` returns before the server finishes initializing, so wait for the
+health check rather than starting the tests straight away.
+
+```bash
+export LEMONGRASS_TEST_DATABASE_URL=postgresql+psycopg://lemongrass:local-dev-password@localhost:55432/lemongrass
+export LEMONGRASS_TEST_DB_ALLOW_WIPE=1
+uv run pytest
+```
+
+`LEMONGRASS_TEST_DB_ALLOW_WIPE=1` is a required, separate opt-in: the `clean_db`
+fixture drops and recreates the target database's `public` schema before every
+test that uses it, and refuses to do so without this confirmation. Tear the
+container down when you're done:
+
+```bash
+docker rm -f lg-test-pg
+```
+
 ## Testing against a local InfluxDB stack
 
 When prod is unavailable, run the full pipeline against a local InfluxDB.
