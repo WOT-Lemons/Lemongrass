@@ -130,17 +130,3 @@ datasources:
       defaultBucket: race_sessions
     secureJsonData:
       token: local-dev-token
-
-  # Relational store: races and sessions. Dashboard variables query this; lap
-  # time series still come from the Influx datasources above.
-  - name: postgres
-    uid: wotl-postgres
-    type: grafana-postgresql-datasource
-    access: proxy
-    url: postgres:5432
-    user: lemongrass
-    jsonData:
-      database: lemongrass
-      sslmode: disable
-    secureJsonData:
-      password: local-dev-password

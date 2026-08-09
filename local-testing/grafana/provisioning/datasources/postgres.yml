@@ -1,0 +1,15 @@
+apiVersion: 1
+datasources:
+  # Relational store: races and sessions. Lap time series stay in InfluxDB —
+  # see influxdb.yml for those datasources.
+  - name: postgres
+    uid: wotl-postgres
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: postgres:5432
+    user: lemongrass
+    jsonData:
+      database: lemongrass
+      sslmode: disable
+    secureJsonData:
+      password: local-dev-password
