@@ -20,10 +20,13 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
+    "alembic~=1.19",
     "influxdb-client~=1.47",
     "obd~=0.7",
     "pandas~=3.0",
+    "psycopg[binary]~=3.3",
     "race-monitor>=1.0,<2.0",
+    "sqlalchemy~=2.0",
     "textual~=8.2",
     "tomlkit~=0.15",
     "urllib3>=2",
