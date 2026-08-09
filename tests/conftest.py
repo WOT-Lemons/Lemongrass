@@ -39,7 +39,9 @@ def clean_db(postgres_url):
     name-substring check on the database name would not catch this, since the
     colliding name is literally "lemongrass" in both places.
     """
-    if not os.environ.get("LEMONGRASS_TEST_DB_ALLOW_WIPE"):
+    # Compared against exactly "1": os.environ.get() is truthy for "0" and
+    # "false" too, which would arm the wipe for someone trying to disarm it.
+    if os.environ.get("LEMONGRASS_TEST_DB_ALLOW_WIPE") != "1":
         pytest.fail(
             "clean_db drops and recreates the public schema on the database "
             "named by LEMONGRASS_TEST_DATABASE_URL. Refusing to run: set "

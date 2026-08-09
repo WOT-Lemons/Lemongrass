@@ -8,7 +8,8 @@ Open source car telemetry for 24 Hours of Lemons.
 - PiSugar 3 UPS
 - USB OBD-II adapter
 - An InfluxDB instance running v2.x
-- A PostgreSQL instance (v14 or later) for race and session metadata
+- A PostgreSQL instance (v14 or later) for the `lemongrass db` commands and future race and
+  session metadata
 - Grafana to visualize the data
 
 ## Services
@@ -395,10 +396,11 @@ the full key reference.
 
 ## Database Schema
 
-lemongrass also uses a PostgreSQL database for race and session metadata. Before
-running any command against a fresh database, set the password env var named by
-`postgres.password_env` (`LEMONGRASS_DB_PASSWORD` by default — see `.env.sample`)
-and apply the schema:
+lemongrass ships a PostgreSQL schema that will hold race and session metadata. Only
+the `lemongrass db` commands use it today — every other command still reads and writes
+that metadata in InfluxDB, so no other command needs a database. Before running
+`lemongrass db`, set the password env var named by `postgres.password_env`
+(`LEMONGRASS_DB_PASSWORD` by default — see `.env.sample`) and apply the schema:
 
 ```shell
 lemongrass db upgrade

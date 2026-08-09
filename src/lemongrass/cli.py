@@ -35,6 +35,18 @@ def _influx_unreachable(exc):
     return True  # a urllib3 HTTPError is a connection-level failure
 
 
+def _postgres_unreachable(exc):
+    """True if exc means PostgreSQL could not be reached, False if the server
+    responded and then failed the operation.
+
+    psycopg raises connection-phase failures with no SQLSTATE — nothing listening,
+    a refused handshake, a rejected password, a missing database. A server that
+    accepted the connection and then failed mid-statement (a cancelled statement,
+    exhausted connections, an administrative shutdown) always carries one.
+    """
+    return getattr(exc.orig, 'sqlstate', None) is None
+
+
 def _format_influx_error(exc):
     """Return a one-line human reason for an InfluxDB connection/API failure."""
     if isinstance(exc, ApiException):
@@ -119,7 +131,10 @@ def main():
     except OperationalError as exc:
         from lemongrass import _config
         pg = _config.load_config().postgres
-        print(f"Error: cannot reach PostgreSQL at {pg.host}:{pg.port}", file=sys.stderr)
+        if _postgres_unreachable(exc):
+            print(f"Error: cannot reach PostgreSQL at {pg.host}:{pg.port}", file=sys.stderr)
+        else:
+            print(f"Error: PostgreSQL request failed at {pg.host}:{pg.port}", file=sys.stderr)
         print(f"  {' '.join(str(exc.orig or exc).split())}", file=sys.stderr)
         sys.exit(1)
     except RaceMonitorError as exc:

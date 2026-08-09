@@ -307,9 +307,12 @@ def _build_postgres(d):
     _reject_unknown(d, {'host', 'port', 'database', 'user', 'password_env'},
                     'postgres')
     dflt = PostgresConfig()
+    port = _typed(d, 'port', dflt.port, int, 'postgres')
+    if not 1 <= port <= 65535:
+        raise ConfigError(f'postgres.port must be between 1 and 65535: {port!r}')
     return PostgresConfig(
         host=_typed(d, 'host', dflt.host, str, 'postgres'),
-        port=_typed(d, 'port', dflt.port, int, 'postgres'),
+        port=port,
         database=_typed(d, 'database', dflt.database, str, 'postgres'),
         user=_typed(d, 'user', dflt.user, str, 'postgres'),
         password_env=_typed(d, 'password_env', dflt.password_env, str, 'postgres'),

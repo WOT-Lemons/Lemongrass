@@ -48,6 +48,26 @@ jobs:
           LEMONGRASS_TEST_DB_ALLOW_WIPE: "1"
         run: uv run --frozen --with pytest pytest tests/
 
+      # The migrations ship as package data, so `lemongrass db upgrade` works from
+      # a wheel with no checkout. Only a real build proves that: a stray
+      # build-backend exclude would drop these files and nothing else would notice
+      # until deployment.
+      - name: Verify migrations ship in the wheel
+        run: |
+          uv build --wheel
+          uv run python - <<'PY'
+          import glob, sys, zipfile
+          wheel = sorted(glob.glob('dist/*.whl'))[-1]
+          names = set(zipfile.ZipFile(wheel).namelist())
+          need = ['lemongrass/migrations/env.py',
+                  'lemongrass/migrations/script.py.mako',
+                  'lemongrass/migrations/versions/0001_initial.py']
+          missing = [n for n in need if n not in names]
+          if missing:
+              sys.exit(f'missing from {wheel}: {missing}')
+          print(f'all migration files present in {wheel}')
+          PY
+
   integration:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

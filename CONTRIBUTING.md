@@ -22,9 +22,16 @@ and database name that CI's URL does, and whose data these tests would destroy:
 
 ```bash
 docker run --rm -d --name lg-test-pg -p 127.0.0.1:55432:5432 \
+  --health-cmd='pg_isready -U lemongrass -d lemongrass' \
+  --health-interval=1s --health-timeout=5s --health-retries=30 \
   -e POSTGRES_USER=lemongrass -e POSTGRES_PASSWORD=local-dev-password \
   -e POSTGRES_DB=lemongrass postgres:18
+
+until [ "$(docker inspect -f '{{.State.Health.Status}}' lg-test-pg)" = healthy ]; do sleep 1; done
 ```
+
+`docker run -d` returns before the server finishes initializing, so wait for the
+health check rather than starting the tests straight away.
 
 ```bash
 export LEMONGRASS_TEST_DATABASE_URL=postgresql+psycopg://lemongrass:local-dev-password@localhost:55432/lemongrass
