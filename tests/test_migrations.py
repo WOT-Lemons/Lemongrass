@@ -88,3 +88,26 @@ def test_defaults_land_for_omitted_text_columns(clean_db, postgres_url):
     assert row.name == ""
     assert row.track_name == ""
     assert row.updated_at is not None
+
+
+def test_migration_head_matches_the_schema_module(clean_db, postgres_url):
+    # Migrations are hand-written (autogenerate renders a rename as
+    # drop-plus-add, which destroys data), so nothing mechanically keeps them
+    # in step with _schema.py. Without this, a new revision that forgets a
+    # column fails at runtime — _db's statements name a column the database
+    # does not have — instead of in CI.
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+
+    from lemongrass import _schema
+    _upgrade(postgres_url)
+    with clean_db.connect() as conn:
+        diff = compare_metadata(
+            MigrationContext.configure(conn), _schema.metadata)
+    # alembic_version is not in _schema.metadata, so it shows up as an extra
+    # table on every run; it is Alembic's own bookkeeping, not drift.
+    diff = [d for d in diff
+            if not (isinstance(d, tuple) and len(d) == 2
+                    and d[0] == 'remove_table'
+                    and d[1].name == 'alembic_version')]
+    assert diff == [], f"schema drift between _schema.py and the migrations: {diff}"
