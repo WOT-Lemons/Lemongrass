@@ -105,3 +105,98 @@ def test_statements_join_a_caller_transaction(db):
             _db.upsert_race(_race(), conn=conn)
             raise RuntimeError("boom")
     assert _db.get_race("101") is None
+
+
+def _session(session_id=10, race_id="101", **kw):
+    from lemongrass import _db
+    base = {
+        "name": "Session 1",
+        "start_time": datetime(2026, 5, 1, 13, 0, tzinfo=UTC),
+    }
+    base.update(kw)
+    return _db.SessionRow(session_id=session_id, race_id=race_id, **base)
+
+
+def test_upsert_session_inserts_and_updates(db):
+    from lemongrass import _db
+    _db.upsert_race(_race())
+    _db.upsert_session(_session())
+    _db.upsert_session(_session(name="Qualifying"))
+    got = _db.list_sessions("101")
+    assert len(got) == 1
+    assert got[0].name == "Qualifying"
+
+
+def test_upsert_session_allows_null_start_time(db):
+    # The live path calls store_session(..., None): storing 0 rendered as 1970
+    # in the picker, NULL is the honest representation.
+    from lemongrass import _db
+    _db.upsert_race(_race())
+    _db.upsert_session(_session(start_time=None))
+    assert _db.list_sessions("101")[0].start_time is None
+
+
+def test_replace_sessions_removes_ones_that_disappeared(db):
+    from lemongrass import _db
+    _db.upsert_race(_race())
+    _db.replace_sessions("101", [_session(10), _session(11)])
+    _db.replace_sessions("101", [_session(10)])
+    assert [s.session_id for s in _db.list_sessions("101")] == [10]
+
+
+def test_replace_sessions_leaves_other_races_alone(db):
+    from lemongrass import _db
+    _db.upsert_race(_race("101"))
+    _db.upsert_race(_race("202"))
+    _db.upsert_session(_session(99, race_id="202"))
+    _db.replace_sessions("101", [_session(10)])
+    assert [s.session_id for s in _db.list_sessions("202")] == [99]
+
+
+def test_replace_sessions_with_an_empty_set_clears_the_race(db):
+    from lemongrass import _db
+    _db.upsert_race(_race())
+    _db.upsert_session(_session(10))
+    _db.replace_sessions("101", [])
+    assert _db.list_sessions("101") == []
+
+
+def test_replace_sessions_is_one_transaction(db):
+    # A failing row must not leave the delete half-applied: the old set has to
+    # survive intact so the next backfill can redo the whole rewrite.
+    from sqlalchemy.exc import IntegrityError
+
+    from lemongrass import _db
+    _db.upsert_race(_race())
+    _db.replace_sessions("101", [_session(10)])
+    with pytest.raises(IntegrityError):
+        _db.replace_sessions("101", [_session(11), _session(12, race_id="ghost")])
+    assert [s.session_id for s in _db.list_sessions("101")] == [10]
+
+
+def test_delete_race_cascades_to_sessions(db):
+    from lemongrass import _db
+    _db.upsert_race(_race())
+    _db.upsert_session(_session())
+    _db.delete_race("101")
+    assert _db.list_sessions("101") == []
+
+
+def test_list_sessions_orders_nulls_last(db):
+    from lemongrass import _db
+    _db.upsert_race(_race())
+    _db.upsert_session(_session(12, start_time=None))
+    _db.upsert_session(_session(
+        11, start_time=datetime(2026, 5, 1, 15, 0, tzinfo=UTC)))
+    _db.upsert_session(_session(
+        10, start_time=datetime(2026, 5, 1, 13, 0, tzinfo=UTC)))
+    assert [s.session_id for s in _db.list_sessions("101")] == [10, 11, 12]
+
+
+def test_list_sessions_without_a_race_id_returns_all(db):
+    from lemongrass import _db
+    _db.upsert_race(_race("101"))
+    _db.upsert_race(_race("202"))
+    _db.upsert_session(_session(10, race_id="101"))
+    _db.upsert_session(_session(20, race_id="202"))
+    assert len(_db.list_sessions()) == 2

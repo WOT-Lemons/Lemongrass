@@ -238,3 +238,98 @@ def delete_race(race_id, conn=None):
         result = c.execute(
             delete(_schema.races).where(_schema.races.c.race_id == race_id))
     return result.rowcount > 0
+
+
+@dataclass
+class SessionRow:
+    """One row of the sessions table.
+
+    session_id is RaceMonitor's own integer identifier and is the primary key
+    on its own: the live path (client.live.get_session -> session['ID']) and
+    the backfill path (results.session_details -> Session['ID'], itself sourced
+    from results.sessions_for_race's session ids) both name sessions with the
+    same 'ID' field from the same RaceMonitor API family, for the same race —
+    one id space. push_influx_session's session_id-only delete predicate
+    already assumed this. start_time is nullable — the live path learns a
+    session's id before its start time, and NULL beats storing 1970.
+    """
+
+    session_id: int
+    race_id: str
+    name: str = ''
+    start_time: datetime | None = None
+
+
+def _session_row(row):
+    """Build a SessionRow from a result row."""
+    return SessionRow(session_id=row.session_id, race_id=row.race_id,
+                      name=row.name, start_time=row.start_time)
+
+
+def _session_upsert(row):
+    """Build the insert-or-update statement for one session."""
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert
+    stmt = insert(_schema.sessions).values(
+        session_id=row.session_id,
+        race_id=row.race_id,
+        name=row.name or '',
+        start_time=row.start_time,
+    )
+    return stmt.on_conflict_do_update(
+        index_elements=[_schema.sessions.c.session_id],
+        set_={
+            'race_id': stmt.excluded.race_id,
+            'name': stmt.excluded.name,
+            'start_time': stmt.excluded.start_time,
+            'updated_at': func.now(),
+        },
+    )
+
+
+def upsert_session(row, conn=None):
+    """Insert or update one session by primary key.
+
+    The live monitor's per-session write. Backfill uses replace_sessions.
+    """
+    with connection(conn) as c:
+        c.execute(_session_upsert(row))
+
+
+def replace_sessions(race_id, rows, conn=None):
+    """Make the stored sessions for race_id exactly `rows`, in one transaction.
+
+    Upsert-only is not enough: a session that dedupe collapsed away would
+    linger forever and keep appearing in the dashboard's session picker — the
+    duplicate-session symptom this project exists to stop reintroducing. The
+    delete is scoped to this race, so the live monitor's sessions for other
+    races are untouched. One transaction means a failed row leaves the
+    previous set intact for the next backfill to redo.
+    """
+    from sqlalchemy import delete
+    with connection(conn) as c:
+        for row in rows:
+            c.execute(_session_upsert(row))
+        stmt = delete(_schema.sessions).where(
+            _schema.sessions.c.race_id == race_id)
+        keep = [r.session_id for r in rows]
+        if keep:
+            stmt = stmt.where(_schema.sessions.c.session_id.notin_(keep))
+        c.execute(stmt)
+
+
+def list_sessions(race_id=None, conn=None):
+    """Return sessions for one race, or every stored session.
+
+    Ordered by start_time with NULLs last, then session_id, so the ordering is
+    total and stable for the dashboard picker and for export.
+    """
+    from sqlalchemy import select
+    stmt = select(_schema.sessions)
+    if race_id is not None:
+        stmt = stmt.where(_schema.sessions.c.race_id == race_id)
+    stmt = stmt.order_by(_schema.sessions.c.start_time.nulls_last(),
+                         _schema.sessions.c.session_id)
+    with connection(conn) as c:
+        rows = c.execute(stmt).all()
+    return [_session_row(r) for r in rows]
