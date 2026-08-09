@@ -17,6 +17,20 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+    services:
+      postgres:
+        image: postgres:18@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
+        env:
+          POSTGRES_USER: lemongrass
+          POSTGRES_PASSWORD: local-dev-password
+          POSTGRES_DB: lemongrass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -29,6 +43,8 @@ jobs:
         run: uv lock --check
 
       - name: Run tests
+        env:
+          LEMONGRASS_TEST_DATABASE_URL: postgresql+psycopg://lemongrass:local-dev-password@localhost:5432/lemongrass
         run: uv run --frozen --with pytest pytest tests/
 
   integration:
