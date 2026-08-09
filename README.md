@@ -8,6 +8,7 @@ Open source car telemetry for 24 Hours of Lemons.
 - PiSugar 3 UPS
 - USB OBD-II adapter
 - An InfluxDB instance running v2.x
+- A PostgreSQL instance (v14 or later) for race and session metadata
 - Grafana to visualize the data
 
 ## Services

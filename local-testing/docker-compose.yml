@@ -24,12 +24,35 @@ services:
       timeout: 3s
       retries: 12
 
+  postgres:
+    image: postgres:18@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
+    # Published so the CLI can run on the host against the local stack, the same
+    # reason influxdb publishes 8086. Without this, `lemongrass db upgrade`
+    # cannot reach the database.
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: lemongrass
+      POSTGRES_PASSWORD: local-dev-password
+      POSTGRES_DB: lemongrass
+    # postgres:18+ images expect a single mount at /var/lib/postgresql (not
+    # .../data) — see the image's own migration notes in docker-library/postgres#1259.
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "lemongrass"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   grafana:
     image: grafana/grafana:12.4@sha256:7753ad493720e33560077e8bc5e05fbce4ade777f1387b19ab5050b6777111dd
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
       influxdb:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     environment:
       GF_SECURITY_ADMIN_PASSWORD: local-dev-password
@@ -108,4 +131,5 @@ services:
 volumes:
   influxdb-data:
   grafana-data:
+  postgres-data:
   telem-data:
