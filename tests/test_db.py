@@ -13,9 +13,9 @@ def _reset(monkeypatch):
     _db.reset_engine()
 
 
-def test_import_creates_no_engine_and_reads_no_secret(monkeypatch):
-    # Importing must not touch the environment or open a socket: every command
-    # imports the CLI, including ones that never use a database.
+def test_import_creates_no_engine():
+    # Importing must not create an engine: every command imports the CLI,
+    # including ones that never use a database.
     from lemongrass import _db
     assert _db._engine is None
 
