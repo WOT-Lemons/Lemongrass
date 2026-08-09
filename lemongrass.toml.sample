@@ -40,3 +40,10 @@ max_size = "1GiB"                          # accepts 1GiB/1GB/bytes int
 host = ""                                  # "" = system hostname
 api_url = "http://localhost:8421"
 config_path = "/etc/pisugar-server/config.json"
+
+[postgres]
+host = "localhost"
+port = 5432
+database = "lemongrass"
+user = "lemongrass"
+password_env = "LEMONGRASS_DB_PASSWORD"   # name of the env var holding the DB password
