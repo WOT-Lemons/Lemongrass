@@ -5,6 +5,7 @@ import sys
 
 from influxdb_client.rest import ApiException
 from race_monitor import RaceMonitorError, RaceMonitorHTTPError
+from sqlalchemy.exc import OperationalError
 from urllib3.exceptions import HTTPError
 
 # _influx is imported lazily inside main(): importing it loads the config file,
@@ -13,6 +14,7 @@ from urllib3.exceptions import HTTPError
 from lemongrass._config import ConfigError, warn_dropped_env_vars
 
 _COMMANDS = {
+    "db": "lemongrass.db",
     "laps": "lemongrass.laps",
     "race-backfill": "lemongrass.race_backfill",
     "races": "lemongrass.races",
@@ -113,6 +115,12 @@ def main():
         else:
             print(f"Error: InfluxDB request failed at {_influx.INFLUX_URL}", file=sys.stderr)
         print(f"  {_format_influx_error(exc)}", file=sys.stderr)
+        sys.exit(1)
+    except OperationalError as exc:
+        from lemongrass import _config
+        pg = _config.load_config().postgres
+        print(f"Error: cannot reach PostgreSQL at {pg.host}:{pg.port}", file=sys.stderr)
+        print(f"  {' '.join(str(exc.orig or exc).split())}", file=sys.stderr)
         sys.exit(1)
     except RaceMonitorError as exc:
         _report_race_monitor_error(exc)

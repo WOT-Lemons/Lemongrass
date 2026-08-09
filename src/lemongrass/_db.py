@@ -92,7 +92,11 @@ def alembic_config(url=None):
     from pathlib import Path
 
     from alembic.config import Config
-    cfg = Config()
+    # Config's `stdout` parameter defaults to `sys.stdout` bound once, at the
+    # time alembic.config is first imported — not at each call. Pass it
+    # explicitly so output goes to whatever sys.stdout currently is (tests
+    # rely on this to land in capsys's per-test buffer).
+    cfg = Config(stdout=sys.stdout)
     cfg.set_main_option('script_location',
                         str(Path(__file__).parent / 'migrations'))
     if url is None:

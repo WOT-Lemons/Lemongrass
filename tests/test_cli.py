@@ -270,6 +270,33 @@ class TestRaceMonitorErrors:
         assert 'no tokens configured' in capsys.readouterr().err
 
 
+def test_db_is_a_registered_command():
+    from lemongrass import cli
+    assert cli._COMMANDS["db"] == "lemongrass.db"
+
+
+def test_operational_error_reports_cleanly(monkeypatch, capsys):
+    import sys as _sys
+
+    import pytest as _pytest
+    from sqlalchemy.exc import OperationalError
+
+    from lemongrass import cli
+
+    class _Mod:
+        @staticmethod
+        def main():
+            raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr(cli.importlib, "import_module", lambda name: _Mod)
+    monkeypatch.setattr(_sys, "argv", ["lemongrass", "db", "upgrade"])
+    with _pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "cannot reach PostgreSQL" in err
+
+
 class TestExitCodePropagation:
     def test_subcommand_return_value_becomes_exit_code(self):
         """laps.main() returns 1 on failure; the dispatcher must not swallow it."""
