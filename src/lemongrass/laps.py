@@ -113,6 +113,10 @@ class RaceMetadata:
     track_name: str
     series_name: str | None
     end_time_epoc: int
+    # RaceMonitor's numeric series identifier. Kept alongside series_name
+    # because event matching is series-scoped: a name alone cannot
+    # distinguish two series that share a display name.
+    series_id: int | None = None
 
 
 @dataclass
@@ -2156,6 +2160,7 @@ def _resolve_race_metadata(race_details, client):
         track_name=race['Track'],
         series_name=series_name,
         end_time_epoc=race.get('EndDateEpoc', 0),
+        series_id=series_id,
     )
 
 

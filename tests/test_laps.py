@@ -2789,6 +2789,30 @@ class TestResolveRaceMetadata:
         assert meta.end_time_epoc == 0
 
 
+def test_resolve_race_metadata_keeps_series_id():
+    client = MagicMock()
+    client.common.current_races.return_value = {
+        'Races': [{'SeriesName': 'Lemons'}]}
+    meta = _mod._resolve_race_metadata(
+        {'Successful': True,
+         'Race': {'Name': 'R', 'Track': 'T', 'SeriesID': 77, 'EndDateEpoc': 5}},
+        client)
+    assert meta.series_id == 77
+    assert meta.series_name == 'Lemons'
+
+
+def test_resolve_race_metadata_series_id_none_when_absent():
+    meta = _mod._resolve_race_metadata(
+        {'Successful': True, 'Race': {'Name': 'R', 'Track': 'T'}}, MagicMock())
+    assert meta.series_id is None
+
+
+def test_resolve_race_metadata_unsuccessful_has_no_series_id():
+    meta = _mod._resolve_race_metadata({'Successful': False}, MagicMock())
+    assert meta.series_id is None
+    assert meta.race_name == ''
+
+
 class TestPushInfluxRace:
     def _ctx(self):
         write_api = MagicMock()
