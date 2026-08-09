@@ -80,3 +80,26 @@ def db_password_present():
     surface a clean error instead of a worker-thread SystemExit.
     """
     return bool(os.environ.get(_config.load_config().postgres.password_env))
+
+
+def alembic_config(url=None):
+    """Build an Alembic Config pointed at the migrations shipped in this package.
+
+    Resolving ``script_location`` through the package directory is what lets
+    ``lemongrass db upgrade`` work from an installed wheel or a container, with
+    no checkout and no alembic.ini on disk.
+    """
+    from pathlib import Path
+
+    from alembic.config import Config
+    cfg = Config()
+    cfg.set_main_option('script_location',
+                        str(Path(__file__).parent / 'migrations'))
+    if url is None:
+        url = database_url()
+    # A URL object hides the password in str(); a caller-supplied string is
+    # already rendered. Accept either so tests can pass a plain URL string.
+    if hasattr(url, 'render_as_string'):
+        url = url.render_as_string(hide_password=False)
+    cfg.set_main_option('sqlalchemy.url', str(url))
+    return cfg
