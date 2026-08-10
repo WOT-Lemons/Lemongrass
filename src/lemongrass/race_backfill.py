@@ -4,8 +4,9 @@
 Discovers past Lemons races — by series enumeration when
 races.backfill.series_id is configured (the search terms then select which
 of the series' races to include by name; no terms means the whole series),
-otherwise by name-based search terms alone — and writes fieldwide lap data
-to the laps/races InfluxDB buckets. In a terminal, an interactive checklist
+otherwise by name-based search terms alone — and writes fieldwide lap data:
+race/session metadata to Postgres, laps to the InfluxDB laps bucket. In a
+terminal, an interactive checklist
 refines the selection first; press 's' there to find and pin the series by
 searching for any known race. Each race is backfilled in-process through a
 single shared RaceMonitorClient, so the rate-limiter window carries across

@@ -1,5 +1,8 @@
 #!/usr/bin/env python
-"""lemongrass races subcommand: inspect and manage race data stored in InfluxDB.
+"""lemongrass races subcommand: inspect and manage stored race data.
+
+Race/session attributes live in Postgres; laps, standings, and lap counts
+stay in InfluxDB, so several reads and the prune below are hybrid.
 
 Subcommands: list, prune, backfill, diagnose.
 Run `lemongrass races <subcommand> --help` for per-subcommand options.
@@ -104,7 +107,7 @@ def fetch_race_rows(query_api):
 
 
 def _handle_list():
-    """Print a table of all races in the races bucket with their total lap count and
+    """Print a table of all stored races with their total lap count and
     schema version status (current, stale, or no laps)."""
     with _influx.connect() as client:
         rows = fetch_race_rows(client.query_api())
@@ -185,11 +188,12 @@ def prune_races(delete_api, race_ids, on_progress=None, on_error=None):
 
 
 def _handle_prune():
-    """Parse args and delete all data for the specified race(s) from InfluxDB,
+    """Parse args and delete all data for the specified race(s) — the Postgres
+    race/session rows plus the InfluxDB laps/standings/legacy race data,
     prompting for confirmation unless --yes is passed."""
     parser = argparse.ArgumentParser(
         prog='lemongrass-races-prune',
-        description='Delete all data for one or more races from InfluxDB')
+        description='Delete all data for one or more races')
     parser.add_argument('race_id', nargs='+')
     parser.add_argument('--yes', action='store_true', default=False,
                         help='Skip confirmation prompt')

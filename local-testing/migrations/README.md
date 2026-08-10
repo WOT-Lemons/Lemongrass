@@ -110,8 +110,8 @@ the `lemongrass db import-legacy` / `export-legacy` commands.
    A healthy dry run has `races read == races would-write` (nothing written yet, so
    `written` is `0`) and a small, explained `sessions skipped` count matching the
    orphan race id(s) printed. **These example figures are illustrative only** — they
-   have not been produced against real captured data; a rehearsal run (see Task 14)
-   should record the actual observed counts here once it happens.
+   have not been produced against real captured data; a rehearsal against captured
+   real race data should record the actual observed counts here once it happens.
 
 4. Run the import for real:
 
