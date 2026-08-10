@@ -196,7 +196,10 @@ def race_line(row):
         fields.append(f'expected_lap_count={row.expected_lap_count}i')
     if row.session_count is not None:
         fields.append(f'session_count={row.session_count}i')
-    ns = int(row.race_time.timestamp() * 1_000_000_000)
+    # int(timestamp() * 1e9) loses ~100ns to float64 rounding; splitting whole
+    # seconds from microseconds keeps the conversion exact.
+    ts = row.race_time
+    ns = int(ts.timestamp()) * 1_000_000_000 + ts.microsecond * 1000
     return f"race{tags} {','.join(fields)} {ns}"
 
 
