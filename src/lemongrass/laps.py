@@ -28,7 +28,7 @@ from influxdb_client import Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from race_monitor import RaceMonitorClient, get_streaming_command
 
-from lemongrass import _config, _env, _influx
+from lemongrass import _config, _db, _env, _influx
 from lemongrass._env import resolve_tokens
 
 UNDERLINE = "-" * 80
@@ -1542,75 +1542,99 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
     return True
 
 
-def push_influx_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
-    """Write one race metadata point to the races bucket, replacing any prior point.
+def _epoch_to_dt(epoch_s):
+    """Convert a whole-second epoch to an aware datetime; 0 or None -> None.
 
-    Returns True on success. Returns False when metadata is missing or the
-    delete/write fails — the delete may have already removed the old point, so
-    a False return means the race may now be absent from the races bucket and
-    the caller must treat the run as failed so a retry restores it.
+    Zero is not a timestamp — it is how Influx spelled "unknown" in a numeric
+    field. Storing it as 1970-01-01 is what made the session picker show
+    1970 dates.
+    """
+    return datetime.fromtimestamp(epoch_s, tz=UTC) if epoch_s else None
+
+
+def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
+    """Insert or update this race's row in Postgres.
+
+    Returns True on success, False when metadata is missing or the write
+    fails. Unlike the delete-then-write it replaces, the upsert is a single
+    atomic statement: a failure leaves the previously stored row exactly as it
+    was, so a False return no longer means the race may have vanished. The
+    caller still fails the run so a retry brings the row up to date.
+
+    timestamp_ms is kept in milliseconds at the boundary because both callers
+    compute it that way (start epoch, or wall clock when the epoch has not
+    been posted yet).
     """
     if ctx.metadata is None:
-        logging.warning("push_influx_race called with no metadata for race %s", ctx.race_id)
+        logging.warning("store_race called with no metadata for race %s", ctx.race_id)
         return False
+    meta = ctx.metadata
     try:
-        ctx.delete_api.delete(
-            start='1970-01-01T00:00:00Z',
-            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
-            predicate=f'_measurement="race" AND race_id="{ctx.race_id}"',
-            bucket=_influx.BUCKET_RACES,
-        )
-        meta = ctx.metadata
-        point = (
-            Point("race")
-            .tag("race_id", ctx.race_id)
-            .tag("race_name", meta.race_name)
-            .tag("track_name", meta.track_name)
-            .tag("series_name", meta.series_name)
-            .field("end_time_epoc", meta.end_time_epoc)
-            .time(timestamp_ms, WritePrecision.MS)
-        )
-        if expected_lap_count is not None:
-            point.field("schema_version", SCHEMA_VERSION)
-            point.field("expected_lap_count", expected_lap_count)
-            point.field("session_count", session_count)
-        ctx.write_api.write(bucket=_influx.BUCKET_RACES, record=point)
+        _db.upsert_race(_db.RaceRow(
+            race_id=ctx.race_id,
+            race_time=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            name=meta.race_name or '',
+            track_name=meta.track_name or '',
+            series_id=meta.series_id,
+            series_name=meta.series_name,
+            end_time=_epoch_to_dt(meta.end_time_epoc),
+            expected_lap_count=expected_lap_count,
+            session_count=session_count if expected_lap_count is not None else None,
+            lap_schema_version=(
+                SCHEMA_VERSION if expected_lap_count is not None else None),
+        ))
         return True
     except Exception as e:
         logging.error("Writing race failed: %s", e)
         return False
 
 
-def push_influx_session(ctx, session_id, session_name, start_epoc):
-    """Write one session metadata point to the race_sessions bucket, replacing any prior point.
+def _session_rows(ctx, sessions):
+    """Build SessionRows from (session_id, session_name, start_epoc) triples."""
+    return [_db.SessionRow(session_id=int(session_id), race_id=ctx.race_id,
+                           name=session_name or '',
+                           start_time=_epoch_to_dt(start_epoc))
+            for session_id, session_name, start_epoc in sessions]
 
-    Returns True on success, False if the delete or write failed (logged, not
-    raised) so callers that need every session to land — such as old_race's
-    rewrite loop — can tell a partial write from a complete one.
+
+def store_session(ctx, session_id, session_name, start_epoc):
+    """Insert or update one session row. The live monitor's write.
+
+    Returns True on success, False if the write failed (logged, not raised).
+    A None or zero start_epoc stores NULL: the live path learns a session's id
+    before its start time, and NULL renders as an honest blank in the picker
+    rather than 1970.
     """
     try:
-        ctx.delete_api.delete(
-            start=EPOCH_START,
-            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
-            predicate=f'_measurement="session" AND session_id="{session_id}"',
-            bucket=_influx.BUCKET_SESSIONS,
-        )
-        start_epoc_ms = (start_epoc or 0) * 1000
-        point = (
-            Point("session")
-            .tag("race_id", ctx.race_id)
-            .tag("session_id", str(session_id))
-            .field("session_name", session_name or "")
-            .field("start_epoc", start_epoc or 0)
-            .time(start_epoc_ms, WritePrecision.MS)
-        )
-        ctx.write_api.write(bucket=_influx.BUCKET_SESSIONS, record=point)
+        _db.upsert_session(_session_rows(
+            ctx, [(session_id, session_name, start_epoc)])[0])
         return True
     except Exception as e:
         logging.error(
             "Writing session failed for race %s session %s: %s",
             ctx.race_id, session_id, e,
         )
+        return False
+
+
+def store_sessions(ctx, sessions):
+    """Make this race's stored sessions exactly `sessions`, in one transaction.
+
+    The backfill's write. It replaces rather than merges because a session
+    that dedupe collapsed away must not linger in the picker — the reason the
+    old code ran a race-wide delete before its rewrite loop. Doing both halves
+    in one statement batch removes the window where the race had no sessions
+    at all.
+
+    Returns True on success, False if the transaction failed (logged, not
+    raised): old_race treats that the same as before, aborting before the race
+    is stamped complete so the next backfill redoes the whole rewrite.
+    """
+    try:
+        _db.replace_sessions(ctx.race_id, _session_rows(ctx, sessions))
+        return True
+    except Exception as e:
+        logging.error("Writing sessions failed for race %s: %s", ctx.race_id, e)
         return False
 
 
@@ -1687,35 +1711,6 @@ def delete_existing_laps(ctx):
         return True
     except Exception as e:
         logging.error("Deleting existing laps failed: %s", e)
-        return False
-
-
-def delete_existing_sessions(ctx):
-    """Delete all session points for this race so a backfill can replace them.
-
-    push_influx_session only deletes the session_id it is about to rewrite, so a
-    session that dedupe collapsed away would otherwise linger in the bucket and
-    keep showing up in the dashboard's session picker.
-
-    The delete predicate is race_id-only, so despite the name it also removes
-    session records written by the live-monitor path, which tags race_id
-    identically. This self-heals: old_race always rewrites every session for
-    the race afterward. But the name suggests a narrower scope than it has.
-
-    Returns True on success, False if the delete failed (logged, not raised) —
-    old_race treats a failed delete the same as a failed session write: it
-    aborts before stamping the race complete.
-    """
-    try:
-        ctx.delete_api.delete(
-            start=EPOCH_START,
-            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
-            predicate=f'_measurement="session" AND race_id="{ctx.race_id}"',
-            bucket=_influx.BUCKET_SESSIONS,
-        )
-        return True
-    except Exception as e:
-        logging.error("Deleting existing sessions failed: %s", e)
         return False
 
 

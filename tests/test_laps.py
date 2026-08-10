@@ -3,6 +3,7 @@ import os
 import sys
 import threading
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, call, mock_open, patch
@@ -76,7 +77,7 @@ def _monitor_ctx():
     ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
     ctx.client.live.get_session.return_value = {
         'Successful': True, 'Session': {
-            'ID': 's1', 'Name': 'S1', 'Competitors': {}, 'Classes': {}}}
+            'ID': 1, 'Name': 'S1', 'Competitors': {}, 'Classes': {}}}
     return ctx
 
 
@@ -234,7 +235,7 @@ class TestMonitorRoutine:
         ctx.client.live.get_session.side_effect = fake_get_session
 
         with patch.object(_mod, 'refresh_competitor', return_value=[lap1, lap2]):
-            with patch.object(_mod, 'push_influx_session') as mock_push_session:
+            with patch.object(_mod, 'store_session') as mock_push_session:
                 with patch.object(_mod, 'push_influx'):
                     _mod.monitor_routine(ctx, [lap1], opts, _stop_event=stop,
                                          session_id='sess-A')
@@ -1093,7 +1094,7 @@ class TestNullLiveSession:
             return []
 
         with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh):
-            with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'store_race', return_value=True):
                 result = _mod.monitor_routine(ctx, [], opts, _stop_event=stop)
         assert calls == 1  # reached refresh instead of dying on Session: None
         assert result is None
@@ -1151,8 +1152,8 @@ class TestNullLiveSession:
         ctx.client.live.get_session.return_value = self._null_session()
         ctx.client.live.get_racer.return_value = self._racer_response()
 
-        with patch.object(_mod, 'push_influx_race', return_value=True):
-            with patch.object(_mod, 'push_influx_session') as mock_session:
+        with patch.object(_mod, 'store_race', return_value=True):
+            with patch.object(_mod, 'store_session') as mock_session:
                 with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
                     _mod.live_race(ctx, opts)
         mock_session.assert_not_called()  # no session id to write
@@ -1401,7 +1402,7 @@ class TestOldRaceSkip:
             with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(1, 1)):
                 with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
                     with patch.object(_mod, 'push_influx') as mock_push:
-                        with patch.object(_mod, 'push_influx_race') as mock_race:
+                        with patch.object(_mod, 'store_race') as mock_race:
                             with patch.object(_mod, 'delete_existing_laps') as mock_del:
                                 with patch.object(_mod, 'print_rankings'):
                                     _mod.old_race(ctx, opts)
@@ -1416,7 +1417,7 @@ class TestOldRaceSkip:
             with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(1, 1)):
                 with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
                     with patch.object(_mod, 'push_influx'):
-                        with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'store_race'):
                             with patch.object(_mod, 'print_rankings'):
                                 with caplog.at_level(logging.INFO):
                                     _mod.old_race(ctx, opts)
@@ -1428,7 +1429,7 @@ class TestOldRaceSkip:
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
             with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(1, 0)):
                 with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-                    with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'store_race'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
         assert ctx.write_api.write.called
@@ -1439,7 +1440,7 @@ class TestOldRaceSkip:
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
             with patch.object(_mod, 'existing_standings_counts_fieldwide', return_value=(0, 0)):
                 with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-                    with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'store_race'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
         assert ctx.write_api.write.called
@@ -1450,7 +1451,7 @@ class TestOldRaceSkip:
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 0)):
             with patch.object(_mod, 'existing_standings_counts_fieldwide') as mock_std:
                 with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-                    with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'store_race'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
         mock_std.assert_not_called()
@@ -1460,7 +1461,7 @@ class TestOldRaceSkip:
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(0, 0)):
             with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert ctx.write_api.write.called
@@ -1470,7 +1471,7 @@ class TestOldRaceSkip:
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 0)):
             with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert ctx.write_api.write.called
@@ -1480,7 +1481,7 @@ class TestOldRaceSkip:
         opts = _mod.RaceOptions(network_mode=True, skip_if_complete=False)
         with patch.object(_mod, 'existing_lap_counts_fieldwide') as mock_counts:
             with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         mock_counts.assert_not_called()
@@ -1672,8 +1673,8 @@ class TestOldRaceFieldwide:
         ctx.client.results.session_details.return_value = self._session_details('42')
         with patch.object(_mod, 'delete_existing_laps') as mock_del:
             with patch.object(_mod, '_write_points_chunked'):
-                with patch.object(_mod, 'push_influx_race'):
-                    with patch.object(_mod, 'push_influx_session'):
+                with patch.object(_mod, 'store_race'):
+                    with patch.object(_mod, 'store_session'):
                         with patch.object(_mod, 'print_rankings'):
                             with patch.object(_mod, '_resolve_class_historical',
                                               return_value=('A', {1: 1})):
@@ -1749,7 +1750,7 @@ class TestLiveRace:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, 'print_rankings'):
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     _mod.live_race(ctx, opts)
         assert ctx.client.live.get_session.call_count == 1
 
@@ -1770,7 +1771,7 @@ class TestLiveRaceObserver:
         obs = MagicMock()
         client = MagicMock()
         client.live.get_session.return_value = {'Successful': True, 'Session': {
-            'ID': 's1', 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
+            'ID': 1, 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
         client.live.get_racer.return_value = {'Successful': True, 'Details': {
             'Laps': [{'Lap': '1', 'LapTime': '1:47', 'TotalTime': '9:00',
                       'Position': '3'}],
@@ -1790,7 +1791,7 @@ class TestLiveRaceObserver:
         obs = MagicMock()
         client = MagicMock()
         client.live.get_session.return_value = {'Successful': True, 'Session': {
-            'ID': 's1', 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
+            'ID': 1, 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
         client.live.get_racer.return_value = {'Successful': True, 'Details': {
             'Laps': [{'Lap': '1', 'LapTime': '1:47', 'TotalTime': '9:00',
                       'Position': '3'}],
@@ -1827,8 +1828,8 @@ class TestLiveRaceStandingsWrite:
             },
         }
 
-        with patch.object(_mod, 'push_influx_race'):
-            with patch.object(_mod, 'push_influx_session'):
+        with patch.object(_mod, 'store_race'):
+            with patch.object(_mod, 'store_session'):
                 with patch.object(_mod, 'push_influx'):
                     with patch.object(_mod, 'push_influx_standings_live') as mock_standings:
                         _mod.live_race(ctx, opts)
@@ -1883,8 +1884,8 @@ class TestLiveRaceMetadataFailure:
     def test_non_monitor_returns_write_failed_when_metadata_write_fails(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True, monitor_mode=False, interval=30)
-        with patch.object(_mod, 'push_influx_race', return_value=False):
-            with patch.object(_mod, 'push_influx_session'):
+        with patch.object(_mod, 'store_race', return_value=False):
+            with patch.object(_mod, 'store_session'):
                 with patch.object(_mod, 'push_influx'):
                     with patch.object(_mod, 'push_influx_standings_live'):
                         result = _mod.live_race(ctx, opts)
@@ -1893,8 +1894,8 @@ class TestLiveRaceMetadataFailure:
     def test_non_monitor_returns_none_when_metadata_write_succeeds(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True, monitor_mode=False, interval=30)
-        with patch.object(_mod, 'push_influx_race', return_value=True):
-            with patch.object(_mod, 'push_influx_session'):
+        with patch.object(_mod, 'store_race', return_value=True):
+            with patch.object(_mod, 'store_session'):
                 with patch.object(_mod, 'push_influx'):
                     with patch.object(_mod, 'push_influx_standings_live'):
                         result = _mod.live_race(ctx, opts)
@@ -1920,7 +1921,7 @@ class TestLiveRaceMetadataFailure:
         ctx.client.live.get_session.side_effect = fake_get_session
 
         # First write fails, second succeeds; a third poll must not push again.
-        with patch.object(_mod, 'push_influx_race', side_effect=[False, True]) as mock_race:
+        with patch.object(_mod, 'store_race', side_effect=[False, True]) as mock_race:
             with patch.object(_mod, 'refresh_competitor', return_value=[]):
                 with patch.object(_mod, 'push_influx_standings_live', return_value={}):
                     _mod.monitor_routine(ctx, [], opts, _stop_event=stop,
@@ -1946,7 +1947,7 @@ class TestLiveRaceMetadataFailure:
 
         ctx.client.live.get_session.side_effect = fake_get_session
 
-        with patch.object(_mod, 'push_influx_race', return_value=True) as mock_race:
+        with patch.object(_mod, 'store_race', return_value=True) as mock_race:
             with patch.object(_mod, 'refresh_competitor', return_value=[]):
                 with patch.object(_mod, 'push_influx_standings_live', return_value={}):
                     _mod.monitor_routine(ctx, [], opts, _stop_event=stop,
@@ -1972,7 +1973,7 @@ class TestOldRaceClassWiring:
             _mod, '_resolve_class_historical', return_value=('A', {1: 1})
         ) as mock_resolve:
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         expected_index = _mod._build_class_index(self._session_details())
@@ -1987,7 +1988,7 @@ class TestOldRaceClassWiring:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert 'class=A' in captured[0].to_line_protocol()
@@ -2005,7 +2006,7 @@ class TestOldRaceClassWiring:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert captured[0].to_line_protocol().endswith(str(5555 * 1000 + 90000))
@@ -2023,7 +2024,7 @@ class TestOldRaceClassWiring:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert captured[0].to_line_protocol().endswith(str(7000 * 1000 + 90000))
@@ -2047,7 +2048,7 @@ class TestOldRaceClassWiring:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert 'competitor_name="Jane Doe"' in captured[0].to_line_protocol()
@@ -2063,7 +2064,7 @@ class TestOldRaceClassWiring:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert 'car_info="2005/Toy/Celica"' in captured[0].to_line_protocol()
@@ -2080,12 +2081,12 @@ class TestOldRaceClassWiring:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert 'competitor_name' not in captured[0].to_line_protocol()
 
-    def test_old_race_calls_push_influx_race_once_across_multiple_sessions(self):
+    def test_old_race_calls_store_race_once_across_multiple_sessions(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 1000)
         ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
@@ -2093,12 +2094,12 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = self._session_details()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert mock_race.call_count == 1
 
-    def test_old_race_push_influx_race_timestamp_uses_start_epoc(self):
+    def test_old_race_store_race_timestamp_uses_start_epoc(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 5000)
         ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
@@ -2106,12 +2107,12 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = self._session_details()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
         assert mock_race.call_args.args[1] == 5000 * 1000
 
-    def test_old_race_push_influx_race_uses_wall_clock_when_start_epoc_zero(self):
+    def test_old_race_store_race_uses_wall_clock_when_start_epoc_zero(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
         ctx.delete_api = MagicMock()
         opts = _mod.RaceOptions(network_mode=True)
@@ -2119,18 +2120,18 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = self._session_details()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         with patch.object(_mod.time, 'time', return_value=12345.0):
                             _mod.old_race(ctx, opts)
         assert mock_race.call_args.args[1] == 12345000
 
-    def test_old_race_push_influx_race_not_called_when_not_network_mode(self):
+    def test_old_race_store_race_not_called_when_not_network_mode(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
         opts = _mod.RaceOptions(network_mode=False)
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details()
-        with patch.object(_mod, 'push_influx_race') as mock_race:
+        with patch.object(_mod, 'store_race') as mock_race:
             with patch.object(_mod, 'print_rankings'):
                 _mod.old_race(ctx, opts)
         mock_race.assert_not_called()
@@ -2150,7 +2151,7 @@ class TestOldRaceClassWiring:
                           side_effect=_delete_laps) as mock_del:
             with patch.object(_mod, '_write_points_chunked',
                               side_effect=lambda *a, **k: order.append('write')):
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         with patch.object(_mod, '_resolve_class_historical',
                                           return_value=('A', {1: 1})):
@@ -2179,7 +2180,7 @@ class TestOldRaceClassWiring:
             with patch.object(_mod, 'delete_existing_standings', side_effect=_del):
                 with patch.object(_mod, 'push_influx_standings_historical', side_effect=_write):
                     with patch.object(_mod, '_write_points_chunked'):
-                        with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'store_race'):
                             with patch.object(_mod, 'print_rankings'):
                                 with patch.object(_mod, '_resolve_class_historical',
                                                   return_value=('A', {1: 1})):
@@ -2199,7 +2200,7 @@ class TestOldRaceClassWiring:
                               return_value=True) as mock_del_std:
                 with patch.object(_mod, 'push_influx_standings_historical', return_value=False):
                     with patch.object(_mod, '_write_points_chunked'):
-                        with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'store_race'):
                             with patch.object(_mod, 'print_rankings'):
                                 with patch.object(_mod, '_resolve_class_historical',
                                                   return_value=('A', {1: 1})):
@@ -2220,7 +2221,7 @@ class TestOldRaceClassWiring:
             with patch.object(_mod, 'delete_existing_standings', side_effect=[True, False]):
                 with patch.object(_mod, 'push_influx_standings_historical', return_value=False):
                     with patch.object(_mod, '_write_points_chunked'):
-                        with patch.object(_mod, 'push_influx_race'):
+                        with patch.object(_mod, 'store_race'):
                             with patch.object(_mod, 'print_rankings'):
                                 with patch.object(_mod, '_resolve_class_historical',
                                                   return_value=('A', {1: 1})):
@@ -2237,7 +2238,7 @@ class TestOldRaceClassWiring:
         ctx.client.results.session_details.return_value = self._session_details()
         with patch.object(_mod, 'delete_existing_laps') as mock_del:
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         with patch.object(_mod, '_resolve_class_historical',
                                           return_value=('A', {1: 1})):
@@ -2258,7 +2259,7 @@ class TestOldRaceClassWiring:
         ]
         with patch.object(_mod, 'delete_existing_laps') as mock_del:
             with patch.object(_mod, '_build_lap_points', return_value=[]) as mock_build:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         with patch.object(_mod, '_resolve_class_historical',
                                           return_value=('A', {1: 1})):
@@ -2307,7 +2308,7 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)) as mock_resolve:
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
         mock_resolve.assert_called_once_with(
@@ -2318,7 +2319,7 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 2)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
@@ -2329,7 +2330,7 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=(None, None)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
@@ -2348,7 +2349,7 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 2)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
         args, kwargs = mock_push.call_args
@@ -2360,61 +2361,61 @@ class TestLiveClassWiring:
         ctx.client.live.get_racer.return_value['Details']['Laps'] = []
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, 'push_influx') as mock_push:
-            with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_race'):
                 with patch.object(_mod, 'print_rankings'):
                     _mod.live_race(ctx, opts)
         mock_push.assert_not_called()
 
-    def test_live_race_calls_push_influx_race_in_network_mode(self):
+    def test_live_race_calls_store_race_in_network_mode(self):
         ctx = self._make_ctx()
         ctx.start_epoc = 1000
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
         mock_race.assert_called_once()
 
-    def test_live_race_push_influx_race_timestamp_uses_start_epoc(self):
+    def test_live_race_store_race_timestamp_uses_start_epoc(self):
         ctx = self._make_ctx()
         ctx.start_epoc = 1000
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
         assert mock_race.call_args.args[1] == 1000 * 1000
 
-    def test_live_race_push_influx_race_timestamp_uses_wall_clock_when_start_epoc_zero(self):
+    def test_live_race_store_race_timestamp_uses_wall_clock_when_start_epoc_zero(self):
         ctx = self._make_ctx()
         ctx.start_epoc = 0
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race') as mock_race:
+                with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
         assert mock_race.called
         assert mock_race.call_args.args[1] > 0
 
-    def test_live_race_push_influx_race_called_even_when_no_laps(self):
+    def test_live_race_store_race_called_even_when_no_laps(self):
         ctx = self._make_ctx()
         ctx.start_epoc = 1000
         ctx.client.live.get_racer.return_value['Details']['Laps'] = []
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, 'push_influx') as mock_push:
-            with patch.object(_mod, 'push_influx_race') as mock_race:
+            with patch.object(_mod, 'store_race') as mock_race:
                 with patch.object(_mod, 'print_rankings'):
                     _mod.live_race(ctx, opts)
         mock_push.assert_not_called()
         mock_race.assert_called_once()
 
-    def test_live_race_push_influx_race_not_called_when_not_network_mode(self):
+    def test_live_race_store_race_not_called_when_not_network_mode(self):
         ctx = self._make_ctx()
         opts = _mod.RaceOptions(network_mode=False)
-        with patch.object(_mod, 'push_influx_race') as mock_race:
+        with patch.object(_mod, 'store_race') as mock_race:
             with patch.object(_mod, 'print_rankings'):
                 _mod.live_race(ctx, opts)
         mock_race.assert_not_called()
@@ -2436,7 +2437,7 @@ class TestLiveClassWiring:
         with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
             with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
                 with patch.object(_mod, 'push_influx') as mock_push:
-                    with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'store_race'):
                         _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
         laps_arg = mock_push.call_args[0][1]
         assert laps_arg == [new_laps[-1]]
@@ -2459,7 +2460,7 @@ class TestLiveClassWiring:
         with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
             with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)) as mock_resolve:
                 with patch.object(_mod, 'push_influx'):
-                    with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'store_race'):
                         _mod.monitor_routine(ctx, existing_laps, opts, _stop_event=mock_stop)
         mock_resolve.assert_called_once_with(
             ctx.client.live.get_session.return_value, ctx.car_number)
@@ -2469,7 +2470,7 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
@@ -2482,7 +2483,7 @@ class TestLiveClassWiring:
         competitor['AdditionalData'] = '2005/Toy/Celica'
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
@@ -2509,15 +2510,15 @@ class TestLiveClassWiring:
             },
         }
 
-    def test_live_race_calls_push_influx_session_in_network_mode(self):
+    def test_live_race_calls_store_session_in_network_mode(self):
         ctx = self._make_ctx()
         ctx.delete_api = MagicMock()
         ctx.client.live.get_session.return_value = self._session_response_with_id(7, 'Day 1')
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'push_influx_race'):
-                    with patch.object(_mod, 'push_influx_session') as mock_session:
+                with patch.object(_mod, 'store_race'):
+                    with patch.object(_mod, 'store_session') as mock_session:
                         with patch.object(_mod, 'print_rankings'):
                             _mod.live_race(ctx, opts)
         mock_session.assert_called_once()
@@ -2531,19 +2532,19 @@ class TestLiveClassWiring:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
             with patch.object(_mod, 'push_influx') as mock_push:
-                with patch.object(_mod, 'push_influx_race'):
-                    with patch.object(_mod, 'push_influx_session'):
+                with patch.object(_mod, 'store_race'):
+                    with patch.object(_mod, 'store_session'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.live_race(ctx, opts)
         _, kwargs = mock_push.call_args
         assert kwargs.get('session_id') == 7
 
-    def test_live_race_push_influx_session_not_called_when_not_network_mode(self):
+    def test_live_race_store_session_not_called_when_not_network_mode(self):
         ctx = self._make_ctx()
         ctx.delete_api = MagicMock()
         ctx.client.live.get_session.return_value = self._session_response_with_id(7)
         opts = _mod.RaceOptions(network_mode=False)
-        with patch.object(_mod, 'push_influx_session') as mock_session:
+        with patch.object(_mod, 'store_session') as mock_session:
             with patch.object(_mod, 'print_rankings'):
                 _mod.live_race(ctx, opts)
         mock_session.assert_not_called()
@@ -2569,7 +2570,7 @@ class TestLiveClassWiring:
         with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
             with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
                 with patch.object(_mod, 'push_influx') as mock_push:
-                    with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'store_race'):
                         _mod.monitor_routine(ctx, existing_laps, opts,
                                              session_id=55, _stop_event=mock_stop)
         _, kwargs = mock_push.call_args
@@ -2592,7 +2593,7 @@ class TestLiveClassWiring:
         with patch.object(_mod, 'refresh_competitor', return_value=new_laps):
             with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
                 with patch.object(_mod, 'push_influx') as mock_push:
-                    with patch.object(_mod, 'push_influx_race'):
+                    with patch.object(_mod, 'store_race'):
                         _mod.monitor_routine(ctx, existing_laps, opts,
                                              competitor_name='Jane Doe', car_info='2005/Toy/Celica',
                                              _stop_event=mock_stop)
@@ -2630,7 +2631,7 @@ class TestMonitorRoutineEpocRecheck:
         ctx = self._make_ctx(start_epoc=0)
         opts = _mod.RaceOptions(network_mode=True, interval=30)
         with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
-            with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_race'):
                 _mod.monitor_routine(ctx, [self._existing_lap], opts,
                                      _stop_event=self._stop_after(1))
         ctx.client.race.details.assert_called_once_with(ctx.race_id)
@@ -2659,12 +2660,12 @@ class TestMonitorRoutineEpocRecheck:
             'Race': {'StartDateEpoc': 5000, 'EndDateEpoc': 9000, 'Name': '', 'Track': ''},
         }
         with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
-            with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_race'):
                 _mod.monitor_routine(ctx, [self._existing_lap], opts,
                                      _stop_event=self._stop_after(1))
         assert ctx.start_epoc == 5000
 
-    def test_calls_push_influx_race_with_updated_timestamp(self):
+    def test_calls_store_race_with_updated_timestamp(self):
         ctx = self._make_ctx(start_epoc=0)
         opts = _mod.RaceOptions(network_mode=True, interval=30)
         ctx.client.race.details.return_value = {
@@ -2672,7 +2673,7 @@ class TestMonitorRoutineEpocRecheck:
             'Race': {'StartDateEpoc': 5000, 'EndDateEpoc': 9000, 'Name': '', 'Track': ''},
         }
         with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
-            with patch.object(_mod, 'push_influx_race') as mock_race:
+            with patch.object(_mod, 'store_race') as mock_race:
                 _mod.monitor_routine(ctx, [self._existing_lap], opts,
                                      _stop_event=self._stop_after(1))
         mock_race.assert_called_once_with(ctx, 5000 * 1000)
@@ -2685,7 +2686,7 @@ class TestMonitorRoutineEpocRecheck:
             'Race': {'StartDateEpoc': 5000, 'EndDateEpoc': 9000, 'Name': '', 'Track': ''},
         }
         with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
-            with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_race'):
                 _mod.monitor_routine(ctx, [self._existing_lap], opts,
                                      _stop_event=self._stop_after(1))
         assert ctx.metadata.end_time_epoc == 9000
@@ -2698,7 +2699,7 @@ class TestMonitorRoutineEpocRecheck:
             'Race': {'StartDateEpoc': 5000, 'EndDateEpoc': 9000, 'Name': '', 'Track': ''},
         }
         with patch.object(_mod, 'refresh_competitor', return_value=[self._existing_lap]):
-            with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_race'):
                 _mod.monitor_routine(ctx, [self._existing_lap], opts,
                                      _stop_event=self._stop_after(2))
         # First iteration sets epoc; second iteration skips the re-check
@@ -2813,135 +2814,105 @@ def test_resolve_race_metadata_unsuccessful_has_no_series_id():
     assert meta.race_name == ''
 
 
-class TestPushInfluxRace:
-    def _ctx(self):
-        write_api = MagicMock()
-        delete_api = MagicMock()
-        ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 1000000)
-        ctx.delete_api = delete_api
-        ctx.metadata = _mod.RaceMetadata(
-            race_name='The Sausage Fest 2026',
-            track_name='Road America',
-            series_name='24 Hours of Lemons',
-            end_time_epoc=1749132000,
-        )
-        return ctx, write_api, delete_api
-
-    def _record(self, write_api):
-        return write_api.write.call_args.kwargs['record'].to_line_protocol()
-
-    def test_calls_delete_before_write(self):
-        ctx, write_api, delete_api = self._ctx()
-        call_order = []
-        delete_api.delete.side_effect = lambda **kw: call_order.append('delete')
-        write_api.write.side_effect = lambda **kw: call_order.append('write')
-        _mod.push_influx_race(ctx, 5000000)
-        assert call_order == ['delete', 'write']
-
-    def test_delete_targets_correct_race_id(self):
-        ctx, _write_api, delete_api = self._ctx()
-        _mod.push_influx_race(ctx, 5000000)
-        predicate = delete_api.delete.call_args.kwargs['predicate']
-        assert 'race_id="999"' in predicate
-        assert '_measurement="race"' in predicate
-
-    def test_delete_targets_races_bucket(self):
-        ctx, _write_api, delete_api = self._ctx()
-        _mod.push_influx_race(ctx, 5000000)
-        assert delete_api.delete.call_args.kwargs['bucket'] == 'races'
-
-    def test_writes_to_races_bucket(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_race(ctx, 5000000)
-        assert write_api.write.call_args.kwargs['bucket'] == 'races'
-
-    def test_measurement_is_race(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_race(ctx, 5000000)
-        assert self._record(write_api).startswith('race,')
-
-    @pytest.mark.parametrize("expected", [
-        'race_id=999',
-        'track_name=Road\\ America',
-        'end_time_epoc=1749132000i',
-    ])
-    def test_line_protocol_contains(self, expected):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_race(ctx, 5000000)
-        assert expected in self._record(write_api)
-
-    def test_uses_provided_timestamp(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_race(ctx, 5000)
-        assert self._record(write_api).endswith('5000')
-
-    def test_exception_during_delete_is_logged_not_raised(self):
-        ctx, _write_api, delete_api = self._ctx()
-        delete_api.delete.side_effect = Exception("network error")
-        _mod.push_influx_race(ctx, 5000000)  # must not raise
-
-    def test_exception_during_write_is_logged_not_raised(self):
-        ctx, write_api, _delete_api = self._ctx()
-        write_api.write.side_effect = Exception("network error")
-        _mod.push_influx_race(ctx, 5000000)  # must not raise
-
-    def test_omits_series_name_tag_when_none(self):
-        ctx, write_api, _delete_api = self._ctx()
-        ctx.metadata = _mod.RaceMetadata(
-            race_name='Race', track_name='Track', series_name=None, end_time_epoc=0)
-        _mod.push_influx_race(ctx, 1000)
-        assert 'series_name=' not in self._record(write_api)
-
-    def test_metadata_none_returns_false_and_skips_delete_and_write(self):
-        ctx, write_api, delete_api = self._ctx()
-        ctx.metadata = None
-        assert _mod.push_influx_race(ctx, 1000) is False
-        delete_api.delete.assert_not_called()
-        write_api.write.assert_not_called()
-
-    def test_returns_true_on_success(self):
-        ctx, _write_api, _delete_api = self._ctx()
-        assert _mod.push_influx_race(ctx, 5000000) is True
-
-    def test_returns_false_when_delete_fails(self):
-        ctx, _write_api, delete_api = self._ctx()
-        delete_api.delete.side_effect = Exception("network error")
-        assert _mod.push_influx_race(ctx, 5000000) is False
-
-    def test_returns_false_when_write_fails(self):
-        """Delete succeeded, write failed: the metadata point is now gone from
-        Influx — the caller must know so it can fail the run and retry."""
-        ctx, write_api, _delete_api = self._ctx()
-        write_api.write.side_effect = Exception("network error")
-        assert _mod.push_influx_race(ctx, 5000000) is False
+def _meta(**kw):
+    base = {'race_name': 'R', 'track_name': 'T', 'series_name': 'S',
+            'end_time_epoc': 1700000000, 'series_id': 7}
+    base.update(kw)
+    return _mod.RaceMetadata(**base)
 
 
-class TestPushInfluxRaceFields:
-    def _ctx(self):
-        meta = _mod.RaceMetadata(
-            race_name='R', track_name='T', series_name='S', end_time_epoc=123)
-        return _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0,
-                                metadata=meta, delete_api=MagicMock())
+def test_store_race_converts_epochs_to_timestamps():
+    ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
+    with patch.object(_mod._db, 'upsert_race') as up:
+        assert _mod.store_race(ctx, 1_700_000_000_000, 120, 2) is True
+    row = up.call_args.args[0]
+    assert row.race_id == '101'
+    assert row.race_time == datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    assert row.end_time == datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    assert row.expected_lap_count == 120
+    assert row.session_count == 2
+    assert row.lap_schema_version == _mod.SCHEMA_VERSION
+    assert row.series_id == 7
 
-    def test_writes_expected_session_and_schema_fields(self):
-        ctx = self._ctx()
-        ok = _mod.push_influx_race(ctx, 1000, expected_lap_count=42, session_count=3)
-        assert ok is True
-        point = ctx.write_api.write.call_args.kwargs['record']
-        lp = point.to_line_protocol()
-        assert 'expected_lap_count=42i' in lp
-        assert 'session_count=3i' in lp
-        assert f'schema_version={_mod.SCHEMA_VERSION}i' in lp
 
-    def test_omits_new_fields_when_expected_not_supplied(self):
-        ctx = self._ctx()
-        ok = _mod.push_influx_race(ctx, 1000)
-        assert ok is True
-        lp = ctx.write_api.write.call_args.kwargs['record'].to_line_protocol()
-        assert 'end_time_epoc=' in lp
-        assert 'expected_lap_count' not in lp
-        assert 'session_count' not in lp
-        assert 'schema_version' not in lp
+def test_store_race_omits_completeness_on_the_live_path():
+    ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
+    with patch.object(_mod._db, 'upsert_race') as up:
+        assert _mod.store_race(ctx, 1_700_000_000_000) is True
+    row = up.call_args.args[0]
+    assert row.expected_lap_count is None
+    assert row.session_count is None
+    assert row.lap_schema_version is None
+
+
+def test_store_race_zero_end_epoch_becomes_none():
+    ctx = _mod.RaceContext('101', None, None, None, 0,
+                           metadata=_meta(end_time_epoc=0))
+    with patch.object(_mod._db, 'upsert_race') as up:
+        _mod.store_race(ctx, 1_700_000_000_000)
+    assert up.call_args.args[0].end_time is None
+
+
+def test_store_race_without_metadata_returns_false():
+    ctx = _mod.RaceContext('101', None, None, None, 0)
+    with patch.object(_mod._db, 'upsert_race') as up:
+        assert _mod.store_race(ctx, 1_700_000_000_000) is False
+    up.assert_not_called()
+
+
+def test_store_race_returns_false_on_error(caplog):
+    ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
+    with patch.object(_mod._db, 'upsert_race', side_effect=Exception('boom')):
+        assert _mod.store_race(ctx, 1_700_000_000_000) is False
+    assert 'boom' in caplog.text
+
+
+def test_store_session_nulls_a_missing_start_epoch():
+    ctx = _mod.RaceContext('101', None, None, None, 0)
+    with patch.object(_mod._db, 'upsert_session') as up:
+        assert _mod.store_session(ctx, 55, 'Race', None) is True
+    row = up.call_args.args[0]
+    assert row.session_id == 55
+    assert row.race_id == '101'
+    assert row.name == 'Race'
+    assert row.start_time is None
+
+
+def test_store_session_converts_start_epoch():
+    ctx = _mod.RaceContext('101', None, None, None, 0)
+    with patch.object(_mod._db, 'upsert_session') as up:
+        _mod.store_session(ctx, 55, 'Race', 1_700_000_000)
+    assert up.call_args.args[0].start_time == datetime.fromtimestamp(
+        1_700_000_000, tz=UTC)
+
+
+def test_store_session_returns_false_on_error():
+    ctx = _mod.RaceContext('101', None, None, None, 0)
+    with patch.object(_mod._db, 'upsert_session', side_effect=Exception('x')):
+        assert _mod.store_session(ctx, 55, 'Race', None) is False
+
+
+def test_store_sessions_replaces_the_whole_set():
+    ctx = _mod.RaceContext('101', None, None, None, 0)
+    with patch.object(_mod._db, 'replace_sessions') as rep:
+        assert _mod.store_sessions(
+            ctx, [(1, 'Qual', 10), (2, 'Race', None)]) is True
+    race_id, rows = rep.call_args.args[0], rep.call_args.args[1]
+    assert race_id == '101'
+    assert [r.session_id for r in rows] == [1, 2]
+    assert rows[1].start_time is None
+
+
+def test_store_sessions_returns_false_on_error():
+    ctx = _mod.RaceContext('101', None, None, None, 0)
+    with patch.object(_mod._db, 'replace_sessions', side_effect=Exception('x')):
+        assert _mod.store_sessions(ctx, [(1, 'Qual', 10)]) is False
+
+
+def test_delete_existing_sessions_is_gone():
+    # store_sessions replaces the set atomically; a separate delete step would
+    # be a window where the race has no sessions at all.
+    assert not hasattr(_mod, 'delete_existing_sessions')
 
 
 class TestOldRaceMetadataFailure:
@@ -2964,14 +2935,14 @@ class TestOldRaceMetadataFailure:
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
             with patch.object(_mod, 'existing_standings_counts_fieldwide',
                               return_value=(1, 1)):
-                with patch.object(_mod, 'push_influx_race', return_value=False):
+                with patch.object(_mod, 'store_race', return_value=False):
                     result = _mod.old_race(ctx, opts)
         assert result == 1
 
     def test_write_path_fails_run_when_metadata_write_fails(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, 'push_influx_race', return_value=False):
+        with patch.object(_mod, 'store_race', return_value=False):
             with patch.object(_mod, 'print_rankings'):
                 result = _mod.old_race(ctx, opts)
         assert result == 1
@@ -2980,7 +2951,7 @@ class TestOldRaceMetadataFailure:
         ctx = self._ctx()
         ctx.write_api.write.side_effect = Exception("boom")
         opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, 'push_influx_race', return_value=True):
+        with patch.object(_mod, 'store_race', return_value=True):
             result = _mod.old_race(ctx, opts)
         assert result == 1
 
@@ -2997,7 +2968,7 @@ class TestOldRaceMetadataFailure:
         metadata-write path above."""
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, 'push_influx_race', return_value=True):
+        with patch.object(_mod, 'store_race', return_value=True):
             with patch.object(_mod, 'push_influx_standings_historical',
                               return_value=False):
                 with patch.object(_mod, 'delete_existing_standings', return_value=True):
@@ -3008,7 +2979,7 @@ class TestOldRaceMetadataFailure:
     def test_standings_cleanup_delete_failure_also_fails_run(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, 'push_influx_race', return_value=True):
+        with patch.object(_mod, 'store_race', return_value=True):
             with patch.object(_mod, 'push_influx_standings_historical',
                               return_value=False):
                 with patch.object(_mod, 'delete_existing_standings', return_value=False):
@@ -3023,7 +2994,7 @@ class TestOldRaceMetadataFailure:
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, 'delete_existing_laps', return_value=False):
-            with patch.object(_mod, 'push_influx_race') as mock_race:
+            with patch.object(_mod, 'store_race') as mock_race:
                 with patch.object(_mod, 'print_rankings'):
                     result = _mod.old_race(ctx, opts)
         assert result == 1
@@ -3034,90 +3005,12 @@ class TestOldRaceMetadataFailure:
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, 'delete_existing_laps', return_value=True):
-            with patch.object(_mod, 'push_influx_race', return_value=True) as mock_race:
+            with patch.object(_mod, 'store_race', return_value=True) as mock_race:
                 with patch.object(_mod, 'print_rankings'):
                     result = _mod.old_race(ctx, opts)
         assert result is None
         mock_race.assert_called_once()
         assert ctx.write_api.write.called
-
-
-class TestPushInfluxSession:
-    def _ctx(self):
-        write_api = MagicMock()
-        delete_api = MagicMock()
-        ctx = _mod.RaceContext('999', '42', MagicMock(), write_api, 1000000)
-        ctx.delete_api = delete_api
-        return ctx, write_api, delete_api
-
-    def _record(self, write_api):
-        return write_api.write.call_args.kwargs['record'].to_line_protocol()
-
-    def test_calls_delete_before_write(self):
-        ctx, write_api, delete_api = self._ctx()
-        call_order = []
-        delete_api.delete.side_effect = lambda **kw: call_order.append('delete')
-        write_api.write.side_effect = lambda **kw: call_order.append('write')
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert call_order == ['delete', 'write']
-
-    def test_delete_targets_correct_session_id(self):
-        ctx, _write_api, delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        predicate = delete_api.delete.call_args.kwargs['predicate']
-        assert 'session_id="42"' in predicate
-        assert '_measurement="session"' in predicate
-
-    def test_delete_targets_race_sessions_bucket(self):
-        ctx, _write_api, delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert delete_api.delete.call_args.kwargs['bucket'] == 'race_sessions'
-
-    def test_writes_to_race_sessions_bucket(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert write_api.write.call_args.kwargs['bucket'] == 'race_sessions'
-
-    def test_measurement_is_session(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert self._record(write_api).startswith('session,')
-
-    @pytest.mark.parametrize("expected", [
-        'race_id=999',
-        'session_id=42',
-        'session_name="Day 1"',
-        'start_epoc=1700000000i',
-    ])
-    def test_line_protocol_contains(self, expected):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert expected in self._record(write_api)
-
-    def test_timestamp_uses_start_epoc_ms(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)
-        assert self._record(write_api).endswith('1700000000000')
-
-    def test_exception_during_delete_is_logged_not_raised(self, caplog):
-        ctx, _write_api, delete_api = self._ctx()
-        delete_api.delete.side_effect = Exception('network error')
-        with caplog.at_level(logging.ERROR):
-            _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
-        assert "Writing session failed" in caplog.text
-
-    def test_exception_during_write_is_logged_not_raised(self, caplog):
-        ctx, write_api, _delete_api = self._ctx()
-        write_api.write.side_effect = Exception('network error')
-        with caplog.at_level(logging.ERROR):
-            _mod.push_influx_session(ctx, 42, 'Day 1', 1700000000)  # must not raise
-        assert "Writing session failed" in caplog.text
-
-    def test_start_epoc_none_writes_zero(self):
-        ctx, write_api, _delete_api = self._ctx()
-        _mod.push_influx_session(ctx, 42, 'Day 1', None)
-        assert 'start_epoc=0i' in self._record(write_api)
-        assert self._record(write_api).endswith('0')
 
 
 class TestDeleteExistingLaps:
@@ -3145,35 +3038,6 @@ class TestDeleteExistingLaps:
         delete_api.delete.side_effect = Exception("network error")
         _mod.delete_existing_laps(ctx)  # must not raise
         assert "Deleting existing laps failed" in caplog.text
-
-
-class TestDeleteExistingSessions:
-    """Dedupe leaves session records with no matching laps; they must be cleared."""
-
-    def _ctx(self):
-        delete_api = MagicMock()
-        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
-        ctx.delete_api = delete_api
-        return ctx, delete_api
-
-    def test_predicate_targets_measurement_and_race(self):
-        ctx, delete_api = self._ctx()
-        assert _mod.delete_existing_sessions(ctx) is True
-        predicate = delete_api.delete.call_args.kwargs['predicate']
-        assert '_measurement="session"' in predicate
-        assert 'race_id="999"' in predicate
-        assert 'session_id' not in predicate
-
-    def test_targets_sessions_bucket(self):
-        ctx, delete_api = self._ctx()
-        _mod.delete_existing_sessions(ctx)
-        assert delete_api.delete.call_args.kwargs['bucket'] == 'race_sessions'
-
-    def test_delete_failure_is_swallowed_and_logged(self, caplog):
-        ctx, delete_api = self._ctx()
-        delete_api.delete.side_effect = Exception("network error")
-        assert _mod.delete_existing_sessions(ctx) is False  # must not raise
-        assert "Deleting existing sessions failed" in caplog.text
 
 
 class TestDeleteExistingStandings:
@@ -3397,7 +3261,7 @@ class TestOldRaceFullField:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
@@ -3410,7 +3274,7 @@ class TestOldRaceFullField:
         with patch.object(
             _mod, '_resolve_class_historical', return_value=('A', {1: 1})
         ) as mock_resolve:
-            with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_race'):
                 with patch.object(_mod, 'delete_existing_laps'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
@@ -3423,7 +3287,7 @@ class TestOldRaceFullField:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
@@ -3436,7 +3300,7 @@ class TestOldRaceFullField:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, '_write_points_chunked', side_effect=Exception('write error')):
-                with patch.object(_mod, 'push_influx_race') as mock_stamp:
+                with patch.object(_mod, 'store_race') as mock_stamp:
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
@@ -3461,7 +3325,7 @@ class TestOldRaceFullField:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
@@ -3493,7 +3357,7 @@ class TestOldRaceFullField:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
@@ -3522,7 +3386,7 @@ class TestOldRaceFullField:
         opts = _mod.RaceOptions(network_mode=True)
         captured, cm = self._capture_points()
         with cm:
-            with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_race'):
                 with patch.object(_mod, 'delete_existing_laps'):
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
@@ -3546,13 +3410,13 @@ class TestOldRaceFullField:
         ctx = self._ctx(session)
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, 'delete_existing_laps') as mock_del:
-            with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_race'):
                 with patch.object(_mod, 'print_rankings'):
                     _mod.old_race(ctx, opts)
         assert not ctx.write_api.write.called
         mock_del.assert_not_called()
 
-    def test_push_influx_session_called_once_per_session(self):
+    def test_store_session_called_once_per_session(self):
         ctx = self._ctx(self._session_details_two_cars())
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}, {'ID': 2}]}
         # Two genuinely different sessions (distinct start epochs) so the
@@ -3563,32 +3427,32 @@ class TestOldRaceFullField:
             self._session_details_two_cars(), other_session]
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'push_influx_session') as mock_session:
-                with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_session') as mock_session:
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
         assert mock_session.call_count == 2
 
-    def test_push_influx_session_called_with_correct_session_id(self):
+    def test_store_session_called_with_correct_session_id(self):
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'push_influx_session') as mock_session:
-                with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_session') as mock_session:
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
         session_ids = {c.args[1] for c in mock_session.call_args_list}
         assert 1 in session_ids
 
-    def test_push_influx_session_not_called_when_not_network_mode(self):
+    def test_store_session_not_called_when_not_network_mode(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
         ctx.delete_api = MagicMock()
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details_two_cars()
         opts = _mod.RaceOptions(network_mode=False)
-        with patch.object(_mod, 'push_influx_session') as mock_session:
+        with patch.object(_mod, 'store_session') as mock_session:
             with patch.object(_mod, 'print_rankings'):
                 _mod.old_race(ctx, opts)
         mock_session.assert_not_called()
@@ -3599,7 +3463,7 @@ class TestOldRaceFullField:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
@@ -3629,7 +3493,7 @@ class TestOldRaceFullField:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
+                with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
@@ -3646,7 +3510,7 @@ class TestOldRaceFullField:
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with cm:
-                with patch.object(_mod, 'push_influx_race') as mock_stamp:
+                with patch.object(_mod, 'store_race') as mock_stamp:
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
@@ -3660,13 +3524,13 @@ class TestOldRaceFullField:
         opts = _mod.RaceOptions(network_mode=True)
         parent = MagicMock()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'push_influx_race'):
+            with patch.object(_mod, 'store_race'):
                 with patch.object(_mod, 'delete_existing_laps'):
                     with patch.object(_mod, 'delete_existing_sessions') as mock_del:
-                        with patch.object(_mod, 'push_influx_session') as mock_push:
+                        with patch.object(_mod, 'store_session') as mock_push:
                             with patch.object(_mod, 'print_rankings'):
                                 parent.attach_mock(mock_del, 'delete_existing_sessions')
-                                parent.attach_mock(mock_push, 'push_influx_session')
+                                parent.attach_mock(mock_push, 'store_session')
                                 _mod.old_race(ctx, opts)
         mock_del.assert_called_once_with(ctx)
         assert mock_push.called
@@ -3674,11 +3538,11 @@ class TestOldRaceFullField:
         # them leaves no session records rather than a half-rewritten set.
         method_order = [c[0] for c in parent.mock_calls]
         assert method_order.index('delete_existing_sessions') < method_order.index(
-            'push_influx_session')
+            'store_session')
 
     def test_sessions_cleared_before_race_stamp(self):
         """delete_existing_sessions + the session rewrite must happen before
-        push_influx_race stamps the race complete — otherwise a write failure in
+        store_race stamps the race complete — otherwise a write failure in
         between leaves a race stamped complete with zero session records, and
         --skip-if-complete never repairs it (it never checks sessions).
         """
@@ -3686,19 +3550,19 @@ class TestOldRaceFullField:
         opts = _mod.RaceOptions(network_mode=True)
         parent = MagicMock()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'push_influx_race') as mock_race:
+            with patch.object(_mod, 'store_race') as mock_race:
                 with patch.object(_mod, 'delete_existing_laps'):
                     with patch.object(_mod, 'delete_existing_sessions') as mock_del:
                         with patch.object(_mod, 'print_rankings'):
                             parent.attach_mock(mock_del, 'delete_existing_sessions')
-                            parent.attach_mock(mock_race, 'push_influx_race')
+                            parent.attach_mock(mock_race, 'store_race')
                             _mod.old_race(ctx, opts)
         method_order = [c[0] for c in parent.mock_calls]
         assert method_order.index('delete_existing_sessions') < method_order.index(
-            'push_influx_race')
+            'store_race')
 
     def test_session_write_failure_leaves_race_unstamped(self):
-        """push_influx_session swallows Influx exceptions and returns False on
+        """store_session swallows Influx exceptions and returns False on
         failure. old_race must treat that as fatal and abort BEFORE stamping the
         race complete — otherwise the race is marked complete with zero session
         records, and --skip-if-complete (which never checks sessions) can never
@@ -3707,10 +3571,10 @@ class TestOldRaceFullField:
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'push_influx_race') as mock_race:
+            with patch.object(_mod, 'store_race') as mock_race:
                 with patch.object(_mod, 'delete_existing_laps'):
                     with patch.object(_mod, 'delete_existing_sessions', return_value=True):
-                        with patch.object(_mod, 'push_influx_session', return_value=False):
+                        with patch.object(_mod, 'store_session', return_value=False):
                             with patch.object(_mod, 'print_rankings'):
                                 result = _mod.old_race(ctx, opts)
         mock_race.assert_not_called()
@@ -3723,10 +3587,10 @@ class TestOldRaceFullField:
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'push_influx_race') as mock_race:
+            with patch.object(_mod, 'store_race') as mock_race:
                 with patch.object(_mod, 'delete_existing_laps'):
                     with patch.object(_mod, 'delete_existing_sessions', return_value=True):
-                        with patch.object(_mod, 'push_influx_session', return_value=True):
+                        with patch.object(_mod, 'store_session', return_value=True):
                             with patch.object(_mod, 'print_rankings'):
                                 _mod.old_race(ctx, opts)
         mock_race.assert_called_once()
@@ -3739,10 +3603,10 @@ class TestOldRaceFullField:
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'push_influx_race') as mock_race:
+            with patch.object(_mod, 'store_race') as mock_race:
                 with patch.object(_mod, 'delete_existing_laps'):
                     with patch.object(_mod, 'delete_existing_sessions', return_value=False):
-                        with patch.object(_mod, 'push_influx_session', return_value=True):
+                        with patch.object(_mod, 'store_session', return_value=True):
                             with patch.object(_mod, 'print_rankings'):
                                 result = _mod.old_race(ctx, opts)
         mock_race.assert_not_called()
@@ -3828,8 +3692,8 @@ class TestMultiSessionLapTimestamps:
         captured, cm = _capture_lap_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('B', {})):
             with cm:
-                with patch.object(_mod, 'push_influx_race'):
-                    with patch.object(_mod, 'push_influx_session'):
+                with patch.object(_mod, 'store_race'):
+                    with patch.object(_mod, 'store_session'):
                         with patch.object(_mod, 'delete_existing_laps'):
                             with patch.object(_mod, 'delete_existing_standings'):
                                 with patch.object(
@@ -4029,7 +3893,7 @@ class TestDryRun:
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1, 2: 1})):
             with patch.object(_mod, 'push_influx') as mock_push:
                 with patch.object(_mod, 'delete_existing_laps') as mock_del:
-                    with patch.object(_mod, 'push_influx_race') as mock_stamp:
+                    with patch.object(_mod, 'store_race') as mock_stamp:
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
         mock_push.assert_not_called()
@@ -4939,7 +4803,7 @@ class TestLiveRaceNoData:
     def _ctx(self):
         ctx = _mod.RaceContext('123', '99', MagicMock(), None, 0)
         ctx.client.live.get_session.return_value = {'Successful': True, 'Session': {
-            'ID': 's1', 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
+            'ID': 1, 'Name': 'S1', 'Classes': {}, 'Competitors': {}}}
         return ctx
 
     def test_api_error_returns_no_live_data(self):
@@ -5075,7 +4939,7 @@ class TestOldRaceSessionFetching:
         ctx.client.results.session_details.side_effect = [
             self._session_details(1), self._session_details(2)]
         opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, 'push_influx_race', return_value=True):
+        with patch.object(_mod, 'store_race', return_value=True):
             with patch.object(_mod, 'print_rankings'):
                 _mod.old_race(ctx, opts)
         assert ctx.client.results.session_details.call_count == 2
@@ -5119,7 +4983,7 @@ class TestOldRaceExpectedCountFiltering:
         with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
             with patch.object(_mod, 'existing_standings_counts_fieldwide',
                               return_value=(1, 1)):
-                with patch.object(_mod, 'push_influx_race', return_value=True):
+                with patch.object(_mod, 'store_race', return_value=True):
                     with patch.object(_mod, 'delete_existing_laps') as mock_del:
                         _mod.old_race(ctx, opts)
         mock_del.assert_not_called()
@@ -5133,7 +4997,7 @@ class TestOldRaceExpectedCountFiltering:
                     'FlagStatus': 0, 'TotalTime': '$F'}
         ctx = self._ctx([good, bad_time])
         opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, 'push_influx_race', return_value=True):
+        with patch.object(_mod, 'store_race', return_value=True):
             with patch.object(_mod, 'print_rankings'):
                 _mod.old_race(ctx, opts)
         lap_write = ctx.write_api.write.call_args_list[0]
@@ -5218,7 +5082,7 @@ class TestClassIndex:
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_build_class_index',
                           wraps=_mod._build_class_index) as mock_index:
-            with patch.object(_mod, 'push_influx_race', return_value=True):
+            with patch.object(_mod, 'store_race', return_value=True):
                 with patch.object(_mod, 'print_rankings'):
                     _mod.old_race(ctx, opts)
         assert mock_index.call_count == 1  # once per session, not per competitor
