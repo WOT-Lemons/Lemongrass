@@ -46,6 +46,7 @@ async def test_prune_deletes_checked_and_reloads():
     fake_influx.delete_api.return_value = delete_api
     with patch('lemongrass._races_tui._influx.influx_token_present', return_value=True), \
          patch('lemongrass._races_tui.fetch_race_rows', return_value=_rows()), \
+         patch('lemongrass.races._db.delete_race', return_value=True), \
          patch('lemongrass._races_tui._influx.connect') as connect:
         connect.return_value.__enter__.return_value = fake_influx
         async with app.run_test() as pilot:

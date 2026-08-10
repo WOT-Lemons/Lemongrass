@@ -7,40 +7,95 @@ import pytest
 import lemongrass.races as _mod
 from lemongrass.races import fetch_race_rows, prune_races
 
+races_mod = _mod
+
+
+def _rec(values, value=None):
+    rec = MagicMock()
+    rec.values = values
+    rec.get_value.return_value = value
+    return rec
+
+
+def _tables(mapping):
+    """Build fake Flux tables (one record per entry) keyed by race_id -> count."""
+    t = MagicMock()
+    t.records = [_rec({'race_id': rid}, value=count) for rid, count in mapping.items()]
+    return [t]
+
+
+def _row(race_id, name, when):
+    from lemongrass import _db
+    return _db.RaceRow(race_id=race_id, race_time=when, name=name)
+
 
 class TestFetchRaceRows:
-    def _query_api(self):
-        """Fake query_api: three queries in order — races meta, total laps, current-schema laps."""
-        def _rec(values, value=None, time=None):
-            rec = MagicMock()
-            rec.values = values
-            rec.get_value.return_value = value
-            rec.get_time.return_value = time
-            return rec
+    def test_joins_sql_race_with_flux_counts(self):
+        rows = [_row('144185', 'Sears Pointless', datetime(2026, 6, 1, tzinfo=UTC))]
+        query_api = MagicMock()
+        query_api.query.side_effect = [
+            _tables({'144185': 100}),
+            _tables({'144185': 100}),
+        ]
+        with patch('lemongrass.races._db.list_races', return_value=rows):
+            got = fetch_race_rows(query_api)
+        assert len(got) == 1
+        assert got[0]['race_id'] == '144185'
+        assert got[0]['name'] == 'Sears Pointless'
+        assert got[0]['date'] == '2026-06-01'
+        assert got[0]['total'] == 100
+        assert got[0]['current'] == 100
 
-        def _table(records):
-            t = MagicMock()
-            t.records = records
-            return t
 
-        meta = _table([_rec(
-            {'race_id': '144185', 'race_name': 'Sears Pointless'},
-            time=datetime(2026, 6, 1, tzinfo=UTC))])
-        totals = _table([_rec({'race_id': '144185'}, value=100)])
-        current = _table([_rec({'race_id': '144185'}, value=100)])
+def test_fetch_race_rows_joins_sql_attributes_with_flux_counts():
+    rows = [_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC)),
+            _row('102', 'Fall', datetime(2026, 9, 1, tzinfo=UTC))]
+    query_api = MagicMock()
+    query_api.query.side_effect = [
+        _tables({'101': 40, '102': 10}),   # total lap counts
+        _tables({'101': 40}),              # current-schema lap counts
+    ]
+    with patch('lemongrass.races._db.list_races', return_value=rows):
+        got = races_mod.fetch_race_rows(query_api)
+    assert [r['race_id'] for r in got] == ['102', '101']   # newest first
+    assert got[1]['total'] == 40 and got[1]['current'] == 40
+    assert got[0]['total'] == 10 and got[0]['current'] == 0
+    assert got[0]['date'] == '2026-09-01'
+    assert query_api.query.call_count == 2   # the race query is gone
 
-        api = MagicMock()
-        api.query.side_effect = [[meta], [totals], [current]]
-        return api
 
-    def test_returns_row_with_counts(self):
-        rows = fetch_race_rows(self._query_api())
-        assert len(rows) == 1
-        assert rows[0]['race_id'] == '144185'
-        assert rows[0]['name'] == 'Sears Pointless'
-        assert rows[0]['date'] == '2026-06-01'
-        assert rows[0]['total'] == 100
-        assert rows[0]['current'] == 100
+def test_fetch_race_rows_reports_the_current_schema_version():
+    # Deliberate: races list renders "stale (N/M at vX)" where X is the
+    # version laps should be at, not the version stored on the race.
+    from lemongrass.laps import SCHEMA_VERSION
+    rows = [_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC))]
+    query_api = MagicMock()
+    query_api.query.side_effect = [_tables({}), _tables({})]
+    with patch('lemongrass.races._db.list_races', return_value=rows):
+        got = races_mod.fetch_race_rows(query_api)
+    assert got[0]['schema_version'] == SCHEMA_VERSION
+
+
+def test_prune_deletes_influx_before_the_race_row():
+    calls = []
+    delete_api = MagicMock()
+    delete_api.delete.side_effect = lambda **kw: calls.append(kw['bucket'])
+    with patch('lemongrass.races._db.delete_race',
+               side_effect=lambda rid: calls.append('postgres') or True):
+        failed = races_mod.prune_races(delete_api, ['144185'])
+    assert failed == []
+    assert calls[-1] == 'postgres'
+
+
+def test_prune_keeps_the_race_row_when_an_influx_delete_fails():
+    # The retry guard keys off the race row: if it is gone but the laps are
+    # not, nothing can find the orphans.
+    delete_api = MagicMock()
+    delete_api.delete.side_effect = Exception('nope')
+    with patch('lemongrass.races._db.delete_race') as drop:
+        failed = races_mod.prune_races(delete_api, ['144185'])
+    assert failed == ['144185']
+    drop.assert_not_called()
 
 
 class TestDispatch:
@@ -88,12 +143,15 @@ class TestPruneRaces:
     def test_deletes_metadata_last_and_reports_progress(self):
         delete_api = MagicMock()
         progress = []
-        failed = prune_races(delete_api, ['144185'], on_progress=progress.append)
+        with patch('lemongrass.races._db.delete_race', return_value=True):
+            failed = prune_races(delete_api, ['144185'], on_progress=progress.append)
         assert failed == []
-        # metadata (race measurement) delete is the last call
+        # legacy metadata (race measurement) delete is the last Influx call
         preds = [c.kwargs['predicate'] for c in delete_api.delete.call_args_list]
         assert preds[-1].startswith('_measurement="race"')
-        assert len(progress) == 4
+        # the Postgres race row is deleted after all Influx deletes
+        assert len(progress) == 5
+        assert 'race row' in progress[-1]
 
     def test_failure_is_collected_not_raised(self):
         delete_api = MagicMock()
@@ -125,23 +183,29 @@ class TestPruneRaces:
 
 
 class TestHandlePrune:
+    @pytest.fixture(autouse=True)
+    def _patch_db(self, monkeypatch):
+        """Race-lookup and delete now go through Postgres; back them with a fake
+        keyed off self._races so the existing InfluxDB-flavored fixtures still work."""
+        from lemongrass import _db
+        self._races = {}
+
+        def fake_get_race(rid, conn=None):
+            name = self._races.get(rid)
+            if name is None:
+                return None
+            return _db.RaceRow(race_id=rid, race_time=datetime(2026, 1, 1, tzinfo=UTC), name=name)
+
+        monkeypatch.setattr('lemongrass.races._db.get_race', fake_get_race)
+        monkeypatch.setattr('lemongrass.races._db.delete_race', lambda rid, conn=None: True)
+
     def _make_influx_client(self, races=None):
         if races is None:
             races = {'12345': 'Test Race'}
+        self._races = races
         client = MagicMock()
         query_api = MagicMock()
-
-        def fake_query(flux):
-            tables = []
-            for race_id, race_name in races.items():
-                table = MagicMock()
-                rec = MagicMock()
-                rec.values = {'race_id': race_id, 'race_name': race_name}
-                table.records = [rec]
-                tables.append(table)
-            return tables
-
-        query_api.query.side_effect = fake_query
+        query_api.query.return_value = []
         client.query_api.return_value = query_api
         client.delete_api.return_value = MagicMock()
         client.__enter__ = lambda s: client
@@ -156,7 +220,8 @@ class TestHandlePrune:
                     _mod._handle_prune()
         out = capsys.readouterr().out
         assert 'Deleted laps' in out
-        assert 'Deleted race metadata' in out
+        assert 'Deleted legacy race metadata' in out
+        assert 'Deleted race row' in out
         assert 'Deleted sessions' in out
 
     def test_prune_aborts_on_no_confirmation(self, capsys):
@@ -299,7 +364,8 @@ class TestHandlePrune:
                     _mod._handle_prune()
         out = capsys.readouterr().out
         assert out.count('Deleted laps') == 2
-        assert out.count('Deleted race metadata') == 2
+        assert out.count('Deleted legacy race metadata') == 2
+        assert out.count('Deleted race row') == 2
         assert out.count('Deleted sessions') == 2
 
     def test_prune_multi_deletes_all_three_buckets_per_race(self):
@@ -377,46 +443,34 @@ class TestHandleBackfill:
 
 
 class TestHandleList:
-    def _make_client(self, races, totals, currents):
-        """Build mock InfluxDB client for _handle_list.
+    def _race_rows(self, races):
+        """races: list of (race_id, race_name, date_str) -> list[RaceRow]."""
+        from lemongrass import _db
+        return [
+            _db.RaceRow(
+                race_id=race_id, name=race_name,
+                race_time=datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=UTC))
+            for race_id, race_name, date_str in races
+        ]
 
-        races:    list of (race_id, race_name, date_str) e.g. ('R1', 'My Race', '2026-01-15')
+    def _make_client(self, totals, currents):
+        """Build mock InfluxDB client for _handle_list's two Flux lap-count queries.
+
         totals:   dict {race_id: total_lap_count}
         currents: dict {race_id: current_schema_lap_count}
         """
 
         def fake_query(flux):
-            if 'bucket: "races"' in flux:
-                tables = []
-                for race_id, race_name, date_str in races:
-                    table = MagicMock()
-                    rec = MagicMock()
-                    rec.values = {'race_id': race_id, 'race_name': race_name}
-                    rec.get_time.return_value = datetime.strptime(
-                        date_str, '%Y-%m-%d').replace(tzinfo=UTC)
-                    table.records = [rec]
-                    tables.append(table)
-                return tables
-            elif '"lap_no"' in flux:
-                tables = []
-                for race_id, count in totals.items():
-                    table = MagicMock()
-                    rec = MagicMock()
-                    rec.values = {'race_id': race_id}
-                    rec.get_value.return_value = count
-                    table.records = [rec]
-                    tables.append(table)
-                return tables
-            else:
-                tables = []
-                for race_id, count in currents.items():
-                    table = MagicMock()
-                    rec = MagicMock()
-                    rec.values = {'race_id': race_id}
-                    rec.get_value.return_value = count
-                    table.records = [rec]
-                    tables.append(table)
-                return tables
+            counts = totals if '"lap_no"' in flux else currents
+            tables = []
+            for race_id, count in counts.items():
+                table = MagicMock()
+                rec = MagicMock()
+                rec.values = {'race_id': race_id}
+                rec.get_value.return_value = count
+                table.records = [rec]
+                tables.append(table)
+            return tables
 
         client = MagicMock()
         query_api = MagicMock()
@@ -427,35 +481,29 @@ class TestHandleList:
         return client
 
     def test_no_laps_schema_state(self, capsys):
-        client = self._make_client(
-            races=[('R1', 'Empty Race', '2026-01-01')],
-            totals={},
-            currents={},
-        )
-        with patch('lemongrass._influx.connect', return_value=client):
+        client = self._make_client(totals={}, currents={})
+        rows = self._race_rows([('R1', 'Empty Race', '2026-01-01')])
+        with patch('lemongrass._influx.connect', return_value=client), \
+             patch('lemongrass.races._db.list_races', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         assert 'no laps' in capsys.readouterr().out
 
     def test_current_schema_state(self, capsys):
         from lemongrass.laps import SCHEMA_VERSION
-        client = self._make_client(
-            races=[('R1', 'Full Race', '2026-01-01')],
-            totals={'R1': 50},
-            currents={'R1': 50},
-        )
-        with patch('lemongrass._influx.connect', return_value=client):
+        client = self._make_client(totals={'R1': 50}, currents={'R1': 50})
+        rows = self._race_rows([('R1', 'Full Race', '2026-01-01')])
+        with patch('lemongrass._influx.connect', return_value=client), \
+             patch('lemongrass.races._db.list_races', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         assert f'current (v{SCHEMA_VERSION})' in capsys.readouterr().out
 
     def test_stale_schema_state(self, capsys):
-        client = self._make_client(
-            races=[('R1', 'Old Race', '2026-01-01')],
-            totals={'R1': 50},
-            currents={'R1': 20},
-        )
-        with patch('lemongrass._influx.connect', return_value=client):
+        client = self._make_client(totals={'R1': 50}, currents={'R1': 20})
+        rows = self._race_rows([('R1', 'Old Race', '2026-01-01')])
+        with patch('lemongrass._influx.connect', return_value=client), \
+             patch('lemongrass.races._db.list_races', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out
@@ -463,15 +511,13 @@ class TestHandleList:
         assert '20/50' in out
 
     def test_sorted_newest_first(self, capsys):
-        client = self._make_client(
-            races=[
-                ('R1', 'Old Race', '2024-06-01'),
-                ('R2', 'New Race', '2026-06-01'),
-            ],
-            totals={'R1': 10, 'R2': 10},
-            currents={'R1': 10, 'R2': 10},
-        )
-        with patch('lemongrass._influx.connect', return_value=client):
+        client = self._make_client(totals={'R1': 10, 'R2': 10}, currents={'R1': 10, 'R2': 10})
+        rows = self._race_rows([
+            ('R1', 'Old Race', '2024-06-01'),
+            ('R2', 'New Race', '2026-06-01'),
+        ])
+        with patch('lemongrass._influx.connect', return_value=client), \
+             patch('lemongrass.races._db.list_races', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out
@@ -484,25 +530,13 @@ class TestHandleList:
         assert exc.value.code != 0
 
     def test_missing_race_date_shows_question_mark(self, capsys):
-        # A race whose metadata record has no timestamp renders '?' in the DATE
+        # A race whose stored row has no timestamp renders '?' in the DATE
         # column rather than crashing on None.strftime.
-        def fake_query(flux):
-            if 'bucket: "races"' in flux:
-                table = MagicMock()
-                rec = MagicMock()
-                rec.values = {'race_id': 'R1', 'race_name': 'Dateless Race'}
-                rec.get_time.return_value = None
-                table.records = [rec]
-                return [table]
-            return []
-
-        client = MagicMock()
-        query_api = MagicMock()
-        query_api.query.side_effect = fake_query
-        client.query_api.return_value = query_api
-        client.__enter__ = lambda s: client
-        client.__exit__ = MagicMock(return_value=False)
-        with patch('lemongrass._influx.connect', return_value=client):
+        from lemongrass import _db
+        client = self._make_client(totals={}, currents={})
+        rows = [_db.RaceRow(race_id='R1', name='Dateless Race', race_time=None)]
+        with patch('lemongrass._influx.connect', return_value=client), \
+             patch('lemongrass.races._db.list_races', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out

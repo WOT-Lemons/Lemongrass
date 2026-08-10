@@ -9,7 +9,7 @@ import argparse
 import sys
 from datetime import UTC, datetime
 
-from lemongrass import _influx
+from lemongrass import _db, _influx
 
 EPOCH_START = '1970-01-01T00:00:00Z'
 
@@ -51,26 +51,29 @@ def fetch_race_rows(query_api):
     """Return per-race rows for the stored races: id, name, date, total laps,
     current-schema lap count, and the schema version. Date-sorted, newest first.
 
-    Shared by the CLI `races list` table and the interactive races browser so the
-    two never drift."""
+    A hybrid read: race attributes come from Postgres, the two lap-count
+    aggregates from Flux, joined here on race_id. Laps are genuinely
+    time-series and stay in Influx, so there is no single store to ask.
+
+    schema_version is the *current* SCHEMA_VERSION constant, not the value
+    stored on the race — `races list` renders "stale (N/M at vX)" where X is
+    the version the laps should be at.
+
+    Shared by the CLI `races list` table and the interactive races browser so
+    the two never drift."""
     from lemongrass.laps import SCHEMA_VERSION
 
-    races = {}
-    for table in query_api.query(
-        f'from(bucket: "{_influx.BUCKET_RACES}")\n'
-        f'  |> range(start: {EPOCH_START})\n'
-        f'  |> filter(fn: (r) => r._measurement == "race" and r._field == "end_time_epoc")\n'
-    ):
-        for record in table.records:
-            race_id = record.values.get('race_id')
-            races[race_id] = {
-                'race_id': race_id,
-                'name': record.values.get('race_name', 'unknown'),
-                'date': record.get_time().strftime('%Y-%m-%d') if record.get_time() else '?',
-                'total': 0,
-                'current': 0,
-                'schema_version': SCHEMA_VERSION,
-            }
+    races = {
+        row.race_id: {
+            'race_id': row.race_id,
+            'name': row.name or 'unknown',
+            'date': row.race_time.strftime('%Y-%m-%d') if row.race_time else '?',
+            'total': 0,
+            'current': 0,
+            'schema_version': SCHEMA_VERSION,
+        }
+        for row in _db.list_races()
+    }
 
     for table in query_api.query(
         f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
@@ -120,14 +123,23 @@ def _handle_list():
 
 
 def prune_races(delete_api, race_ids, on_progress=None, on_error=None):
-    """Delete all data for each race id across the session/lap/standings/race buckets.
+    """Delete all data for each race id across the session/lap/standings/race buckets
+    and the races table.
 
-    Race metadata is deleted LAST: the caller's not-found guard keys off the race
-    measurement, so as long as it survives, a retry after a partial failure can still
-    clean up orphaned rows. on_progress(message) is called after each successful bucket
-    delete. Per-race errors are reported via on_error(message) when provided; otherwise
-    they fall back to on_progress so the message is never lost. Returns the ids that
-    failed."""
+    The Postgres race row is deleted LAST, and its cascade takes the sessions
+    with it. The caller's not-found guard keys off that row, so as long as it
+    survives, a retry after a partial failure can still find and clean up the
+    orphaned Influx data. Deleting it first would invert that: an Influx
+    delete that then failed would leave laps with nothing to find them by.
+
+    The legacy Influx race and session deletes are kept: those buckets stop
+    being written at cutover but still hold every pre-cutover race, and prune
+    is the only thing that would ever clean them up.
+
+    on_progress(message) is called after each successful delete. Per-race
+    errors are reported via on_error(message) when provided; otherwise they
+    fall back to on_progress so the message is never lost. Returns the ids
+    that failed."""
     def _note(msg):
         if on_progress:
             on_progress(msg)
@@ -160,7 +172,12 @@ def prune_races(delete_api, race_ids, on_progress=None, on_error=None):
             delete_api.delete(start=EPOCH_START, stop=now,
                               predicate=f'_measurement="race" AND race_id="{rid}"',
                               bucket=_influx.BUCKET_RACES)
-            _note(f"Deleted race metadata for race {rid}")
+            _note(f"Deleted legacy race metadata for race {rid}")
+
+            if _db.delete_race(rid):
+                _note(f"Deleted race row for race {rid}")
+            else:
+                _note(f"No race row stored for race {rid}")
         except Exception as e:  # record-and-continue across races
             _note_error(f"error pruning race {rid}: {e}")
             failed.append(rid)
@@ -185,27 +202,15 @@ def _handle_prune():
         sys.exit(1)
 
     with _influx.connect() as client:
-        query_api = client.query_api()
-
-        # safe: all ids validated against [A-Za-z0-9_-]+ above; no Flux metacharacters possible
-        ids_set = '["' + '", "'.join(race_ids) + '"]'
-        races_tables = query_api.query(
-            f'from(bucket: "{_influx.BUCKET_RACES}")\n'
-            f'  |> range(start: {EPOCH_START})\n'
-            f'  |> filter(fn: (r) => r._measurement == "race" and r._field == "end_time_epoc"\n'
-            f'      and contains(value: r.race_id, set: {ids_set}))\n'
-            f'  |> group(columns: ["race_id"])\n'
-            f'  |> first()'
-        )
         race_names = {}
-        for table in races_tables:
-            for record in table.records:
-                rid = record.values.get('race_id')
-                race_names[rid] = record.values.get('race_name', 'unknown')
+        for rid in race_ids:
+            row = _db.get_race(rid)
+            if row is not None:
+                race_names[rid] = row.name or 'unknown'
 
         not_found = [rid for rid in race_ids if rid not in race_names]
         if not_found:
-            print("race(s) not found in InfluxDB:", " ".join(not_found), file=sys.stderr)
+            print("race(s) not found:", " ".join(not_found), file=sys.stderr)
             sys.exit(1)
 
         if not args.yes:
