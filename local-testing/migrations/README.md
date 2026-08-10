@@ -202,6 +202,11 @@ What the rehearsal confirmed beyond the counts:
   written back into scratch buckets reproduces all 4 races and all 12 sessions with
   identical identity, timestamps, and field values.
 
+One defect surfaced and was fixed: pointing the races browser at an InfluxDB that
+rejected the token crashed the TUI instead of showing `load failed: …`, because
+Textual parses a status Label's string as console markup and the 401 body contains
+a bracketed segment that reads as a malformed tag.
+
 ## Rollback
 
 If the new code needs to be reverted after cutover, export what's in Postgres back out
