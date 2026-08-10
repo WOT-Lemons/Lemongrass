@@ -3373,14 +3373,14 @@
         "label": "Race",
         "type": "query",
         "datasource": {
-          "type": "influxdb",
-          "uid": "wotl-races-flux"
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
         },
-        "definition": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: if \"${__timezone}\" == \"utc\" then \"UTC\" else \"${__timezone}\")\npad = (n) => if n < 10 then \"0\" + string(v: n) else string(v: n)\nfrom(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r._field == \"end_time_epoc\") |> map(fn: (r) => ({_time: r._time, _value: r.race_name + \" (\" + pad(n: date.month(t: r._time)) + \"/\" + pad(n: date.monthDay(t: r._time)) + \"/\" + pad(n: date.year(t: r._time) % 100) + \");\" + r.race_id})) |> group() |> sort(columns: [\"_time\"], desc: true) |> keep(columns: [\"_value\"])",
+        "definition": "SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\" FROM races ORDER BY race_time DESC",
         "query": {
-          "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: if \"${__timezone}\" == \"utc\" then \"UTC\" else \"${__timezone}\")\npad = (n) => if n < 10 then \"0\" + string(v: n) else string(v: n)\nfrom(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r._field == \"end_time_epoc\") |> map(fn: (r) => ({_time: r._time, _value: r.race_name + \" (\" + pad(n: date.month(t: r._time)) + \"/\" + pad(n: date.monthDay(t: r._time)) + \"/\" + pad(n: date.year(t: r._time) % 100) + \");\" + r.race_id})) |> group() |> sort(columns: [\"_time\"], desc: true) |> keep(columns: [\"_value\"])"
+          "format": "table",
+          "rawSql": "SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\" FROM races ORDER BY race_time DESC"
         },
-        "regex": "/(?<text>.+);(?<value>\\d+)$/",
         "refresh": 2,
         "sort": 0,
         "current": {},
@@ -3391,12 +3391,13 @@
         "type": "query",
         "hide": 2,
         "datasource": {
-          "type": "influxdb",
-          "uid": "wotl-races-flux"
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
         },
-        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])",
+        "definition": "SELECT (extract(epoch from race_time) * 1000)::bigint::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
         "query": {
-          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])"
+          "format": "table",
+          "rawSql": "SELECT (extract(epoch from race_time) * 1000)::bigint::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
         },
         "refresh": 2,
         "sort": 0,
@@ -3408,12 +3409,13 @@
         "type": "query",
         "hide": 2,
         "datasource": {
-          "type": "influxdb",
-          "uid": "wotl-races-flux"
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
         },
-        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: if int(v: r._value) == 0 then \"now\" else string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])",
+        "definition": "SELECT coalesce((extract(epoch from end_time) * 1000 + 3600000)::bigint::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
         "query": {
-          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: if int(v: r._value) == 0 then \"now\" else string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])"
+          "format": "table",
+          "rawSql": "SELECT coalesce((extract(epoch from end_time) * 1000 + 3600000)::bigint::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
         },
         "refresh": 2,
         "sort": 0,
