@@ -45,8 +45,10 @@ def test_current_reports_head_after_upgrade(monkeypatch, clean_db, postgres_url,
 
 def test_import_legacy_dispatches_and_prints_counts(monkeypatch, capsys):
     from lemongrass import db as db_mod
-    summary = {'races_read': 3, 'races_written': 3, 'sessions_read': 4,
-               'sessions_written': 3, 'sessions_skipped': 1,
+    summary = {'races_read': 3, 'races_written': 3, 'races_would_write': 3,
+               'races_skipped_existing': 0, 'sessions_read': 4,
+               'sessions_written': 3, 'sessions_would_write': 3,
+               'sessions_skipped_existing': 0, 'sessions_skipped': 1,
                'orphan_race_ids': ['64202']}
     monkeypatch.setattr(sys, 'argv', ['lemongrass-db', 'import-legacy', '--dry-run'])
     with patch('lemongrass._influx.connect'), \

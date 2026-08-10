@@ -98,19 +98,33 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
     not the same as harmless: once the new writer is live, an unguarded re-run
     replays stale Influx values over rows the application has since corrected,
     and the importer wins. The post-deploy catch-up run must use it.
+
+    races_written/sessions_written count rows actually written and are always
+    0 under dry_run. races_would_write/sessions_would_write count rows that
+    reach the write step regardless of dry_run, so a `--dry-run` rehearsal
+    still previews what a real run would do (races_read ≈ races_would_write is
+    the runbook's healthy-run check). races_skipped_existing/
+    sessions_skipped_existing count rows only_missing left alone because
+    Postgres already had them; sessions_skipped keeps its original,
+    orphan-only meaning so read == written-or-would-write + skipped +
+    skipped_existing reconciles in every mode.
     """
     races = read_legacy_races(query_api)
     sessions = read_legacy_sessions(query_api)
     summary = {
         'races_read': len(races), 'races_written': 0,
+        'races_would_write': 0, 'races_skipped_existing': 0,
         'sessions_read': len(sessions), 'sessions_written': 0,
+        'sessions_would_write': 0, 'sessions_skipped_existing': 0,
         'sessions_skipped': 0, 'orphan_race_ids': [],
     }
 
     existing_races = {r.race_id for r in _db.list_races()}
     for row in races:
         if only_missing and row.race_id in existing_races:
+            summary['races_skipped_existing'] += 1
             continue
+        summary['races_would_write'] += 1
         if not dry_run:
             _db.upsert_race(row)
             summary['races_written'] += 1
@@ -127,7 +141,9 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
                 row.session_id, row.race_id)
             continue
         if only_missing and row.session_id in existing_sessions:
+            summary['sessions_skipped_existing'] += 1
             continue
+        summary['sessions_would_write'] += 1
         if not dry_run:
             _db.upsert_session(row)
             summary['sessions_written'] += 1

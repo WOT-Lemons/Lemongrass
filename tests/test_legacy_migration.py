@@ -147,3 +147,64 @@ def test_only_missing_does_not_clobber_a_newer_row(db):
     assert summary['races_written'] == 1
     assert _db.get_race('101').name == 'Corrected'
     assert _db.get_race('102').name == 'New'
+
+
+def test_dry_run_reports_would_write_counts(db):
+    # written is hard-zeroed under dry_run, but the runbook judges a healthy
+    # rehearsal by "races read ≈ races written" — would_write is what makes
+    # that check satisfiable without actually writing anything.
+    from lemongrass import _db
+    query_api = MagicMock()
+    with patch.object(_mod, 'read_legacy_races', return_value=[
+            _db.RaceRow(race_id='101', race_time=datetime(2026, 5, 1, tzinfo=UTC)),
+            _db.RaceRow(race_id='102', race_time=datetime(2026, 6, 1, tzinfo=UTC))]), \
+         patch.object(_mod, 'read_legacy_sessions', return_value=[
+            _db.SessionRow(session_id=55, race_id='101')]):
+        summary = _mod.import_legacy(query_api, dry_run=True)
+    assert summary['races_written'] == 0
+    assert summary['races_would_write'] == 2
+    assert summary['sessions_written'] == 0
+    assert summary['sessions_would_write'] == 1
+    assert _db.list_races() == []
+    assert _db.list_sessions() == []
+
+
+def test_real_run_would_write_matches_written(db):
+    # On a real, non-only_missing run every read row is written, so the
+    # preview counter and the actual counter should agree.
+    from lemongrass import _db
+    query_api = MagicMock()
+    with patch.object(_mod, 'read_legacy_races', return_value=[
+            _db.RaceRow(race_id='101', race_time=datetime(2026, 5, 1, tzinfo=UTC))]), \
+         patch.object(_mod, 'read_legacy_sessions', return_value=[
+            _db.SessionRow(session_id=55, race_id='101')]):
+        summary = _mod.import_legacy(query_api)
+    assert summary['races_written'] == summary['races_would_write'] == 1
+    assert summary['sessions_written'] == summary['sessions_would_write'] == 1
+
+
+def test_only_missing_counts_reconcile(db):
+    # A session or race skipped because it already exists must be accounted
+    # for separately from an orphan skip, so read == written + the skip
+    # buckets in every mode, including the post-deploy catch-up run.
+    from lemongrass import _db
+    _db.upsert_race(_db.RaceRow(race_id='101', race_time=datetime(2026, 5, 1, tzinfo=UTC)))
+    _db.upsert_session(_db.SessionRow(session_id=55, race_id='101'))
+    query_api = MagicMock()
+    with patch.object(_mod, 'read_legacy_races', return_value=[
+            _db.RaceRow(race_id='101', race_time=datetime(2026, 5, 1, tzinfo=UTC)),
+            _db.RaceRow(race_id='102', race_time=datetime(2026, 6, 1, tzinfo=UTC))]), \
+         patch.object(_mod, 'read_legacy_sessions', return_value=[
+            _db.SessionRow(session_id=55, race_id='101'),
+            _db.SessionRow(session_id=56, race_id='101'),
+            _db.SessionRow(session_id=57, race_id='64202')]):
+        summary = _mod.import_legacy(query_api, only_missing=True)
+    assert summary['races_written'] == 1
+    assert summary['races_skipped_existing'] == 1
+    assert summary['races_read'] == summary['races_written'] + summary['races_skipped_existing']
+    assert summary['sessions_written'] == 1
+    assert summary['sessions_skipped_existing'] == 1
+    assert summary['sessions_skipped'] == 1
+    assert (summary['sessions_read']
+            == summary['sessions_written'] + summary['sessions_skipped_existing']
+            + summary['sessions_skipped'])

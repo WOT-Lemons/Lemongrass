@@ -80,11 +80,27 @@ def _handle_import_legacy():
             only_missing=args.only_missing)
 
     from lemongrass import _db
-    print(f"races:    read {summary['races_read']:5d}  "
-          f"written {summary['races_written']:5d}")
-    print(f"sessions: read {summary['sessions_read']:5d}  "
-          f"written {summary['sessions_written']:5d}  "
-          f"skipped {summary['sessions_skipped']:5d}")
+
+    races_line = (f"races:    read {summary['races_read']:5d}  "
+                  f"written {summary['races_written']:5d}")
+    if summary['races_would_write'] != summary['races_written']:
+        races_line += f"  would-write {summary['races_would_write']:5d}"
+    if summary['races_skipped_existing']:
+        races_line += (
+            f"  skipped-existing {summary['races_skipped_existing']:5d}")
+    print(races_line)
+
+    sessions_line = (f"sessions: read {summary['sessions_read']:5d}  "
+                      f"written {summary['sessions_written']:5d}  "
+                      f"skipped {summary['sessions_skipped']:5d}")
+    if summary['sessions_would_write'] != summary['sessions_written']:
+        sessions_line += (
+            f"  would-write {summary['sessions_would_write']:5d}")
+    if summary['sessions_skipped_existing']:
+        sessions_line += (
+            f"  skipped-existing {summary['sessions_skipped_existing']:5d}")
+    print(sessions_line)
+
     if summary['orphan_race_ids']:
         print("orphan sessions belong to race id(s): "
               + ' '.join(summary['orphan_race_ids']))
