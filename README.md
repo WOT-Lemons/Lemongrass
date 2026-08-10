@@ -8,8 +8,8 @@ Open source car telemetry for 24 Hours of Lemons.
 - PiSugar 3 UPS
 - USB OBD-II adapter
 - An InfluxDB instance running v2.x
-- A PostgreSQL instance (v14 or later) for the `lemongrass db` commands and future race and
-  session metadata
+- A PostgreSQL instance (v14 or later) for race and session metadata (managed via the
+  `lemongrass db` commands)
 - Grafana to visualize the data
 
 ## Services
@@ -316,7 +316,8 @@ Lap      LapTime Position FlagStatus    TotalTime
 
 ## Race Management
 
-The `races` subcommand provides tools for inspecting and managing race data stored in InfluxDB.
+The `races` subcommand provides tools for inspecting and managing race data. Race and
+session metadata live in PostgreSQL; lap data stays in InfluxDB.
 
 ```shell
 lemongrass races <subcommand> [args]
@@ -383,7 +384,7 @@ The `backfill` subcommand delegates to `lemongrass race-backfill` and supports t
 
 ### Session Tracking
 
-All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata is stored in the `race_sessions` bucket.
+All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata itself is stored in PostgreSQL (see [Database Schema](#database-schema)); the legacy `race_sessions` Influx bucket is no longer written to and is kept only as migration/rollback material.
 
 ## Configuration
 
@@ -396,10 +397,9 @@ the full key reference.
 
 ## Database Schema
 
-lemongrass ships a PostgreSQL schema that will hold race and session metadata. Only
-the `lemongrass db` commands use it today — every other command still reads and writes
-that metadata in InfluxDB, so no other command needs a database. Before running
-`lemongrass db`, set the password env var named by `postgres.password_env`
+Race and session metadata live in PostgreSQL. Laps, standings, telemetry, and PiSugar
+data stay in InfluxDB. Before running any `lemongrass` command against a Postgres-backed
+install, set the password env var named by `postgres.password_env`
 (`LEMONGRASS_DB_PASSWORD` by default — see `.env.sample`) and apply the schema:
 
 ```shell
@@ -413,6 +413,12 @@ lemongrass db current
 ```
 
 Run `db upgrade` again after upgrading lemongrass whenever a new migration ships.
+
+For an existing install that still has race and session history sitting in the legacy
+InfluxDB buckets, `lemongrass db import-legacy` is the one-time migration step that
+copies it into PostgreSQL. See
+[local-testing/migrations/README.md](local-testing/migrations/README.md) for the full
+cutover runbook (ordering, flags, rollback).
 
 ## Contributing
 
