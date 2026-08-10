@@ -783,7 +783,7 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     if opts.network_mode:
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
         race_meta_written = store_race(ctx, race_ts_ms)
-        if live_session_id is not None:
+        if live_session_id is not None and race_meta_written:
             store_session(ctx, live_session_id, live_session_name, None)
         if laps:
             # class_position intentionally discarded: historical laps were completed before
@@ -1019,25 +1019,27 @@ def old_race(ctx, opts):
             logging.warning("Skipping race stamp so next run will re-backfill")
             return 1
 
-        sessions_ok = store_sessions(
-            ctx,
-            [(session['session_id'], session['session_name'], session['start_epoc'])
-             for session in pending_writes],
-        )
-        if not sessions_ok:
-            # A failed delete or a failed session write can leave the sessions
-            # bucket holding stale, partial, or mixed records. Bail out here,
-            # before the race is stamped complete, so the next backfill redoes
-            # the whole rewrite instead of leaving an unrepairable session gap
-            # that --skip-if-complete can't detect (it never checks sessions).
-            logging.error(
-                "Session write incomplete for race %s — failing the run so the "
-                "next backfill retries", ctx.race_id)
-            return 1
-
+        # The race row must land before any session: sessions.race_id is a
+        # foreign key, so a session for an unstored race is rejected outright,
+        # the race is never stamped, and each retry repeats the failure. Influx
+        # had no referential integrity, which is why the old order worked.
         if not store_race(ctx, race_ts_ms, expected, len(pending_writes)):
             logging.error(
                 "Race metadata write failed for race %s — failing the run so the "
+                "next backfill retries", ctx.race_id)
+            return 1
+
+        if not store_sessions(ctx, [
+                (session['session_id'], session['session_name'],
+                 session['start_epoc'])
+                for session in pending_writes]):
+            # store_sessions replaces the race's whole set in one transaction,
+            # so a failure leaves the previous set intact. Bail out before the
+            # standings phase so the next backfill redoes the rewrite rather
+            # than leaving a session gap --skip-if-complete cannot detect (it
+            # never checks sessions).
+            logging.error(
+                "Session write incomplete for race %s — failing the run so the "
                 "next backfill retries", ctx.race_id)
             return 1
 
@@ -1157,7 +1159,9 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     race_meta_written reflects whether the caller's initial store_race
     succeeded; when False (or after the epoch is corrected below) the metadata
     write is retried each poll until it lands, so a transient write failure
-    self-heals without aborting lap capture.
+    self-heals without aborting lap capture. Session writes are skipped while
+    race_meta_written is False: sessions.race_id is a foreign key, so a
+    session for an unstored race would be rejected outright.
     """
     if observer is None:
         observer = _StdoutObserver()
@@ -1212,9 +1216,14 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     observer.on_session_change(session.get('Name', ''))
                     session_id = new_session_id
                     prev_standings = {}
-                    if opts.network_mode:
-                        store_session(
-                            ctx, session_id, session.get('Name'), None)
+                    if opts.network_mode and race_meta_written:
+                        store_session(ctx, session_id, session.get('Name'), None)
+                    elif opts.network_mode:
+                        logging.warning(
+                            "Skipping session %s write for race %s: the race "
+                            "row is not stored, so the write would be rejected "
+                            "by the foreign key. The next poll retries the "
+                            "race write first.", session_id, ctx.race_id)
             else:
                 logging.debug("get_session returned no session; may be between sessions")
 

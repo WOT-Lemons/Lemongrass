@@ -231,6 +231,11 @@ class TestMonitorRoutine:
     def test_detects_new_session_and_updates_session_id(self):
         stop = threading.Event()
         ctx = _mod.RaceContext('123', '42', MagicMock(), None, 0)
+        # start_epoc is 0, so monitor_routine's epoch recheck would otherwise
+        # query a MagicMock and treat its truthy default return as a real
+        # epoch, flipping race_meta_written to False and (correctly, per the
+        # foreign-key guard) skipping the session write this test checks for.
+        ctx.client.race.details.return_value = {'Successful': False}
         opts = _mod.RaceOptions(network_mode=True, interval=0)
 
         lap1 = {'Lap': '1', 'LapTime': '1:00.000'}
@@ -3227,6 +3232,115 @@ class TestMergeDuplicateSessions:
         assert original['competitors'][0]['competitor_name'] == 'Driver'
 
 
+def _run_old_race_happy_path(monkeypatch):
+    """Drive old_race through a successful backfill with all I/O stubbed.
+
+    Returns old_race's exit code. Built from the arrangement the existing
+    old_race tests already use — reuse theirs rather than inventing a new one,
+    so the two stay in sync.
+    """
+    def _make_competitor(number, comp_id, position):
+        return {
+            'Number': number, 'Category': '1',
+            'ID': comp_id, 'SessionID': 1, 'RaceID': 999,
+            'FirstName': 'Driver', 'LastName': number,
+            'Position': position, 'Laps': '1', 'LastLapTime': '',
+            'BestPosition': position, 'BestLap': '1',
+            'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+            'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+            'LapTimes': [
+                {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': position,
+                 'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+            ],
+        }
+
+    session_details = {
+        'Successful': True,
+        'Session': {
+            'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
+            'Categories': {'1': {'ID': '1', 'Name': 'A'}},
+            'SortedCompetitors': [
+                _make_competitor('42', 1, '1'),
+                _make_competitor('99', 2, '2'),
+            ],
+        },
+    }
+    ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+    ctx.delete_api = MagicMock()
+    ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
+    ctx.client.results.session_details.return_value = session_details
+    opts = _mod.RaceOptions(network_mode=True)
+
+    monkeypatch.setattr(_mod, '_resolve_class_historical', lambda *a, **k: ('A', {1: 1}))
+    monkeypatch.setattr(_mod, 'delete_existing_laps', lambda *a, **k: True)
+    monkeypatch.setattr(_mod, 'print_rankings', lambda *a, **k: None)
+    return _mod.old_race(ctx, opts)
+
+
+def test_old_race_writes_the_race_row_before_any_session(monkeypatch):
+    # Regression test for the foreign key inversion: sessions.race_id
+    # references races.race_id, so a session written first raises an FK
+    # violation, the race is never stamped, and every retry repeats it.
+    calls = []
+    monkeypatch.setattr(_mod, 'store_race',
+                        lambda *a, **k: calls.append('race') or True)
+    monkeypatch.setattr(_mod, 'store_sessions',
+                        lambda *a, **k: calls.append('sessions') or True)
+    _run_old_race_happy_path(monkeypatch)   # see step 2
+    assert calls.index('race') < calls.index('sessions')
+
+
+def test_old_race_skips_sessions_when_the_race_row_fails(monkeypatch):
+    calls = []
+    monkeypatch.setattr(_mod, 'store_race',
+                        lambda *a, **k: calls.append('race') or False)
+    monkeypatch.setattr(_mod, 'store_sessions',
+                        lambda *a, **k: calls.append('sessions') or True)
+    rc = _run_old_race_happy_path(monkeypatch)
+    assert 'sessions' not in calls
+    assert rc == 1
+
+
+def test_monitor_routine_skips_a_session_write_after_a_failed_race_write():
+    # The race_meta_written retry can fail; writing a session for a race that
+    # is not stored is exactly the FK violation old_race hits.
+    stop = threading.Event()
+    ctx = _monitor_ctx()          # live.get_session returns Session ID 's1'
+    ctx.write_api = MagicMock()
+    opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+    def fake_refresh(c):
+        stop.set()
+        return []
+
+    with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh), \
+         patch.object(_mod, 'store_race', return_value=False), \
+         patch.object(_mod, 'store_session') as store, \
+         patch.object(_mod, 'push_influx_standings_live', return_value={}):
+        _mod.monitor_routine(ctx, [], opts, session_id='old',
+                             race_meta_written=False, _stop_event=stop)
+    store.assert_not_called()
+
+
+def test_monitor_routine_writes_the_session_once_the_race_row_lands():
+    stop = threading.Event()
+    ctx = _monitor_ctx()
+    ctx.write_api = MagicMock()
+    opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+    def fake_refresh(c):
+        stop.set()
+        return []
+
+    with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh), \
+         patch.object(_mod, 'store_race', return_value=True), \
+         patch.object(_mod, 'store_session') as store, \
+         patch.object(_mod, 'push_influx_standings_live', return_value={}):
+        _mod.monitor_routine(ctx, [], opts, session_id='old',
+                             race_meta_written=False, _stop_event=stop)
+    store.assert_called_once()
+
+
 class TestOldRaceFullField:
     def _make_competitor(self, number, comp_id, position):
         return {
@@ -3535,43 +3649,25 @@ class TestOldRaceFullField:
         assert expected_arg == len(captured)
         assert session_count_arg == 1
 
-    def test_sessions_written_before_race_stamp(self):
-        """store_sessions must run before store_race stamps the race complete —
-        otherwise a write failure in between leaves a race stamped complete with
-        zero session records, and --skip-if-complete never repairs it (it never
-        checks sessions). Task 6 inverts this order for the foreign-key fix;
-        until then it must stay exactly as today.
-        """
-        ctx = self._ctx(self._session_details_two_cars())
-        opts = _mod.RaceOptions(network_mode=True)
-        parent = MagicMock()
-        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'store_race') as mock_race:
-                with patch.object(_mod, 'delete_existing_laps'):
-                    with patch.object(_mod, 'store_sessions') as mock_sessions:
-                        with patch.object(_mod, 'print_rankings'):
-                            parent.attach_mock(mock_sessions, 'store_sessions')
-                            parent.attach_mock(mock_race, 'store_race')
-                            _mod.old_race(ctx, opts)
-        method_order = [c[0] for c in parent.mock_calls]
-        assert method_order.index('store_sessions') < method_order.index('store_race')
-
-    def test_sessions_write_failure_leaves_race_unstamped(self):
+    def test_sessions_write_failure_fails_the_run_after_the_race_row_lands(self):
         """store_sessions swallows exceptions and returns False on failure.
-        old_race must treat that as fatal and abort BEFORE stamping the race
-        complete — otherwise the race is marked complete with zero session
-        records, and --skip-if-complete (which never checks sessions) can never
-        repair it.
+
+        With sessions.race_id as a foreign key, the race row must be written
+        first (see test_old_race_writes_the_race_row_before_any_session), so a
+        session-write failure here no longer means the race went unstamped —
+        it means the previous session set (if any) is left intact by
+        store_sessions' single-transaction replace. old_race still fails the
+        run so the next backfill retries the rewrite.
         """
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'store_race') as mock_race:
+            with patch.object(_mod, 'store_race', return_value=True) as mock_race:
                 with patch.object(_mod, 'delete_existing_laps'):
                     with patch.object(_mod, 'store_sessions', return_value=False):
                         with patch.object(_mod, 'print_rankings'):
                             result = _mod.old_race(ctx, opts)
-        mock_race.assert_not_called()
+        mock_race.assert_called_once()
         assert result == 1
 
     def test_all_sessions_succeed_stamps_race(self):
