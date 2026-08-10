@@ -782,9 +782,9 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     race_meta_written = True
     if opts.network_mode:
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-        race_meta_written = push_influx_race(ctx, race_ts_ms)
+        race_meta_written = store_race(ctx, race_ts_ms)
         if live_session_id is not None:
-            push_influx_session(ctx, live_session_id, live_session_name, None)
+            store_session(ctx, live_session_id, live_session_name, None)
         if laps:
             # class_position intentionally discarded: historical laps were completed before
             # launch so any position we compute now is stale. monitor_routine owns
@@ -977,7 +977,7 @@ def old_race(ctx, opts):
                     race_ts_ms = (
                         ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                     )
-                    if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
+                    if not store_race(ctx, race_ts_ms, expected, len(pending_writes)):
                         logging.error(
                             "Race metadata write failed for race %s — failing the "
                             "run so the next backfill retries", ctx.race_id)
@@ -1019,12 +1019,11 @@ def old_race(ctx, opts):
             logging.warning("Skipping race stamp so next run will re-backfill")
             return 1
 
-        sessions_ok = delete_existing_sessions(ctx)
-        for session in pending_writes:
-            if not push_influx_session(
-                    ctx, session['session_id'], session['session_name'],
-                    session['start_epoc']):
-                sessions_ok = False
+        sessions_ok = store_sessions(
+            ctx,
+            [(session['session_id'], session['session_name'], session['start_epoc'])
+             for session in pending_writes],
+        )
         if not sessions_ok:
             # A failed delete or a failed session write can leave the sessions
             # bucket holding stale, partial, or mixed records. Bail out here,
@@ -1036,7 +1035,7 @@ def old_race(ctx, opts):
                 "next backfill retries", ctx.race_id)
             return 1
 
-        if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
+        if not store_race(ctx, race_ts_ms, expected, len(pending_writes)):
             logging.error(
                 "Race metadata write failed for race %s — failing the run so the "
                 "next backfill retries", ctx.race_id)
@@ -1155,10 +1154,10 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     _stop_event may be injected for testing; defaults to a new threading.Event.
     session_id is tracked across polls and tags each written lap point; a new
     session push fires whenever the live session ID changes.
-    race_meta_written reflects whether the caller's initial push_influx_race
+    race_meta_written reflects whether the caller's initial store_race
     succeeded; when False (or after the epoch is corrected below) the metadata
-    write is retried each poll until it lands, so a transient delete/write
-    failure self-heals without aborting lap capture.
+    write is retried each poll until it lands, so a transient write failure
+    self-heals without aborting lap capture.
     """
     if observer is None:
         observer = _StdoutObserver()
@@ -1199,7 +1198,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 race_ts_ms = (
                     ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                 )
-                race_meta_written = push_influx_race(ctx, race_ts_ms)
+                race_meta_written = store_race(ctx, race_ts_ms)
 
             try:
                 session_response = ctx.client.live.get_session(ctx.race_id)
@@ -1214,7 +1213,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     session_id = new_session_id
                     prev_standings = {}
                     if opts.network_mode:
-                        push_influx_session(
+                        store_session(
                             ctx, session_id, session.get('Name'), None)
             else:
                 logging.debug("get_session returned no session; may be between sessions")

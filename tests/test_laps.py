@@ -81,6 +81,21 @@ def _monitor_ctx():
     return ctx
 
 
+@pytest.fixture(autouse=True)
+def _stub_db_writes(monkeypatch):
+    """Stub the `_db` layer under `store_race`/`store_session`/`store_sessions` so
+    tests that exercise `old_race`/`live_race`/`monitor_routine` without explicitly
+    mocking those three functions don't need a live Postgres connection. Tests that
+    patch `store_race`/`store_session`/`store_sessions` (or `_db.upsert_race` etc.)
+    directly are unaffected — this only backstops the call sites nobody mocked,
+    mirroring the always-succeeding `ctx.write_api`/`ctx.delete_api` MagicMocks the
+    Influx-era tests relied on.
+    """
+    monkeypatch.setattr(_mod._db, 'upsert_race', MagicMock())
+    monkeypatch.setattr(_mod._db, 'upsert_session', MagicMock())
+    monkeypatch.setattr(_mod._db, 'replace_sessions', MagicMock())
+
+
 class TestResolveTokens:
     def test_multi_tokens_returns_list(self):
         with patch.dict(os.environ, {'RACEMONITOR_TOKENS': 'TOKEN1,TOKEN2'}, clear=True):
@@ -3416,7 +3431,7 @@ class TestOldRaceFullField:
         assert not ctx.write_api.write.called
         mock_del.assert_not_called()
 
-    def test_store_session_called_once_per_session(self):
+    def test_store_sessions_called_once_with_all_sessions(self):
         ctx = self._ctx(self._session_details_two_cars())
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}, {'ID': 2}]}
         # Two genuinely different sessions (distinct start epochs) so the
@@ -3427,35 +3442,36 @@ class TestOldRaceFullField:
             self._session_details_two_cars(), other_session]
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'store_session') as mock_session:
+            with patch.object(_mod, 'store_sessions') as mock_sessions:
                 with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
-        assert mock_session.call_count == 2
+        mock_sessions.assert_called_once()
+        assert len(mock_sessions.call_args.args[1]) == 2
 
-    def test_store_session_called_with_correct_session_id(self):
+    def test_store_sessions_called_with_correct_session_id(self):
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'store_session') as mock_session:
+            with patch.object(_mod, 'store_sessions') as mock_sessions:
                 with patch.object(_mod, 'store_race'):
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
-        session_ids = {c.args[1] for c in mock_session.call_args_list}
+        session_ids = {triple[0] for triple in mock_sessions.call_args.args[1]}
         assert 1 in session_ids
 
-    def test_store_session_not_called_when_not_network_mode(self):
+    def test_store_sessions_not_called_when_not_network_mode(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
         ctx.delete_api = MagicMock()
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
         ctx.client.results.session_details.return_value = self._session_details_two_cars()
         opts = _mod.RaceOptions(network_mode=False)
-        with patch.object(_mod, 'store_session') as mock_session:
+        with patch.object(_mod, 'store_sessions') as mock_sessions:
             with patch.object(_mod, 'print_rankings'):
                 _mod.old_race(ctx, opts)
-        mock_session.assert_not_called()
+        mock_sessions.assert_not_called()
 
     def test_build_lap_points_receives_session_id(self):
         ctx = self._ctx(self._session_details_two_cars())
@@ -3519,32 +3535,12 @@ class TestOldRaceFullField:
         assert expected_arg == len(captured)
         assert session_count_arg == 1
 
-    def test_sessions_cleared_before_rewrite(self):
-        ctx = self._ctx(self._session_details_two_cars())
-        opts = _mod.RaceOptions(network_mode=True)
-        parent = MagicMock()
-        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'store_race'):
-                with patch.object(_mod, 'delete_existing_laps'):
-                    with patch.object(_mod, 'delete_existing_sessions') as mock_del:
-                        with patch.object(_mod, 'store_session') as mock_push:
-                            with patch.object(_mod, 'print_rankings'):
-                                parent.attach_mock(mock_del, 'delete_existing_sessions')
-                                parent.attach_mock(mock_push, 'store_session')
-                                _mod.old_race(ctx, opts)
-        mock_del.assert_called_once_with(ctx)
-        assert mock_push.called
-        # Delete must fire before any session is rewritten, so a failure between
-        # them leaves no session records rather than a half-rewritten set.
-        method_order = [c[0] for c in parent.mock_calls]
-        assert method_order.index('delete_existing_sessions') < method_order.index(
-            'store_session')
-
-    def test_sessions_cleared_before_race_stamp(self):
-        """delete_existing_sessions + the session rewrite must happen before
-        store_race stamps the race complete — otherwise a write failure in
-        between leaves a race stamped complete with zero session records, and
-        --skip-if-complete never repairs it (it never checks sessions).
+    def test_sessions_written_before_race_stamp(self):
+        """store_sessions must run before store_race stamps the race complete —
+        otherwise a write failure in between leaves a race stamped complete with
+        zero session records, and --skip-if-complete never repairs it (it never
+        checks sessions). Task 6 inverts this order for the foreign-key fix;
+        until then it must stay exactly as today.
         """
         ctx = self._ctx(self._session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
@@ -3552,19 +3548,18 @@ class TestOldRaceFullField:
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'store_race') as mock_race:
                 with patch.object(_mod, 'delete_existing_laps'):
-                    with patch.object(_mod, 'delete_existing_sessions') as mock_del:
+                    with patch.object(_mod, 'store_sessions') as mock_sessions:
                         with patch.object(_mod, 'print_rankings'):
-                            parent.attach_mock(mock_del, 'delete_existing_sessions')
+                            parent.attach_mock(mock_sessions, 'store_sessions')
                             parent.attach_mock(mock_race, 'store_race')
                             _mod.old_race(ctx, opts)
         method_order = [c[0] for c in parent.mock_calls]
-        assert method_order.index('delete_existing_sessions') < method_order.index(
-            'store_race')
+        assert method_order.index('store_sessions') < method_order.index('store_race')
 
-    def test_session_write_failure_leaves_race_unstamped(self):
-        """store_session swallows Influx exceptions and returns False on
-        failure. old_race must treat that as fatal and abort BEFORE stamping the
-        race complete — otherwise the race is marked complete with zero session
+    def test_sessions_write_failure_leaves_race_unstamped(self):
+        """store_sessions swallows exceptions and returns False on failure.
+        old_race must treat that as fatal and abort BEFORE stamping the race
+        complete — otherwise the race is marked complete with zero session
         records, and --skip-if-complete (which never checks sessions) can never
         repair it.
         """
@@ -3573,15 +3568,14 @@ class TestOldRaceFullField:
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'store_race') as mock_race:
                 with patch.object(_mod, 'delete_existing_laps'):
-                    with patch.object(_mod, 'delete_existing_sessions', return_value=True):
-                        with patch.object(_mod, 'store_session', return_value=False):
-                            with patch.object(_mod, 'print_rankings'):
-                                result = _mod.old_race(ctx, opts)
+                    with patch.object(_mod, 'store_sessions', return_value=False):
+                        with patch.object(_mod, 'print_rankings'):
+                            result = _mod.old_race(ctx, opts)
         mock_race.assert_not_called()
         assert result == 1
 
     def test_all_sessions_succeed_stamps_race(self):
-        """The happy path: every session write succeeds, so the race is still
+        """The happy path: the session write succeeds, so the race is still
         stamped complete exactly as before this fix.
         """
         ctx = self._ctx(self._session_details_two_cars())
@@ -3589,28 +3583,10 @@ class TestOldRaceFullField:
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'store_race') as mock_race:
                 with patch.object(_mod, 'delete_existing_laps'):
-                    with patch.object(_mod, 'delete_existing_sessions', return_value=True):
-                        with patch.object(_mod, 'store_session', return_value=True):
-                            with patch.object(_mod, 'print_rankings'):
-                                _mod.old_race(ctx, opts)
+                    with patch.object(_mod, 'store_sessions', return_value=True):
+                        with patch.object(_mod, 'print_rankings'):
+                            _mod.old_race(ctx, opts)
         mock_race.assert_called_once()
-
-    def test_sessions_delete_failure_leaves_race_unstamped(self):
-        """A failed delete_existing_sessions is treated the same as a failed
-        session write: it must also abort before the race stamp, since a failed
-        delete can leave stale records mixed with whatever gets rewritten.
-        """
-        ctx = self._ctx(self._session_details_two_cars())
-        opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'store_race') as mock_race:
-                with patch.object(_mod, 'delete_existing_laps'):
-                    with patch.object(_mod, 'delete_existing_sessions', return_value=False):
-                        with patch.object(_mod, 'store_session', return_value=True):
-                            with patch.object(_mod, 'print_rankings'):
-                                result = _mod.old_race(ctx, opts)
-        mock_race.assert_not_called()
-        assert result == 1
 
 
 class TestBuildLapPointsSessionId:
