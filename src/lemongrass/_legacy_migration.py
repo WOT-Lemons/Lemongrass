@@ -150,3 +150,80 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
 
     summary['orphan_race_ids'] = sorted(orphans)
     return summary
+
+
+def _escape_tag(value):
+    """Escape a line-protocol tag value: commas, spaces, and equals signs."""
+    return (value.replace('\\', '\\\\').replace(',', '\\,')
+                 .replace(' ', '\\ ').replace('=', '\\='))
+
+
+def _tags(pairs):
+    """Render tag pairs, omitting empty values.
+
+    Influx drops an empty tag value rather than storing it, so emitting one
+    would not round trip — the reader would see the key present-but-empty
+    where the original point had it absent.
+    """
+    return ''.join(f',{k}={_escape_tag(v)}' for k, v in pairs if v)
+
+
+def _dt_to_epoch(value):
+    """Whole-second epoch for an aware datetime; None -> 0.
+
+    Zero is what the Influx schema used for "unknown", so a NULL column
+    exports back to the value the old readers expect.
+    """
+    return int(value.timestamp()) if value is not None else 0
+
+
+def race_line(row):
+    """Render one race row as an Influx line-protocol point.
+
+    The shape push_influx_race wrote: race_id / race_name / track_name /
+    series_name tags, end_time_epoc always present (every legacy reader
+    filters on it, so a point without it is invisible), the three completeness
+    fields only when stored, and the race time as the point timestamp in
+    nanoseconds.
+    """
+    tags = _tags([('race_id', row.race_id), ('race_name', row.name),
+                  ('track_name', row.track_name),
+                  ('series_name', row.series_name or '')])
+    fields = [f'end_time_epoc={_dt_to_epoch(row.end_time)}i']
+    if row.lap_schema_version is not None:
+        fields.append(f'schema_version={row.lap_schema_version}i')
+    if row.expected_lap_count is not None:
+        fields.append(f'expected_lap_count={row.expected_lap_count}i')
+    if row.session_count is not None:
+        fields.append(f'session_count={row.session_count}i')
+    ns = int(row.race_time.timestamp() * 1_000_000_000)
+    return f"race{tags} {','.join(fields)} {ns}"
+
+
+def session_line(row):
+    """Render one session row as an Influx line-protocol point.
+
+    session_id goes back to being a string tag, and the point timestamp is the
+    start epoch in nanoseconds — zero when the start time was never known,
+    exactly as push_influx_session wrote it.
+    """
+    tags = _tags([('race_id', row.race_id), ('session_id', str(row.session_id))])
+    start = _dt_to_epoch(row.start_time)
+    name = (row.name or '').replace('\\', '\\\\').replace('"', '\\"')
+    fields = f'session_name="{name}",start_epoc={start}i'
+    return f"session{tags} {fields} {start * 1_000_000_000}"
+
+
+def export_legacy(out):
+    """Write every stored race and session to `out` as line protocol.
+
+    Races first, then sessions, so the output can be split at the first
+    `session,` line and fed to `influx write` per bucket. Returns the counts.
+    """
+    races = _db.list_races()
+    sessions = _db.list_sessions()
+    for row in races:
+        out.write(race_line(row) + '\n')
+    for row in sessions:
+        out.write(session_line(row) + '\n')
+    return {'races': len(races), 'sessions': len(sessions)}

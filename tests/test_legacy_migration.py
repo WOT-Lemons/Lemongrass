@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -208,3 +209,125 @@ def test_only_missing_counts_reconcile(db):
     assert (summary['sessions_read']
             == summary['sessions_written'] + summary['sessions_skipped_existing']
             + summary['sessions_skipped'])
+
+
+def test_race_line_matches_the_original_point_shape():
+    from lemongrass import _db
+    line = _mod.race_line(_db.RaceRow(
+        race_id='101', name='Spring', track_name='Thompson',
+        series_name='Lemons',
+        race_time=datetime(2026, 5, 1, 12, 0, tzinfo=UTC),
+        end_time=datetime(2026, 5, 1, 20, 0, tzinfo=UTC),
+        expected_lap_count=120, session_count=2, lap_schema_version=4))
+    assert line.startswith(
+        'race,race_id=101,race_name=Spring,track_name=Thompson,'
+        'series_name=Lemons ')
+    assert 'end_time_epoc=1777665600i' in line
+    assert 'expected_lap_count=120i' in line
+    assert 'session_count=2i' in line
+    assert 'schema_version=4i' in line
+    assert line.endswith(' 1777636800000000000')
+
+
+def test_race_line_escapes_and_omits_empty_tags():
+    # Influx drops empty tag values, so emitting `race_name=` would not round
+    # trip; spaces and commas inside a track name must be escaped.
+    from lemongrass import _db
+    line = _mod.race_line(_db.RaceRow(
+        race_id='101', name='', track_name='Thompson Speedway, CT',
+        race_time=datetime(2026, 5, 1, tzinfo=UTC)))
+    assert 'race_name=' not in line
+    assert 'track_name=Thompson\\ Speedway\\,\\ CT' in line
+    assert 'series_name=' not in line
+
+
+def test_race_line_omits_absent_fields_but_always_has_end_time_epoc():
+    # end_time_epoc is the field every legacy reader filtered on; a point
+    # without it is invisible to the old code.
+    from lemongrass import _db
+    line = _mod.race_line(_db.RaceRow(
+        race_id='101', race_time=datetime(2026, 5, 1, tzinfo=UTC)))
+    assert 'end_time_epoc=0i' in line
+    assert 'expected_lap_count' not in line
+    assert 'schema_version' not in line
+
+
+def test_session_line_matches_the_original_point_shape():
+    from lemongrass import _db
+    line = _mod.session_line(_db.SessionRow(
+        session_id=55, race_id='101', name='Qualifying',
+        start_time=datetime(2026, 5, 1, 12, 0, tzinfo=UTC)))
+    assert line.startswith('session,race_id=101,session_id=55 ')
+    assert 'session_name="Qualifying"' in line
+    assert 'start_epoc=1777636800i' in line
+    assert line.endswith(' 1777636800000000000')
+
+
+def test_session_line_null_start_time_is_zero_at_the_epoch():
+    from lemongrass import _db
+    line = _mod.session_line(_db.SessionRow(session_id=55, race_id='101'))
+    assert 'start_epoc=0i' in line
+    assert line.endswith(' 0')
+
+
+def test_export_writes_races_before_sessions(db):
+    import io
+
+    from lemongrass import _db
+    _db.upsert_race(_db.RaceRow(race_id='101', name='Spring',
+                                race_time=datetime(2026, 5, 1, tzinfo=UTC)))
+    _db.upsert_session(_db.SessionRow(session_id=55, race_id='101', name='Q'))
+    out = io.StringIO()
+    counts = _mod.export_legacy(out)
+    lines = out.getvalue().splitlines()
+    assert counts == {'races': 1, 'sessions': 1}
+    assert lines[0].startswith('race,')
+    assert lines[1].startswith('session,')
+
+
+def test_export_round_trips_through_import(db):
+    # The reverse of import_legacy: what comes out, put back in, is the same
+    # set of rows. This is the rollback guarantee.
+    import io
+
+    from lemongrass import _db
+    original = _db.RaceRow(
+        race_id='101', name='Spring', track_name='Thompson Speedway',
+        series_name='Lemons',
+        race_time=datetime(2026, 5, 1, 12, 0, tzinfo=UTC),
+        end_time=datetime(2026, 5, 1, 20, 0, tzinfo=UTC),
+        expected_lap_count=120, session_count=2, lap_schema_version=4)
+    _db.upsert_race(original)
+    out = io.StringIO()
+    _mod.export_legacy(out)
+    records = _parse_line_protocol_as_records(out.getvalue())   # step 2
+    query_api = MagicMock(query=MagicMock(return_value=_tables(records)))
+    (back,) = _mod.read_legacy_races(query_api)
+    assert back == original
+
+
+def _parse_line_protocol_as_records(text):
+    """Turn exported line protocol back into pivoted-record stand-ins.
+
+    Mirrors what a Flux pivot hands read_legacy_races: tags and fields in one
+    values dict, with the point timestamp available via get_time().
+    """
+    records = []
+    for line in text.splitlines():
+        # Tag values can contain an escaped space (`\ `), which a plain
+        # line.split(' ') would also split on; only the unescaped space that
+        # separates tags from fields marks the real boundary.
+        head_and_fields, ts = line.rsplit(' ', 1)
+        head, fields = re.split(r'(?<!\\) ', head_and_fields, maxsplit=1)
+        parts = head.split(',')
+        values = {}
+        for tag in parts[1:]:
+            key, _, val = tag.partition('=')
+            values[key] = val.replace('\\ ', ' ').replace('\\,', ',')
+        for field in fields.split(','):
+            key, _, val = field.partition('=')
+            values[key] = (val.strip('"') if val.startswith('"')
+                           else int(val.rstrip('i')))
+        records.append(_Rec(values, datetime.fromtimestamp(
+            int(ts) / 1_000_000_000, tz=UTC)))
+    return records

@@ -60,3 +60,28 @@ def test_import_legacy_dispatches_and_prints_counts(monkeypatch, capsys):
     assert run.call_args.kwargs['dry_run'] is True
     out = capsys.readouterr().out
     assert '64202' in out
+
+
+def test_export_legacy_dispatches_and_writes_to_stdout(monkeypatch, capsys):
+    from lemongrass import db as db_mod
+    monkeypatch.setattr(sys, 'argv', ['lemongrass-db', 'export-legacy'])
+    with patch('lemongrass._legacy_migration.export_legacy',
+               return_value={'races': 2, 'sessions': 3}) as run:
+        assert db_mod.main() == 0
+    assert run.call_args.args[0] is sys.stdout
+    err = capsys.readouterr().err
+    assert 'exported 2 race(s), 3 session(s)' in err
+
+
+def test_export_legacy_writes_to_the_output_file(monkeypatch, tmp_path):
+    from lemongrass import db as db_mod
+    out_path = tmp_path / 'races.lp'
+    monkeypatch.setattr(sys, 'argv',
+                        ['lemongrass-db', 'export-legacy', '--output', str(out_path)])
+    def fake_export(out):
+        out.write('race,race_id=1 x=1i 0\n')
+        return {'races': 1, 'sessions': 0}
+
+    with patch('lemongrass._legacy_migration.export_legacy', side_effect=fake_export):
+        assert db_mod.main() == 0
+    assert out_path.read_text() == 'race,race_id=1 x=1i 0\n'

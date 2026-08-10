@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """lemongrass db subcommand: manage the PostgreSQL schema.
 
-Subcommands: upgrade, current, import-legacy.
+Subcommands: upgrade, current, import-legacy, export-legacy.
 
 Migrations ship inside the installed package, so this runs from a wheel or a
 container with no checkout and no alembic.ini present.
 """
 import sys
 
-_SUBCOMMANDS = ('upgrade', 'current', 'import-legacy')
+_SUBCOMMANDS = ('upgrade', 'current', 'import-legacy', 'export-legacy')
 
 
 def main():
@@ -22,6 +22,7 @@ def main():
         'upgrade': _handle_upgrade,
         'current': _handle_current,
         'import-legacy': _handle_import_legacy,
+        'export-legacy': _handle_export_legacy,
     }[subcmd]()
 
 
@@ -106,4 +107,32 @@ def _handle_import_legacy():
               + ' '.join(summary['orphan_race_ids']))
     print(f"now stored: {len(_db.list_races())} race(s), "
           f"{len(_db.list_sessions())} session(s)")
+    return 0
+
+
+def _handle_export_legacy():
+    """Write stored races and sessions out as Influx line protocol.
+
+    The reverse of import-legacy, and what makes the cutover deploy
+    reversible: races written to Postgres after cutover have no Influx
+    counterpart, so reverting the code without re-seeding the buckets would
+    lose every one of them.
+    """
+    import argparse
+    import contextlib
+
+    from lemongrass import _legacy_migration
+    parser = argparse.ArgumentParser(
+        prog='lemongrass db export-legacy',
+        description='Write races and sessions out as InfluxDB line protocol')
+    parser.add_argument('--output', default=None,
+                        help='File to write (default: stdout)')
+    args = parser.parse_args()
+
+    with contextlib.ExitStack() as stack:
+        out = (stack.enter_context(open(args.output, 'w', encoding='utf-8'))
+               if args.output else sys.stdout)
+        counts = _legacy_migration.export_legacy(out)
+    print(f"exported {counts['races']} race(s), {counts['sessions']} session(s)",
+          file=sys.stderr)
     return 0
