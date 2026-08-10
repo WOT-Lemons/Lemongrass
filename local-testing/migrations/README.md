@@ -182,9 +182,15 @@ awk '/^session,/{s=1} {print > (s ? "sessions.lp" : "races.lp")}' races-and-sess
 and each half fed to `influx write` against its own bucket:
 
 ```shell
-influx write --bucket races --precision ns @races.lp
-influx write --bucket race_sessions --precision ns @sessions.lp
+influx write --org <org> --token <token> --bucket races --precision ns @races.lp
+if [ -s sessions.lp ]; then
+  influx write --org <org> --token <token> --bucket race_sessions --precision ns @sessions.lp
+fi
 ```
+
+(If a deployment has zero sessions, `awk` never creates `sessions.lp` and this second
+`influx write` would fail on a missing file — the `[ -s sessions.lp ]` guard skips it in
+that case.)
 
 Then revert the code and restart the services.
 
