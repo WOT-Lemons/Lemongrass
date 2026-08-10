@@ -1936,7 +1936,7 @@ class TestLiveRaceMetadataFailure:
             if call_count == 3:
                 stop.set()
             return {'Successful': True, 'Session': {
-                'ID': 'sess-1', 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
+                'ID': 1, 'Name': 'S', 'Competitors': {}, 'Classes': {}}}
 
         ctx.client.live.get_session.side_effect = fake_get_session
 
@@ -2568,6 +2568,27 @@ class TestLiveClassWiring:
             with patch.object(_mod, 'print_rankings'):
                 _mod.live_race(ctx, opts)
         mock_session.assert_not_called()
+
+    def test_live_race_seeds_pending_sessions_into_monitor_routine(self):
+        # Missing-test finding: when the race row isn't stored yet (store_race
+        # returns False), live_race must defer the in-progress session change
+        # into pending_sessions rather than writing it directly (it would be
+        # rejected by the sessions table's race_id foreign key) — and must
+        # hand that queue into monitor_routine so the deferred entry isn't
+        # simply lost once the monitor loop takes over.
+        ctx = self._make_ctx()
+        ctx.delete_api = MagicMock()
+        ctx.client.live.get_session.return_value = self._session_response_with_id(7, 'Day 1')
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'store_race', return_value=False):
+                    with patch.object(_mod, 'store_session') as mock_session:
+                        with patch.object(_mod, 'monitor_routine') as mock_monitor:
+                            _mod.live_race(ctx, opts)
+        mock_session.assert_not_called()
+        assert mock_monitor.call_args.kwargs['pending_sessions'] == [(7, 'Day 1')]
+        assert mock_monitor.call_args.kwargs['race_meta_written'] is False
 
     def test_monitor_routine_passes_session_id_to_push_influx(self):
         ctx = self._make_ctx()
@@ -3443,6 +3464,39 @@ def test_monitor_routine_does_not_rewrite_a_flushed_session_on_a_later_poll():
         _mod.monitor_routine(ctx, [], opts, race_meta_written=False, _stop_event=stop)
     # Poll 1 defers, poll 2 flushes, poll 3 has nothing new -> still one call.
     store.assert_called_once_with(ctx, 1, 'S1', None)
+
+
+def test_monitor_routine_keeps_a_failed_flush_entry_queued_for_the_next_poll():
+    """Finding 2: store_session returning False on a flush attempt (a
+    transient Postgres error) must not be discarded by an unconditional
+    pending_sessions.clear() — the entry stays queued and is retried on a
+    later poll, then succeeds."""
+    stop = threading.Event()
+    ctx = _monitor_ctx()          # live.get_session always returns Session ID 1 'S1'
+    ctx.write_api = MagicMock()
+    opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+    poll_count = 0
+
+    def fake_refresh(c):
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count >= 3:
+            stop.set()
+        return []
+
+    with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh), \
+         patch.object(_mod, 'store_race', side_effect=[False, True, True]), \
+         patch.object(_mod, 'store_session', side_effect=[False, True]) as store, \
+         patch.object(_mod, 'push_influx_standings_live', return_value={}):
+        _mod.monitor_routine(ctx, [], opts, race_meta_written=False, _stop_event=stop)
+    # Poll 1 defers session 1 (race row missing). Poll 2's store_race succeeds
+    # and the flush attempt fails (transient error) -> stays queued, not
+    # dropped. Poll 3 flushes it successfully.
+    assert store.call_args_list == [
+        call(ctx, 1, 'S1', None),
+        call(ctx, 1, 'S1', None),
+    ]
 
 
 class TestOldRaceFullField:

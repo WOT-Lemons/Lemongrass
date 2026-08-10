@@ -74,11 +74,11 @@ _SETTLED_BUFFER_S = 4 * 86400  # 4 days
 
 @dataclass(frozen=True)
 class StoredRace:
-    """Race-completeness fields read back from a stored race point.
+    """Race-completeness fields read back from the stored race row (Postgres).
 
-    Any field is None when absent from the point (schema_version and
+    Any field is None when absent from the row (schema_version and
     expected_lap_count predate the fields they name; end_time_epoc is missing
-    only from a malformed point) — callers must guard against None before
+    only from a malformed row) — callers must guard against None before
     comparing them.
     """
     schema_version: int | None
@@ -816,8 +816,10 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
                                observer=observer, _stop_event=_stop_event)
 
     if opts.network_mode and not race_meta_written:
-        # No monitor loop to retry in; signal a failed run so a rerun restores
-        # the (possibly deleted) race metadata point.
+        # No monitor loop to retry in; signal a failed run so a rerun retries
+        # the write and brings the race row up to date (store_race's upsert is
+        # atomic — a False return means the write didn't happen, not that a
+        # previously stored row was lost).
         return MonitorStatus.WRITE_FAILED
 
 
@@ -1220,10 +1222,18 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
             if opts.network_mode and race_meta_written and pending_sessions:
                 # The race row just landed (or already had): flush every session
                 # change queued while it was missing, oldest first, so none of
-                # them are silently lost.
-                for pending_id, pending_name in pending_sessions:
-                    store_session(ctx, pending_id, pending_name, None)
-                pending_sessions.clear()
+                # them are silently lost. A flush attempt itself can fail (a
+                # transient Postgres error) — store_session returns False for a
+                # logged failure, and an entry that fails stays queued for the
+                # next poll rather than being dropped by an unconditional
+                # clear(), which would reintroduce the drop-and-warn behavior
+                # this queue exists to replace.
+                still_pending = [
+                    (pending_id, pending_name)
+                    for pending_id, pending_name in pending_sessions
+                    if not store_session(ctx, pending_id, pending_name, None)
+                ]
+                pending_sessions[:] = still_pending
 
             try:
                 session_response = ctx.client.live.get_session(ctx.race_id)
@@ -1822,12 +1832,14 @@ def stored_end_settled(stored):
 
 
 def race_complete_in_influx(ctx, stored):
-    """True when the stored race point proves this race is complete and current.
+    """True when the stored race row proves this race is complete and current.
 
-    Mirrors old_race's skip predicate but sources the expected lap total from the
-    stored race point (Influx) instead of a RaceMonitor fetch. `stored` is passed
-    in already-fetched so main() does not query the race point twice. The
-    is-not-None guard is required: a pre-existing point has expected_lap_count
+    Mirrors old_race's skip predicate but sources the expected lap total and
+    schema version from the stored race row (Postgres) instead of a
+    RaceMonitor fetch, then compares them against the actual lap counts,
+    which stay in Influx (hence the function's name). `stored` is passed in
+    already-fetched so main() does not query the race row twice. The
+    is-not-None guard is required: a pre-existing row has expected_lap_count
     None, and None > 0 raises TypeError in Python 3.
     """
     if stored is None or stored.schema_version != SCHEMA_VERSION:
