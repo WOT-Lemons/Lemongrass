@@ -101,6 +101,28 @@ async def test_browser_shows_status_and_skips_load_when_db_password_unset():
 
 
 @pytest.mark.asyncio
+async def test_browser_shows_a_load_failure_containing_markup_characters():
+    # Found during the cutover rehearsal: Label.update() parses its argument as
+    # console markup, so an error whose text contains a bracketed segment the
+    # parser starts reading as a tag raises MarkupError out of _fail — killing
+    # the app on the very path whose `except Exception` exists to keep it
+    # alive. An Influx 401 body is exactly that shape.
+    boom = Exception("(401) Unauthorized headers: "
+                     "['CF-RAY': 'a2926dcbdd3ef1c4-BOS', 'alt-svc': 'h3=\":443\"']")
+    app = _Host(MagicMock())
+    with patch('lemongrass._races_tui._influx.influx_token_present', return_value=True), \
+         patch('lemongrass._races_tui._db.db_password_present', return_value=True), \
+         patch('lemongrass._races_tui._influx.connect', side_effect=boom):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            status = str(app.screen.query_one('#status', Label).render())
+    assert 'load failed' in status
+    assert 'CF-RAY' in status
+
+
+@pytest.mark.asyncio
 async def test_diagnose_output_runs_both_and_streams():
     client = MagicMock()
     app = _Host(client)
@@ -157,6 +179,31 @@ async def test_diagnose_car_rejects_invalid_number():
                 await pilot.press('enter')
                 await pilot.pause()
                 # invalid car number must not push a DiagnoseOutputScreen
+                assert not isinstance(app.screen, DiagnoseOutputScreen)
+                status = str(screen.query_one('#status', Label).render())
+                assert 'invalid car number' in status
+
+
+@pytest.mark.asyncio
+async def test_diagnose_car_rejects_a_number_containing_markup_characters():
+    # Same root cause as the load-failure case: the rejected value is echoed
+    # into a Label, so a car number the user types with a bracketed segment
+    # would crash the app instead of being rejected.
+    app = _Host(MagicMock())
+    with patch('lemongrass._races_tui._influx.connect') as connect:
+        connect.return_value.__enter__.return_value = MagicMock()
+        with patch('lemongrass._races_tui.distinct_car_numbers', return_value=[]):
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                screen = DiagnoseCarScreen('144185', 'Sears')
+                app.push_screen(screen)
+                await pilot.pause()
+                car_input = screen.query_one('#car', Input)
+                car_input.focus()
+                await pilot.pause()
+                car_input.value = "[x='y': 'z']"
+                await pilot.press('enter')
+                await pilot.pause()
                 assert not isinstance(app.screen, DiagnoseOutputScreen)
                 status = str(screen.query_one('#status', Label).render())
                 assert 'invalid car number' in status

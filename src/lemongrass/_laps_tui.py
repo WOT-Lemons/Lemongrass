@@ -16,6 +16,7 @@ from textual import work
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
+from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Checkbox,
@@ -251,7 +252,11 @@ class PickerScreen(Screen):
         self.query_one('#query', Input).focus()
 
     def _status(self, text):
-        self.query_one('#status', Label).update(text)
+        # Content(), not a bare str: Label.update() markup-parses a str, and
+        # these messages carry typed search terms and RaceMonitor race names,
+        # which raise MarkupError as soon as one contains a bracketed segment
+        # the parser reads as a tag.
+        self.query_one('#status', Label).update(Content(text))
 
     def on_input_submitted(self, event):
         event.stop()
@@ -442,7 +447,7 @@ class WaitForLiveScreen(Screen):
 
     # --- main-thread UI updates ---
     def _status(self, text):
-        self.query_one('#status', Label).update(text)
+        self.query_one('#status', Label).update(Content(text))
 
     def _mark_live(self):
         self.live = True
@@ -603,7 +608,8 @@ class CarSelectScreen(Screen):
         # came from the live feed, and rejecting it would make a real car
         # unmonitorable rather than prevent anything.
         if car_number and _bad_car_number(car_number):
-            self.query_one('#status', Label).update(f'invalid car number: {car_number!r}')
+            self.query_one('#status', Label).update(
+                Content(f'invalid car number: {car_number!r}'))
             return
         self._confirm(car_number)
 
@@ -713,7 +719,7 @@ class MonitorScreen(Screen):
 
     # --- observer-driven UI updates (main thread) ---
     def set_header(self, text):
-        self.query_one('#header', Label).update(text)
+        self.query_one('#header', Label).update(Content(text))
 
     def set_laps(self, laps):
         self.board.set_laps(laps)
@@ -940,5 +946,5 @@ class ImportScreen(Screen):
             self.app.call_from_thread(self._done, summary)
 
     def _done(self, message):
-        self.query_one('#title', Label).update(message)
+        self.query_one('#title', Label).update(Content(message))
         self.query_one('#log', RichLog).write(message)

@@ -171,6 +171,22 @@ class TestPickerScreen:
             assert len(hits.children) == 1
 
 
+    @pytest.mark.asyncio
+    async def test_search_term_containing_markup_characters_is_echoed_literally(self):
+        # The typed term is echoed into the status Label, which parses a str as
+        # console markup — so a term with a bracketed segment shaped like a tag
+        # would crash the picker instead of searching.
+        client = _client_with_race()
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.screen.query_one('#query', Input).value = "[x='y': 'z']"
+            await pilot.press('enter')
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+        client.results.search_results.assert_called_with("[x='y': 'z']")
+
+
 class TestNotLiveScreen:
     @pytest.mark.asyncio
     async def test_import_choice_reaches_import_confirm(self):

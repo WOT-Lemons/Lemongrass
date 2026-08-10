@@ -8,6 +8,7 @@ from typing import ClassVar
 from textual import work
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
+from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, SelectionList
 from textual.widgets.selection_list import Selection
@@ -147,7 +148,8 @@ class DiagnoseCarScreen(Screen):
         if not car_number:
             return
         if _influx.invalid_flux_ids([car_number]):
-            self.query_one('#status', Label).update(f'invalid car number: {car_number!r}')
+            self.query_one('#status', Label).update(
+                Content(f'invalid car number: {car_number!r}'))
             return
         self.app.push_screen(DiagnoseOutputScreen(self.race_id, car_number))
 
@@ -224,8 +226,8 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         sl = self.query_one('#races', SelectionList)
         hi = self.row_for_highlight()
         checked = len(sl.selected)
-        self.query_one('#status', Label).update(
-            f'highlighted: #{hi["race_id"] if hi else "-"} · checked: {checked}')
+        self.query_one('#status', Label).update(Content(
+            f'highlighted: #{hi["race_id"] if hi else "-"} · checked: {checked}'))
 
     @work(thread=True, exclusive=True)
     def _load(self):
@@ -243,7 +245,12 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
             self.app.call_from_thread(self._show, rows)
 
     def _fail(self, message):
-        self.query_one('#status', Label).update(f'load failed: {message}')
+        # Content(), not a bare str: Label.update() parses a str as console
+        # markup, and an error whose text contains a bracketed segment the
+        # parser reads as a tag (an Influx 401 body, say) raises MarkupError
+        # right here — crashing the app on the path whose whole job is to
+        # report the failure without crashing.
+        self.query_one('#status', Label).update(Content(f'load failed: {message}'))
 
     def _show(self, rows):
         self._rows = rows
