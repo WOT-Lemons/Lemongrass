@@ -5228,45 +5228,51 @@ class TestClassIndex:
         assert mock_index.call_count == 1  # once per session, not per competitor
 
 
-class TestStoredRaceCompleteness:
-    def _ctx(self, record_values):
-        """record_values: dict for the pivoted race row, or None for 'no race point'."""
-        api = MagicMock()
+def test_stored_race_completeness_reads_postgres():
+    from lemongrass import _db
+    ctx = _mod.RaceContext('101', None, None, None, 0)
+    row = _db.RaceRow(
+        race_id='101',
+        race_time=datetime.fromtimestamp(1_700_000_000, tz=UTC),
+        end_time=datetime.fromtimestamp(1_700_003_600, tz=UTC),
+        expected_lap_count=120, lap_schema_version=4)
+    with patch.object(_mod._db, 'get_race', return_value=row):
+        stored = _mod.stored_race_completeness(ctx)
+    assert stored.schema_version == 4
+    assert stored.expected_lap_count == 120
+    assert stored.end_time_epoc == 1_700_003_600
 
-        def fake_query(_flux):
-            if record_values is None:
-                return []
-            table = MagicMock()
-            rec = MagicMock()
-            rec.values = record_values
-            table.records = [rec]
-            return [table]
 
-        api.query.side_effect = fake_query
-        ctx = _mod.RaceContext('999', None, MagicMock(), MagicMock(), 0)
-        ctx.query_api = api
-        return ctx
-
-    def test_returns_none_when_no_race_point(self):
-        ctx = self._ctx(None)
+def test_stored_race_completeness_none_when_unstored():
+    ctx = _mod.RaceContext('101', None, None, None, 0)
+    with patch.object(_mod._db, 'get_race', return_value=None):
         assert _mod.stored_race_completeness(ctx) is None
 
-    def test_reads_all_fields(self):
-        ctx = self._ctx({
-            'schema_version': _mod.SCHEMA_VERSION,
-            'expected_lap_count': 42,
-            'end_time_epoc': 123,
-        })
-        result = _mod.stored_race_completeness(ctx)
-        assert result == _mod.StoredRace(
-            schema_version=_mod.SCHEMA_VERSION, expected_lap_count=42, end_time_epoc=123)
 
-    def test_missing_new_fields_come_back_none(self):
-        ctx = self._ctx({'end_time_epoc': 123})
-        result = _mod.stored_race_completeness(ctx)
-        assert result.schema_version is None
-        assert result.expected_lap_count is None
-        assert result.end_time_epoc == 123
+def test_stored_race_completeness_null_end_time_is_zero_epoch():
+    # stored_end_settled does `bool(end_time_epoc) and ...`; None would work
+    # but 0 keeps the dataclass's int|None contract honest for a row whose
+    # end time was simply never posted.
+    from lemongrass import _db
+    ctx = _mod.RaceContext('101', None, None, None, 0)
+    row = _db.RaceRow(race_id='101',
+                      race_time=datetime.fromtimestamp(1, tz=UTC))
+    with patch.object(_mod._db, 'get_race', return_value=row):
+        stored = _mod.stored_race_completeness(ctx)
+    assert stored.end_time_epoc == 0
+    assert _mod.stored_end_settled(stored) is False
+
+
+def test_influx_only_skip_reads_the_race_row_from_postgres():
+    ctx_seen = []
+    with patch.object(_mod._influx, 'connect') as conn, \
+         patch.object(_mod, 'stored_race_completeness',
+                      side_effect=lambda c: ctx_seen.append(c.race_id) or None):
+        assert _mod._influx_only_skip('999') is False
+    # The race row no longer comes from Influx, but the lap and standings
+    # counts still do, so the connection is still opened.
+    assert ctx_seen == ['999']
+    conn.assert_called_once()
 
 
 class TestStoredEndSettled:

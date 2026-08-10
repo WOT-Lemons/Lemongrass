@@ -1790,29 +1790,22 @@ def existing_standings_counts_fieldwide(ctx):
 
 
 def stored_race_completeness(ctx):
-    """Read the stored race metadata point for ctx.race_id from the races bucket.
+    """Read the stored race row for ctx.race_id from Postgres.
 
-    Returns a StoredRace, or None when no race point exists. schema_version and
-    expected_lap_count are None when the point predates the fields they name —
-    callers must guard against None before comparing them numerically.
+    Returns a StoredRace, or None when the race is not stored. schema_version
+    and expected_lap_count are None for a race imported from Influx that
+    predates those fields — callers must guard against None before comparing
+    them numerically. end_time is converted back to a whole-second epoch
+    because stored_end_settled compares it against time.time().
     """
-    tables = ctx.query_api.query(
-        f'from(bucket: "{_influx.BUCKET_RACES}")\n'
-        f'  |> range(start: {EPOCH_START})\n'
-        f'  |> filter(fn: (r) => r._measurement == "race"\n'
-        f'      and r.race_id == "{ctx.race_id}")\n'
-        f'  |> last()\n'
-        f'  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")'
+    row = _db.get_race(ctx.race_id)
+    if row is None:
+        return None
+    return StoredRace(
+        schema_version=row.lap_schema_version,
+        expected_lap_count=row.expected_lap_count,
+        end_time_epoc=int(row.end_time.timestamp()) if row.end_time else 0,
     )
-    for table in tables:
-        for record in table.records:
-            vals = record.values
-            return StoredRace(
-                schema_version=vals.get('schema_version'),
-                expected_lap_count=vals.get('expected_lap_count'),
-                end_time_epoc=vals.get('end_time_epoc'),
-            )
-    return None
 
 
 def stored_end_settled(stored):
@@ -1850,12 +1843,13 @@ def race_complete_in_influx(ctx, stored):
 
 
 def _influx_only_skip(race_id):
-    """True when race_id is complete, current, and ended per Influx alone.
+    """True when race_id is complete, current, and ended per stored data alone.
 
-    Opens a short-lived read-only Influx connection and answers the backfill skip
-    decision without any RaceMonitor call. Any race that is not definitively
-    ended (see stored_end_settled) returns False so it falls through to the normal
-    flow's is_live check.
+    Answers the backfill skip decision without any RaceMonitor call: the race
+    row comes from Postgres, the lap and standings counts from a short-lived
+    read-only Influx connection. Any race that is not definitively ended (see
+    stored_end_settled) returns False so it falls through to the normal flow's
+    is_live check.
     """
     with _influx.connect() as influx_client:
         ctx = RaceContext(race_id, None, None, None, 0,
