@@ -76,6 +76,42 @@ def test_upsert_race_accepts_empty_names(db):
     assert got.track_name == ""
 
 
+def test_upsert_race_preserves_identity_on_a_blank_write(db):
+    # Finding 3: a failed race.details fetch produces name='', track_name='',
+    # series_id=None, series_name=None, end_time=None (see
+    # _resolve_race_metadata's RaceMetadata('', '', None, 0)). A blanket
+    # EXCLUDED conflict-update would wipe a previously good row's identity
+    # down to a bare id. Postgres is the system of record for these columns
+    # now, so the blank write must not overwrite the stored values.
+    from lemongrass import _db
+    _db.upsert_race(_race())
+    _db.upsert_race(_race(name="", track_name="", series_id=None,
+                          series_name=None, end_time=None))
+    got = _db.get_race("101")
+    assert got.name == "Spring Thing"
+    assert got.track_name == "Thompson Speedway"
+    assert got.series_id == 7
+    assert got.series_name == "Lemons"
+    assert got.end_time == datetime(2026, 5, 1, 20, 0, tzinfo=UTC)
+
+
+def test_upsert_race_updates_identity_on_a_non_blank_write(db):
+    # The other direction: a race whose name/track/series/end_time legitimately
+    # change (a later, successful details fetch) must still update — only a
+    # blank/None value is protected, not every second write.
+    from lemongrass import _db
+    _db.upsert_race(_race())
+    _db.upsert_race(_race(name="Spring Thing II", track_name="Lime Rock",
+                          series_id=9, series_name="ChampCar",
+                          end_time=datetime(2026, 5, 2, 1, 0, tzinfo=UTC)))
+    got = _db.get_race("101")
+    assert got.name == "Spring Thing II"
+    assert got.track_name == "Lime Rock"
+    assert got.series_id == 9
+    assert got.series_name == "ChampCar"
+    assert got.end_time == datetime(2026, 5, 2, 1, 0, tzinfo=UTC)
+
+
 def test_get_race_returns_none_when_absent(db):
     from lemongrass import _db
     assert _db.get_race("nope") is None

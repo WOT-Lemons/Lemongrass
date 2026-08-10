@@ -172,6 +172,17 @@ def upsert_race(row, conn=None):
     Blanket EXCLUDED would erase a backfilled race's completeness on the very
     next live poll, and the backfill would then redo the race under the
     6 req/min limit.
+
+    The identity columns (name, track_name, series_id, series_name, end_time)
+    are protected the same way: a race.details fetch that failed produces a
+    blank name/track_name and a None series_id/series_name/end_time (see
+    ``_resolve_race_metadata``), and Postgres — unlike Influx before it — is
+    the system of record these columns are read back from, with no fallback.
+    A blank/None EXCLUDED value falls back to the stored value via NULLIF/
+    COALESCE, so a genuinely new race with a failed details fetch still gets
+    a row, and a later successful fetch's non-blank values still win.
+    ``race_time`` keeps blanket EXCLUDED — it is NOT NULL and always
+    genuinely supplied.
     """
     from sqlalchemy import func
     from sqlalchemy.dialects.postgresql import insert
@@ -190,12 +201,17 @@ def upsert_race(row, conn=None):
     stmt = stmt.on_conflict_do_update(
         index_elements=[_schema.races.c.race_id],
         set_={
-            'name': stmt.excluded.name,
-            'track_name': stmt.excluded.track_name,
-            'series_id': stmt.excluded.series_id,
-            'series_name': stmt.excluded.series_name,
+            'name': func.coalesce(
+                func.nullif(stmt.excluded.name, ''), _schema.races.c.name),
+            'track_name': func.coalesce(
+                func.nullif(stmt.excluded.track_name, ''), _schema.races.c.track_name),
+            'series_id': func.coalesce(
+                stmt.excluded.series_id, _schema.races.c.series_id),
+            'series_name': func.coalesce(
+                stmt.excluded.series_name, _schema.races.c.series_name),
             'race_time': stmt.excluded.race_time,
-            'end_time': stmt.excluded.end_time,
+            'end_time': func.coalesce(
+                stmt.excluded.end_time, _schema.races.c.end_time),
             'expected_lap_count': func.coalesce(
                 stmt.excluded.expected_lap_count,
                 _schema.races.c.expected_lap_count),
