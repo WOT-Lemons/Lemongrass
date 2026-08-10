@@ -4,7 +4,7 @@ import os
 import sys
 import tomllib
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
@@ -13,11 +13,21 @@ import pytest
 from race_monitor import RaceMonitorError
 
 import lemongrass.race_backfill as _mod
+from lemongrass import _db
 from lemongrass.laps import SCHEMA_VERSION
 
 
 def _make_race(id, name, start_epoc):
     return {'ID': id, 'Name': name, 'StartDateEpoc': start_epoc}
+
+
+def _count_tables(n):
+    """Build a query_api.query() return value for a Flux count() result of n."""
+    rec = MagicMock()
+    rec.get_value.return_value = n
+    table = MagicMock()
+    table.records = [rec]
+    return [table]
 
 
 EPOC_2020 = 1577836800
@@ -417,76 +427,90 @@ class TestBackfillOneRace:
 
 
 class TestValidateBackfill:
-    def _make_query_api(self, race_name='My Race', lap_count=0,
-                        race_start=None, race_end_epoc=1672531200):
-        if race_start is None:
-            race_start = datetime(2022, 1, 1, tzinfo=UTC)
-
-        def fake_query(flux):
-            table = MagicMock()
-            if 'bucket: "races"' in flux:
-                if race_name is None:
-                    table.records = []
-                else:
-                    rec = MagicMock()
-                    rec.values = {'race_name': race_name}
-                    rec.get_time.return_value = race_start
-                    rec.get_value.return_value = race_end_epoc
-                    table.records = [rec]
-            else:
-                if lap_count:
-                    rec = MagicMock()
-                    rec.get_value.return_value = lap_count
-                    table.records = [rec]
-                else:
-                    table.records = []
-            return [table]
-
-        api = MagicMock()
-        api.query.side_effect = fake_query
-        return api
+    def _row(self, name='My Race', race_time=None, end_time=None):
+        if race_time is None:
+            race_time = datetime(2022, 1, 1, tzinfo=UTC)
+        return _db.RaceRow(race_id='101', name=name, race_time=race_time,
+                           end_time=end_time)
 
     def test_returns_true_and_logs_ok_when_race_has_laps(self, caplog):
-        query_api = self._make_query_api(race_name='Lemons 2026', lap_count=15)
-        with caplog.at_level(logging.INFO, logger='root'):
-            assert _mod.validate_backfill(['101'], query_api) is True
+        query_api = MagicMock()
+        query_api.query.return_value = _count_tables(15)
+        row = self._row(name='Lemons 2026', end_time=datetime(2023, 1, 1, tzinfo=UTC))
+        with patch.object(_mod._db, 'get_race', return_value=row):
+            with caplog.at_level(logging.INFO, logger='root'):
+                assert _mod.validate_backfill(['101'], query_api) is True
         assert any('OK' in r.message and '15' in r.message and 'Lemons 2026' in r.message
                    for r in caplog.records)
 
     def test_returns_false_and_warns_when_race_has_no_laps(self, caplog):
-        query_api = self._make_query_api(lap_count=0)
-        with caplog.at_level(logging.WARNING, logger='root'):
-            assert _mod.validate_backfill(['101'], query_api) is False
+        query_api = MagicMock()
+        query_api.query.return_value = _count_tables(0)
+        row = self._row(end_time=datetime(2023, 1, 1, tzinfo=UTC))
+        with patch.object(_mod._db, 'get_race', return_value=row):
+            with caplog.at_level(logging.WARNING, logger='root'):
+                assert _mod.validate_backfill(['101'], query_api) is False
         assert any('NO laps' in r.message for r in caplog.records)
 
     def test_returns_false_when_race_metadata_missing(self):
-        query_api = self._make_query_api(race_name=None, lap_count=15)
-        assert _mod.validate_backfill(['101'], query_api) is False
+        query_api = MagicMock()
+        query_api.query.return_value = _count_tables(15)
+        with patch.object(_mod._db, 'get_race', return_value=None):
+            assert _mod.validate_backfill(['101'], query_api) is False
 
     def test_laps_not_queried_when_race_metadata_missing(self):
-        query_api = self._make_query_api(race_name=None)
-        _mod.validate_backfill(['101'], query_api)
-        assert query_api.query.call_count == 1
-
-    def test_races_query_filters_by_end_time_epoc_field(self):
-        query_api = self._make_query_api(lap_count=10)
-        _mod.validate_backfill(['101'], query_api)
-        races_flux = query_api.query.call_args_list[0].args[0]
-        assert '_field == "end_time_epoc"' in races_flux
-
-    def test_logs_warning_when_end_time_epoc_zero(self, caplog):
-        query_api = self._make_query_api(lap_count=10, race_end_epoc=0)
-        with caplog.at_level(logging.WARNING, logger='root'):
+        query_api = MagicMock()
+        with patch.object(_mod._db, 'get_race', return_value=None):
             _mod.validate_backfill(['101'], query_api)
-        assert any('end_time_epoc' in r.message for r in caplog.records
-                   if r.levelno == logging.WARNING)
+        assert query_api.query.call_count == 0
+
+    def test_validate_backfill_reports_missing_metadata_from_postgres(self, caplog):
+        query_api = MagicMock()
+        with patch('lemongrass.race_backfill._db.get_race', return_value=None):
+            assert _mod.validate_backfill(['101'], query_api) is False
+        assert 'metadata MISSING' in caplog.text
+        query_api.query.assert_not_called()
+
+    def test_validate_backfill_windows_laps_from_race_time_and_end_time(self):
+        # race_time/end_time carry a non-UTC offset (e.g. the connection's session
+        # timezone) so this genuinely pins UTC: a naive strftime on the tz-aware
+        # value (skipping astimezone(UTC)) would stamp the *local* wall clock with
+        # a 'Z' suffix and produce a different, wrong string here.
+        tz = timezone(timedelta(hours=5))
+        row = _db.RaceRow(race_id='101', name='Spring',
+                          race_time=datetime(2026, 5, 1, 17, 0, tzinfo=tz),   # == 12:00 UTC
+                          end_time=datetime(2026, 5, 2, 1, 0, tzinfo=tz))     # == 20:00 UTC
+        query_api = MagicMock()
+        query_api.query.return_value = _count_tables(5)
+        with patch('lemongrass.race_backfill._db.get_race', return_value=row):
+            assert _mod.validate_backfill(['101'], query_api) is True
+        flux = query_api.query.call_args.args[0]
+        assert 'start: 2026-04-30T12:00:00Z' in flux   # race_time(12:00 UTC) minus WINDOW_PAD_S
+        assert 'stop: 2026-05-02T20:00:00Z' in flux    # end_time(20:00 UTC) plus WINDOW_PAD_S
+
+    def test_validate_backfill_uses_now_when_end_time_is_null(self, caplog):
+        row = _db.RaceRow(race_id='101',
+                          race_time=datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+        query_api = MagicMock()
+        query_api.query.return_value = _count_tables(5)
+        with patch('lemongrass.race_backfill._db.get_race', return_value=row):
+            _mod.validate_backfill(['101'], query_api)
+        assert 'using now() as range stop' in caplog.text
 
 
 class TestRunUpgradeStored:
+    @pytest.fixture(autouse=True)
+    def _stop_active_patches(self):
+        """Stop any patch.object started by _query_api after each test."""
+        self._active_patches = []
+        yield
+        for p in self._active_patches:
+            p.stop()
+
     def _query_api(self, stored_races=None, total_by_race=None, current_by_race=None,
                    std_total_by_race=None, std_current_by_race=None):
         """
-        stored_races: dict of race_id -> race_name
+        stored_races: dict of race_id -> race_name (patched onto _db.list_races)
         total_by_race: dict of race_id -> total lap count
         current_by_race: dict of race_id -> current-schema lap count
         std_total_by_race: dict of race_id -> total standings count
@@ -497,6 +521,13 @@ class TestRunUpgradeStored:
         current_by_race = current_by_race or {}
         std_total_by_race = std_total_by_race or {}
         std_current_by_race = std_current_by_race or {}
+
+        rows = [_db.RaceRow(race_id=race_id, name=name,
+                            race_time=datetime(2022, 1, 1, tzinfo=UTC))
+               for race_id, name in stored_races.items()]
+        list_races_patch = patch.object(_mod._db, 'list_races', return_value=rows)
+        list_races_patch.start()
+        self._active_patches.append(list_races_patch)
 
         def _count_for(source, flux):
             count = 0
@@ -509,13 +540,7 @@ class TestRunUpgradeStored:
 
         def fake_query(flux):
             table = MagicMock()
-            if 'bucket: "races"' in flux:
-                table.records = []
-                for race_id, name in stored_races.items():
-                    rec = MagicMock()
-                    rec.values = {'race_id': race_id, 'race_name': name}
-                    table.records.append(rec)
-            elif '_measurement == "standings"' in flux:
+            if '_measurement == "standings"' in flux:
                 # standings query — current (schema_version == SCHEMA_VERSION) vs total (position)
                 if 'r._field == "schema_version"' in flux:
                     source = std_current_by_race
@@ -748,6 +773,17 @@ class TestRunUpgradeStored:
         assert mk_backfill.call_count == 1
         assert mk_backfill.calls[0].race_id == '101'
         assert mk_backfill.calls[0].car_number is None
+
+
+def test_upgrade_stored_enumerates_postgres_races():
+    rows = [_db.RaceRow(race_id='9793', name='A',
+                        race_time=datetime(2026, 1, 1, tzinfo=UTC)),
+            _db.RaceRow(race_id='144185', name='B',
+                        race_time=datetime(2026, 2, 1, tzinfo=UTC))]
+    query_api = MagicMock()
+    query_api.query.return_value = _count_tables(0)   # no laps -> skip both
+    with patch('lemongrass.race_backfill._db.list_races', return_value=rows):
+        assert _mod.run_upgrade_stored(query_api) == []
 
 
 class TestParseStartDate:
@@ -1094,21 +1130,16 @@ class TestMainConfiguresLogging:
 class TestValidateWindowPadding:
     def test_lap_query_padded_one_day_each_side(self):
         query_api = MagicMock()
-
-        race_record = MagicMock()
-        race_record.values = {'race_name': 'Test Race', 'race_id': '999'}
-        race_record.get_time.return_value = datetime(2020, 1, 2, tzinfo=UTC)
-        race_record.get_value.return_value = int(
-            datetime(2020, 1, 4, tzinfo=UTC).timestamp())
-        race_table = MagicMock()
-        race_table.records = [race_record]
-
         lap_table = MagicMock()
         lap_table.records = []
-        query_api.query.side_effect = [[race_table], [lap_table]]
+        query_api.query.return_value = [lap_table]
 
-        _mod.validate_backfill(['999'], query_api)
-        lap_flux = query_api.query.call_args_list[1].args[0]
+        row = _db.RaceRow(race_id='999', name='Test Race',
+                          race_time=datetime(2020, 1, 2, tzinfo=UTC),
+                          end_time=datetime(2020, 1, 4, tzinfo=UTC))
+        with patch.object(_mod._db, 'get_race', return_value=row):
+            _mod.validate_backfill(['999'], query_api)
+        lap_flux = query_api.query.call_args_list[0].args[0]
         assert 'start: 2020-01-01T00:00:00Z' in lap_flux
         assert 'stop: 2020-01-05T00:00:00Z' in lap_flux
 
