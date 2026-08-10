@@ -4,8 +4,9 @@
 Discovers past Lemons races — by series enumeration when
 races.backfill.series_id is configured (the search terms then select which
 of the series' races to include by name; no terms means the whole series),
-otherwise by name-based search terms alone — and writes fieldwide lap data
-to the laps/races InfluxDB buckets. In a terminal, an interactive checklist
+otherwise by name-based search terms alone — and writes fieldwide lap data:
+race/session metadata to Postgres, laps to the InfluxDB laps bucket. In a
+terminal, an interactive checklist
 refines the selection first; press 's' there to find and pin the series by
 searching for any known race. Each race is backfilled in-process through a
 single shared RaceMonitorClient, so the rate-limiter window carries across
@@ -60,7 +61,7 @@ from datetime import UTC, date, datetime, timedelta
 import tomlkit
 from race_monitor import RaceMonitorClient, RaceMonitorError
 
-from lemongrass import _config, _env, _influx
+from lemongrass import _config, _db, _env, _influx
 from lemongrass._env import resolve_tokens
 
 _backfill_cfg = _config.load_config().races.backfill
@@ -190,36 +191,35 @@ def find_matching_races(client, start_epoc):
 
 
 def validate_backfill(race_ids, query_api):
-    """Check every race has metadata and at least one lap in the field; log lap counts."""
+    """Check every race has a stored row and at least one lap in the field; log counts.
+
+    Race attributes come from Postgres, lap counts from Influx. The lap query
+    window is derived from race_time and end_time — the columns that replaced
+    the race point's timestamp and end_time_epoc field.
+    """
     all_ok = True
     for race_id in sorted(set(race_ids)):
-        race_tables = query_api.query(
-            f'from(bucket: "{_influx.BUCKET_RACES}")\n'
-            f'  |> range(start: {EPOCH_START})\n'
-            f'  |> filter(fn: (r) => r._measurement == "race"\n'
-            f'      and r.race_id == "{race_id}")\n'
-            f'  |> filter(fn: (r) => r._field == "end_time_epoc")\n'
-            f'  |> first()'
-        )
-        race_records = [r for t in race_tables for r in t.records]
-        if not race_records:
+        row = _db.get_race(race_id)
+        if row is None:
             logging.warning("race %s: metadata MISSING", race_id)
             all_ok = False
             continue
 
-        race_name = race_records[0].values.get('race_name', 'unknown')
+        race_name = row.name or 'unknown'
+        # race_time/end_time come back timezone-aware from TIMESTAMPTZ, but not
+        # necessarily in UTC — astimezone(UTC) before strftime so the Flux window
+        # is correct regardless of the connection's timezone setting.
         range_start = (
-            race_records[0].get_time() - timedelta(seconds=WINDOW_PAD_S)
+            row.race_time.astimezone(UTC) - timedelta(seconds=WINDOW_PAD_S)
         ).strftime('%Y-%m-%dT%H:%M:%SZ')
-        end_epoc = race_records[0].get_value()
-        if not end_epoc:
-            logging.warning("race %s: end_time_epoc=0 in races bucket, using now() as range stop",
-                            race_id)
-        range_stop = (
-            datetime.fromtimestamp(end_epoc + WINDOW_PAD_S, tz=UTC)
-            .strftime('%Y-%m-%dT%H:%M:%SZ')
-            if end_epoc else datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-        )
+        if row.end_time is None:
+            logging.warning(
+                "race %s: no end_time stored, using now() as range stop", race_id)
+            range_stop = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+        else:
+            range_stop = (
+                row.end_time.astimezone(UTC) + timedelta(seconds=WINDOW_PAD_S)
+            ).strftime('%Y-%m-%dT%H:%M:%SZ')
 
         lap_tables = query_api.query(
             f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
@@ -330,8 +330,10 @@ def run_backfill(races, dry_run=False, force=False):
 
 
 def run_upgrade_stored(query_api, dry_run=False, force=False):
-    """Query InfluxDB for stored races with stale schema versions and re-backfill them.
+    """Enumerate stored races from Postgres and re-backfill ones stale in InfluxDB.
 
+    Race identity and names come from Postgres; staleness is still a question
+    about lap and standings data, so it's still checked against InfluxDB.
     A race is skipped only when both its laps and its standings are at the current
     SCHEMA_VERSION; laps that are current but whose standings are stale or missing
     are re-backfilled. force=True re-backfills every stored race regardless.
@@ -342,16 +344,8 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     """
     from lemongrass.laps import SCHEMA_VERSION, RaceOptions
 
-    races_tables = query_api.query(
-        f'from(bucket: "{_influx.BUCKET_RACES}")\n'
-        f'  |> range(start: {EPOCH_START})\n'
-        f'  |> filter(fn: (r) => r._measurement == "race" and r._field == "end_time_epoc")\n'
-    )
-    stored_races = {}
-    for table in races_tables:
-        for record in table.records:
-            race_id = record.values.get('race_id')
-            stored_races[race_id] = record.values.get('race_name', 'unknown')
+    stored_races = {row.race_id: (row.name or 'unknown')
+                    for row in _db.list_races()}
 
     failures = []
     # network_mode=True mirrors the historical `lemongrass laps -n <id>` invocation
@@ -361,9 +355,9 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     # every race, created lazily on the first re-backfill and closed in finally.
     client = None
     try:
-        # race_id keys are Influx tag strings; sort numerically so the run is a
-        # predictable ascending sweep rather than a lexicographic one where a
-        # shorter id (e.g. "9793") lands amid the longer six-digit ids.
+        # race_id keys are strings (Postgres races.race_id); sort numerically so
+        # the run is a predictable ascending sweep rather than a lexicographic
+        # one where a shorter id (e.g. "9793") lands amid the longer six-digit ids.
         for race_id, race_name in sorted(stored_races.items(), key=lambda kv: int(kv[0])):
             total_tables = query_api.query(
                 f'from(bucket: "{_influx.BUCKET_LAPS}")\n'

@@ -13,8 +13,10 @@ import logging
 import os
 import sys
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
 
-from lemongrass import _config
+from lemongrass import _config, _schema
 
 _engine = None
 
@@ -107,3 +109,249 @@ def alembic_config(url=None):
         url = url.render_as_string(hide_password=False)
     cfg.set_main_option('sqlalchemy.url', str(url))
     return cfg
+
+
+@dataclass
+class RaceRow:
+    """One row of the races table, in the shape callers pass and receive.
+
+    race_time is required and timezone-aware; the column is NOT NULL. Every
+    other attribute defaults, because the live-monitor write path knows only
+    identity and timing — completeness fields arrive from a backfill.
+    """
+
+    race_id: str
+    race_time: datetime
+    name: str = ''
+    track_name: str = ''
+    series_id: int | None = None
+    series_name: str | None = None
+    end_time: datetime | None = None
+    expected_lap_count: int | None = None
+    session_count: int | None = None
+    lap_schema_version: int | None = None
+
+
+@contextmanager
+def connection(conn=None):
+    """Yield the caller's connection, or open a fresh transaction.
+
+    Every statement helper takes an optional ``conn`` so a caller can compose
+    several into one transaction; when it is omitted the helper is
+    self-contained.
+    """
+    if conn is not None:
+        yield conn
+    else:
+        with connect() as own:
+            yield own
+
+
+def _race_row(row):
+    """Build a RaceRow from a result row."""
+    return RaceRow(
+        race_id=row.race_id,
+        race_time=row.race_time,
+        name=row.name,
+        track_name=row.track_name,
+        series_id=row.series_id,
+        series_name=row.series_name,
+        end_time=row.end_time,
+        expected_lap_count=row.expected_lap_count,
+        session_count=row.session_count,
+        lap_schema_version=row.lap_schema_version,
+    )
+
+
+def upsert_race(row, conn=None):
+    """Insert or update one race by primary key, in a single statement.
+
+    The conflict-update list is explicit rather than "set everything": the
+    live-monitor path writes no expected_lap_count, session_count, or
+    lap_schema_version, so those three COALESCE against the stored value.
+    Blanket EXCLUDED would erase a backfilled race's completeness on the very
+    next live poll, and the backfill would then redo the race under the
+    6 req/min limit.
+
+    The identity columns (name, track_name, series_id, series_name, end_time)
+    are protected the same way: a race.details fetch that failed produces a
+    blank name/track_name and a None series_id/series_name/end_time (see
+    ``_resolve_race_metadata``), and Postgres — unlike Influx before it — is
+    the system of record these columns are read back from, with no fallback.
+    A blank/None EXCLUDED value falls back to the stored value via NULLIF/
+    COALESCE, so a genuinely new race with a failed details fetch still gets
+    a row, and a later successful fetch's non-blank values still win.
+    ``race_time`` keeps blanket EXCLUDED — it is NOT NULL and always
+    genuinely supplied.
+    """
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert
+    stmt = insert(_schema.races).values(
+        race_id=row.race_id,
+        name=row.name or '',
+        track_name=row.track_name or '',
+        series_id=row.series_id,
+        series_name=row.series_name,
+        race_time=row.race_time,
+        end_time=row.end_time,
+        expected_lap_count=row.expected_lap_count,
+        session_count=row.session_count,
+        lap_schema_version=row.lap_schema_version,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[_schema.races.c.race_id],
+        set_={
+            'name': func.coalesce(
+                func.nullif(stmt.excluded.name, ''), _schema.races.c.name),
+            'track_name': func.coalesce(
+                func.nullif(stmt.excluded.track_name, ''), _schema.races.c.track_name),
+            'series_id': func.coalesce(
+                stmt.excluded.series_id, _schema.races.c.series_id),
+            'series_name': func.coalesce(
+                stmt.excluded.series_name, _schema.races.c.series_name),
+            'race_time': stmt.excluded.race_time,
+            'end_time': func.coalesce(
+                stmt.excluded.end_time, _schema.races.c.end_time),
+            'expected_lap_count': func.coalesce(
+                stmt.excluded.expected_lap_count,
+                _schema.races.c.expected_lap_count),
+            'session_count': func.coalesce(
+                stmt.excluded.session_count, _schema.races.c.session_count),
+            'lap_schema_version': func.coalesce(
+                stmt.excluded.lap_schema_version,
+                _schema.races.c.lap_schema_version),
+            'updated_at': func.now(),
+        },
+    )
+    with connection(conn) as c:
+        c.execute(stmt)
+
+
+def get_race(race_id, conn=None):
+    """Return the RaceRow for race_id, or None when it is not stored."""
+    from sqlalchemy import select
+    with connection(conn) as c:
+        row = c.execute(
+            select(_schema.races).where(_schema.races.c.race_id == race_id)
+        ).first()
+    return _race_row(row) if row is not None else None
+
+
+def list_races(conn=None):
+    """Return every stored race, newest race_time first.
+
+    race_id breaks ties so the order is total and stable — export_legacy writes
+    in this order, and two races sharing a race_time would otherwise shuffle
+    between runs.
+    """
+    from sqlalchemy import select
+    with connection(conn) as c:
+        rows = c.execute(
+            select(_schema.races).order_by(_schema.races.c.race_time.desc(),
+                                           _schema.races.c.race_id)
+        ).all()
+    return [_race_row(r) for r in rows]
+
+
+def delete_race(race_id, conn=None):
+    """Delete one race, cascading to its sessions. True if a row was removed."""
+    from sqlalchemy import delete
+    with connection(conn) as c:
+        result = c.execute(
+            delete(_schema.races).where(_schema.races.c.race_id == race_id))
+    return result.rowcount > 0
+
+
+@dataclass
+class SessionRow:
+    """One row of the sessions table.
+
+    session_id is RaceMonitor's own integer identifier and is the primary key
+    on its own: the live path (client.live.get_session -> session['ID']) and
+    the backfill path (results.session_details -> Session['ID'], itself sourced
+    from results.sessions_for_race's session ids) both name sessions with the
+    same 'ID' field from the same RaceMonitor API family, for the same race —
+    one id space. The old Influx session writer's session_id-only delete
+    predicate already assumed this. start_time is nullable — the live path
+    learns a session's id before its start time, and NULL beats storing 1970.
+    """
+
+    session_id: int
+    race_id: str
+    name: str = ''
+    start_time: datetime | None = None
+
+
+def _session_row(row):
+    """Build a SessionRow from a result row."""
+    return SessionRow(session_id=row.session_id, race_id=row.race_id,
+                      name=row.name, start_time=row.start_time)
+
+
+def _session_upsert(row):
+    """Build the insert-or-update statement for one session."""
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert
+    stmt = insert(_schema.sessions).values(
+        session_id=row.session_id,
+        race_id=row.race_id,
+        name=row.name or '',
+        start_time=row.start_time,
+    )
+    return stmt.on_conflict_do_update(
+        index_elements=[_schema.sessions.c.session_id],
+        set_={
+            'race_id': stmt.excluded.race_id,
+            'name': stmt.excluded.name,
+            'start_time': stmt.excluded.start_time,
+            'updated_at': func.now(),
+        },
+    )
+
+
+def upsert_session(row, conn=None):
+    """Insert or update one session by primary key.
+
+    The live monitor's per-session write. Backfill uses replace_sessions.
+    """
+    with connection(conn) as c:
+        c.execute(_session_upsert(row))
+
+
+def replace_sessions(race_id, rows, conn=None):
+    """Make the stored sessions for race_id exactly `rows`, in one transaction.
+
+    Upsert-only is not enough: a session that dedupe collapsed away would
+    linger forever and keep appearing in the dashboard's session picker — the
+    duplicate-session symptom this project exists to stop reintroducing. The
+    delete is scoped to this race, so the live monitor's sessions for other
+    races are untouched. One transaction means a failed row leaves the
+    previous set intact for the next backfill to redo.
+    """
+    from sqlalchemy import delete
+    with connection(conn) as c:
+        for row in rows:
+            c.execute(_session_upsert(row))
+        stmt = delete(_schema.sessions).where(
+            _schema.sessions.c.race_id == race_id)
+        keep = [r.session_id for r in rows]
+        if keep:
+            stmt = stmt.where(_schema.sessions.c.session_id.notin_(keep))
+        c.execute(stmt)
+
+
+def list_sessions(race_id=None, conn=None):
+    """Return sessions for one race, or every stored session.
+
+    Ordered by start_time with NULLs last, then session_id, so the ordering is
+    total and stable for the dashboard picker and for export.
+    """
+    from sqlalchemy import select
+    stmt = select(_schema.sessions)
+    if race_id is not None:
+        stmt = stmt.where(_schema.sessions.c.race_id == race_id)
+    stmt = stmt.order_by(_schema.sessions.c.start_time.nulls_last(),
+                         _schema.sessions.c.session_id)
+    with connection(conn) as c:
+        rows = c.execute(stmt).all()
+    return [_session_row(r) for r in rows]

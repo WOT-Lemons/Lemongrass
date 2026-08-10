@@ -11,5 +11,13 @@ datasources:
     jsonData:
       database: lemongrass
       sslmode: disable
+      # Without this the plugin falls back to 903 (PostgreSQL 9.3) and reports
+      # that in the settings UI. Grafana does detect the real server version,
+      # but it only writes the detected value back when the datasource is NOT
+      # read-only — and every provisioned datasource is read-only, so the
+      # fallback would stick forever. 1500 is the highest value Grafana 12.4's
+      # version picker offers; the server is postgres 18, so every feature the
+      # plugin gates on this is available.
+      postgresVersion: 1500
     secureJsonData:
       password: local-dev-password

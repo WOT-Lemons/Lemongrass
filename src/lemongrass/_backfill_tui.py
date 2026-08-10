@@ -14,6 +14,7 @@ from race_monitor import RaceMonitorError
 from textual import work
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
+from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Footer,
@@ -248,8 +249,12 @@ class SeriesSearchModal(ModalScreen):
         self.dismiss(None)
 
     def _status(self, text):
-        """Update the status line."""
-        self.query_one('#series-status', Label).update(text)
+        """Update the status line.
+
+        Content(), not a bare str: Label.update() markup-parses a str, and
+        these messages carry typed search terms and RaceMonitor race names.
+        """
+        self.query_one('#series-status', Label).update(Content(text))
 
     def on_input_submitted(self, event):
         """Kick off an off-thread race-name search.
@@ -420,7 +425,7 @@ class RefineScreen(LogPaneScreen, Screen):
         label = self.query_one('#series', Label)
         if series is not None:
             _series_id, name, matched, total = series
-            label.update(f'📌 {name} ({matched} of {total} races)')
+            label.update(Content(f'📌 {name} ({matched} of {total} races)'))
         elif self.series_error is not None:
             label.update('⚠ series enumeration failed')
         else:

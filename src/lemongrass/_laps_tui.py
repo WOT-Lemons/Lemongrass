@@ -16,6 +16,7 @@ from textual import work
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
+from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Checkbox,
@@ -29,7 +30,7 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
-from lemongrass import _influx
+from lemongrass import _db, _influx
 from lemongrass._tui import _LogSink, _race_label, _routed_output, _sink_bound
 
 
@@ -141,10 +142,32 @@ class LapsFlowMixin:
         self.push_screen(WaitForLiveScreen(self.client, race_id, race_name))
 
     def _start_monitor(self, race_id, car_number, network, interval):
+        """Push MonitorScreen, validating the database up front when it will write.
+
+        Network mode writes race metadata via ``laps.store_race``, which calls
+        ``_db.database_url`` — with no password set that raises ``SystemExit``
+        deep in the monitor worker thread, past its ``except Exception``, and
+        the worker dies with no message. Checking ``db_password_present`` here
+        turns that into a clean, user-visible notification instead.
+        """
+        if network and not _db.db_password_present():
+            self.notify('database password not set — cannot write race data',
+                        severity='error')
+            return
         self.monitor_args = (race_id, car_number, network, interval)
         self.push_screen(MonitorScreen(self.client, race_id, car_number, network, interval))
 
     def _start_import(self, race_id, race_name):
+        """Push ImportScreen, validating the database up front.
+
+        A completed-race import always runs with network_mode=True, so it
+        always calls ``laps.store_race`` — see ``_start_monitor`` for why that
+        needs a database check ahead of the worker thread.
+        """
+        if not _db.db_password_present():
+            self.notify('database password not set — cannot import race data',
+                        severity='error')
+            return
         self.push_screen(ImportScreen(self.client, race_id, race_name))
 
     def offer_final_import(self, race_id):
@@ -229,7 +252,11 @@ class PickerScreen(Screen):
         self.query_one('#query', Input).focus()
 
     def _status(self, text):
-        self.query_one('#status', Label).update(text)
+        # Content(), not a bare str: Label.update() markup-parses a str, and
+        # these messages carry typed search terms and RaceMonitor race names,
+        # which raise MarkupError as soon as one contains a bracketed segment
+        # the parser reads as a tag.
+        self.query_one('#status', Label).update(Content(text))
 
     def on_input_submitted(self, event):
         event.stop()
@@ -420,7 +447,7 @@ class WaitForLiveScreen(Screen):
 
     # --- main-thread UI updates ---
     def _status(self, text):
-        self.query_one('#status', Label).update(text)
+        self.query_one('#status', Label).update(Content(text))
 
     def _mark_live(self):
         self.live = True
@@ -581,7 +608,8 @@ class CarSelectScreen(Screen):
         # came from the live feed, and rejecting it would make a real car
         # unmonitorable rather than prevent anything.
         if car_number and _bad_car_number(car_number):
-            self.query_one('#status', Label).update(f'invalid car number: {car_number!r}')
+            self.query_one('#status', Label).update(
+                Content(f'invalid car number: {car_number!r}'))
             return
         self._confirm(car_number)
 
@@ -691,7 +719,7 @@ class MonitorScreen(Screen):
 
     # --- observer-driven UI updates (main thread) ---
     def set_header(self, text):
-        self.query_one('#header', Label).update(text)
+        self.query_one('#header', Label).update(Content(text))
 
     def set_laps(self, laps):
         self.board.set_laps(laps)
@@ -918,5 +946,5 @@ class ImportScreen(Screen):
             self.app.call_from_thread(self._done, summary)
 
     def _done(self, message):
-        self.query_one('#title', Label).update(message)
+        self.query_one('#title', Label).update(Content(message))
         self.query_one('#log', RichLog).write(message)

@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """lemongrass db subcommand: manage the PostgreSQL schema.
 
-Subcommands: upgrade, current.
+Subcommands: upgrade, current, import-legacy, export-legacy.
 
 Migrations ship inside the installed package, so this runs from a wheel or a
 container with no checkout and no alembic.ini present.
 """
 import sys
 
-_SUBCOMMANDS = ('upgrade', 'current')
+_SUBCOMMANDS = ('upgrade', 'current', 'import-legacy', 'export-legacy')
 
 
 def main():
@@ -18,7 +18,12 @@ def main():
         print(f"Subcommands: {', '.join(_SUBCOMMANDS)}")
         return 1
     subcmd = sys.argv.pop(1)
-    return {'upgrade': _handle_upgrade, 'current': _handle_current}[subcmd]()
+    return {
+        'upgrade': _handle_upgrade,
+        'current': _handle_current,
+        'import-legacy': _handle_import_legacy,
+        'export-legacy': _handle_export_legacy,
+    }[subcmd]()
 
 
 def _handle_upgrade():
@@ -50,4 +55,84 @@ def _handle_current():
 
     from lemongrass import _db
     command.current(_db.alembic_config(), verbose=True)
+    return 0
+
+
+def _handle_import_legacy():
+    """Copy legacy Influx races and sessions into Postgres."""
+    import argparse
+    import logging
+
+    from lemongrass import _influx, _legacy_migration
+    parser = argparse.ArgumentParser(
+        prog='lemongrass db import-legacy',
+        description='Copy race and session data from InfluxDB into PostgreSQL')
+    parser.add_argument('--dry-run', action='store_true', default=False,
+                        help='Read and report without writing anything')
+    parser.add_argument('--only-missing', action='store_true', default=False,
+                        help='Insert rows absent from Postgres; never update '
+                             'an existing row (use for the post-deploy catch-up)')
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+
+    with _influx.connect() as client:
+        summary = _legacy_migration.import_legacy(
+            client.query_api(), dry_run=args.dry_run,
+            only_missing=args.only_missing)
+
+    from lemongrass import _db
+
+    races_line = (f"races:    read {summary['races_read']:5d}  "
+                  f"written {summary['races_written']:5d}")
+    if summary['races_would_write'] != summary['races_written']:
+        races_line += f"  would-write {summary['races_would_write']:5d}"
+    if summary['races_skipped_existing']:
+        races_line += (
+            f"  skipped-existing {summary['races_skipped_existing']:5d}")
+    print(races_line)
+
+    sessions_line = (f"sessions: read {summary['sessions_read']:5d}  "
+                      f"written {summary['sessions_written']:5d}  "
+                      f"skipped {summary['sessions_skipped']:5d}")
+    if summary['sessions_would_write'] != summary['sessions_written']:
+        sessions_line += (
+            f"  would-write {summary['sessions_would_write']:5d}")
+    if summary['sessions_skipped_existing']:
+        sessions_line += (
+            f"  skipped-existing {summary['sessions_skipped_existing']:5d}")
+    print(sessions_line)
+
+    if summary['orphan_race_ids']:
+        print("orphan sessions belong to race id(s): "
+              + ' '.join(summary['orphan_race_ids']))
+    print(f"now stored: {len(_db.list_races())} race(s), "
+          f"{len(_db.list_sessions())} session(s)")
+    return 0
+
+
+def _handle_export_legacy():
+    """Write stored races and sessions out as Influx line protocol.
+
+    The reverse of import-legacy, and what makes the cutover deploy
+    reversible: races written to Postgres after cutover have no Influx
+    counterpart, so reverting the code without re-seeding the buckets would
+    lose every one of them.
+    """
+    import argparse
+    import contextlib
+
+    from lemongrass import _legacy_migration
+    parser = argparse.ArgumentParser(
+        prog='lemongrass db export-legacy',
+        description='Write races and sessions out as InfluxDB line protocol')
+    parser.add_argument('--output', default=None,
+                        help='File to write (default: stdout)')
+    args = parser.parse_args()
+
+    with contextlib.ExitStack() as stack:
+        out = (stack.enter_context(open(args.output, 'w', encoding='utf-8'))
+               if args.output else sys.stdout)
+        counts = _legacy_migration.export_legacy(out)
+    print(f"exported {counts['races']} race(s), {counts['sessions']} session(s)",
+          file=sys.stderr)
     return 0

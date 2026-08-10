@@ -59,3 +59,21 @@ def clean_db(postgres_url):
         yield engine
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def db(clean_db, postgres_url, monkeypatch):
+    """An empty, migrated database wired into _db as the process engine.
+
+    Builds on clean_db (which drops and recreates the public schema, and
+    refuses to run without the explicit wipe opt-in), runs the migrations,
+    then points _db's memoized engine at it so module-level _db calls under
+    test hit this database. monkeypatch restores _engine afterwards without
+    disposing clean_db's engine, which clean_db owns.
+    """
+    from alembic import command
+
+    from lemongrass import _db
+    command.upgrade(_db.alembic_config(postgres_url), "head")
+    monkeypatch.setattr(_db, "_engine", clean_db)
+    return clean_db

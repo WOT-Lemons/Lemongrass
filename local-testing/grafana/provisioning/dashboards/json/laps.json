@@ -854,8 +854,8 @@
       "title": "Race Name",
       "type": "stat",
       "datasource": {
-        "type": "influxdb",
-        "uid": "wotl-races-ql"
+        "type": "grafana-postgresql-datasource",
+        "uid": "wotl-postgres"
       },
       "gridPos": {
         "h": 3,
@@ -885,55 +885,23 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "last"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
         },
-        "textMode": "name",
+        "textMode": "value",
         "wideLayout": true
       },
       "targets": [
         {
           "datasource": {
-            "type": "influxdb",
-            "uid": "wotl-races-ql"
+            "type": "grafana-postgresql-datasource",
+            "uid": "wotl-postgres"
           },
-          "measurement": "race",
-          "policy": "default",
-          "orderByTime": "ASC",
-          "resultFormat": "time_series",
-          "refId": "A",
-          "select": [
-            [
-              {
-                "params": [
-                  "end_time_epoc"
-                ],
-                "type": "field"
-              },
-              {
-                "params": [],
-                "type": "last"
-              }
-            ]
-          ],
-          "tags": [
-            {
-              "key": "race_id",
-              "operator": "=",
-              "value": "$raceid"
-            }
-          ],
-          "groupBy": [
-            {
-              "params": [
-                "race_name::tag"
-              ],
-              "type": "tag"
-            }
-          ],
-          "alias": "$tag_race_name"
+          "format": "table",
+          "rawSql": "SELECT name FROM races WHERE race_id = ${raceid:sqlstring}",
+          "refId": "A"
         }
       ]
     },
@@ -942,8 +910,8 @@
       "title": "Track",
       "type": "stat",
       "datasource": {
-        "type": "influxdb",
-        "uid": "wotl-races-ql"
+        "type": "grafana-postgresql-datasource",
+        "uid": "wotl-postgres"
       },
       "gridPos": {
         "h": 3,
@@ -973,55 +941,23 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "last"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
         },
-        "textMode": "name",
+        "textMode": "value",
         "wideLayout": true
       },
       "targets": [
         {
           "datasource": {
-            "type": "influxdb",
-            "uid": "wotl-races-ql"
+            "type": "grafana-postgresql-datasource",
+            "uid": "wotl-postgres"
           },
-          "measurement": "race",
-          "policy": "default",
-          "orderByTime": "ASC",
-          "resultFormat": "time_series",
-          "refId": "A",
-          "select": [
-            [
-              {
-                "params": [
-                  "end_time_epoc"
-                ],
-                "type": "field"
-              },
-              {
-                "params": [],
-                "type": "last"
-              }
-            ]
-          ],
-          "tags": [
-            {
-              "key": "race_id",
-              "operator": "=",
-              "value": "$raceid"
-            }
-          ],
-          "groupBy": [
-            {
-              "params": [
-                "track_name::tag"
-              ],
-              "type": "tag"
-            }
-          ],
-          "alias": "$tag_track_name"
+          "format": "table",
+          "rawSql": "SELECT track_name FROM races WHERE race_id = ${raceid:sqlstring}",
+          "refId": "A"
         }
       ]
     },
@@ -1030,8 +966,8 @@
       "title": "Series",
       "type": "stat",
       "datasource": {
-        "type": "influxdb",
-        "uid": "wotl-races-ql"
+        "type": "grafana-postgresql-datasource",
+        "uid": "wotl-postgres"
       },
       "gridPos": {
         "h": 3,
@@ -1061,62 +997,30 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "last"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
         },
-        "textMode": "name",
+        "textMode": "value",
         "wideLayout": true
       },
       "targets": [
         {
           "datasource": {
-            "type": "influxdb",
-            "uid": "wotl-races-ql"
+            "type": "grafana-postgresql-datasource",
+            "uid": "wotl-postgres"
           },
-          "measurement": "race",
-          "policy": "default",
-          "orderByTime": "ASC",
-          "resultFormat": "time_series",
-          "refId": "A",
-          "select": [
-            [
-              {
-                "params": [
-                  "end_time_epoc"
-                ],
-                "type": "field"
-              },
-              {
-                "params": [],
-                "type": "last"
-              }
-            ]
-          ],
-          "tags": [
-            {
-              "key": "race_id",
-              "operator": "=",
-              "value": "$raceid"
-            }
-          ],
-          "groupBy": [
-            {
-              "params": [
-                "series_name::tag"
-              ],
-              "type": "tag"
-            }
-          ],
-          "alias": "$tag_series_name"
+          "format": "table",
+          "rawSql": "SELECT coalesce(series_name, '') AS series_name FROM races WHERE race_id = ${raceid:sqlstring}",
+          "refId": "A"
         }
       ]
     },
     {
       "datasource": {
-        "type": "influxdb",
-        "uid": "wotl-race-sessions-flux"
+        "type": "grafana-postgresql-datasource",
+        "uid": "wotl-postgres"
       },
       "fieldConfig": {
         "defaults": {},
@@ -1158,12 +1062,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "influxdb",
-            "uid": "wotl-race-sessions-flux"
+            "type": "grafana-postgresql-datasource",
+            "uid": "wotl-postgres"
           },
-          "query": "import \"date\"\nfrom(bucket: \"race_sessions\")\n  |> range(start: 0)\n  |> filter(fn: (r) => r._measurement == \"session\" and r.race_id == \"${raceid}\" and r._field == \"session_name\")\n  |> filter(fn: (r) => r.session_id =~ /^(${session:regex})$/)\n  |> last()\n  |> map(fn: (r) => ({session: r._value + \" (\" + string(v: date.month(t: r._time)) + \"/\" + string(v: date.monthDay(t: r._time)) + \"/\" + string(v: date.year(t: r._time) % 100) + \")\"}))\n  |> group()\n  |> keep(columns: [\"session\"])",
-          "refId": "A",
-          "resultFormat": "table"
+          "format": "table",
+          "rawSql": "SELECT coalesce(nullif(name, ''), 'session ' || session_id)\n         || to_char(coalesce(start_time, to_timestamp(0)),\n                    ' (FMMM/FMDD/YY)') AS session\nFROM sessions\nWHERE race_id = ${raceid:sqlstring}\n  AND session_id::text ~ '^(${session:regex})$'\nORDER BY start_time, session_id",
+          "refId": "A"
         }
       ],
       "title": "Session",
@@ -1182,14 +1086,14 @@
         "label": "Race",
         "type": "query",
         "datasource": {
-          "type": "influxdb",
-          "uid": "wotl-races-flux"
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
         },
-        "definition": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: if \"${__timezone}\" == \"utc\" then \"UTC\" else \"${__timezone}\")\npad = (n) => if n < 10 then \"0\" + string(v: n) else string(v: n)\nfrom(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r._field == \"end_time_epoc\") |> map(fn: (r) => ({_time: r._time, _value: r.race_name + \" (\" + pad(n: date.month(t: r._time)) + \"/\" + pad(n: date.monthDay(t: r._time)) + \"/\" + pad(n: date.year(t: r._time) % 100) + \");\" + r.race_id})) |> group() |> sort(columns: [\"_time\"], desc: true) |> keep(columns: [\"_value\"])",
+        "definition": "SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\" FROM races ORDER BY race_time DESC",
         "query": {
-          "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: if \"${__timezone}\" == \"utc\" then \"UTC\" else \"${__timezone}\")\npad = (n) => if n < 10 then \"0\" + string(v: n) else string(v: n)\nfrom(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r._field == \"end_time_epoc\") |> map(fn: (r) => ({_time: r._time, _value: r.race_name + \" (\" + pad(n: date.month(t: r._time)) + \"/\" + pad(n: date.monthDay(t: r._time)) + \"/\" + pad(n: date.year(t: r._time) % 100) + \");\" + r.race_id})) |> group() |> sort(columns: [\"_time\"], desc: true) |> keep(columns: [\"_value\"])"
+          "format": "table",
+          "rawSql": "SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\" FROM races ORDER BY race_time DESC"
         },
-        "regex": "/(?<text>.+);(?<value>\\d+)$/",
         "refresh": 2,
         "sort": 0,
         "current": {},
@@ -1200,12 +1104,13 @@
         "type": "query",
         "hide": 2,
         "datasource": {
-          "type": "influxdb",
-          "uid": "wotl-races-flux"
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
         },
-        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])",
+        "definition": "SELECT (extract(epoch from race_time) * 1000)::bigint::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
         "query": {
-          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: string(v: int(v: uint(v: r._time)) / 1000000)})) |> keep(columns: [\"_value\"])"
+          "format": "table",
+          "rawSql": "SELECT (extract(epoch from race_time) * 1000)::bigint::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
         },
         "refresh": 2,
         "sort": 0,
@@ -1217,12 +1122,13 @@
         "type": "query",
         "hide": 2,
         "datasource": {
-          "type": "influxdb",
-          "uid": "wotl-races-flux"
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
         },
-        "definition": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: if int(v: r._value) == 0 then \"now\" else string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])",
+        "definition": "SELECT coalesce((extract(epoch from end_time) * 1000 + 3600000)::bigint::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
         "query": {
-          "query": "from(bucket: \"races\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"race\" and r.race_id == \"${raceid}\" and r._field == \"end_time_epoc\") |> last() |> map(fn: (r) => ({_value: if int(v: r._value) == 0 then \"now\" else string(v: int(v: r._value) * 1000 + 3600000)})) |> keep(columns: [\"_value\"])"
+          "format": "table",
+          "rawSql": "SELECT coalesce((extract(epoch from end_time) * 1000 + 3600000)::bigint::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
         },
         "refresh": 2,
         "sort": 0,
@@ -1253,10 +1159,10 @@
       {
         "current": {},
         "datasource": {
-          "type": "influxdb",
-          "uid": "wotl-race-sessions-flux"
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
         },
-        "definition": "import \"date\"\nfrom(bucket: \"race_sessions\")\n  |> range(start: 0)\n  |> filter(fn: (r) => r._measurement == \"session\" and r.race_id == \"${raceid}\" and r._field == \"session_name\")\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({_value: r._value + \" (\" + string(v: date.month(t: r._time)) + \"/\" + string(v: date.monthDay(t: r._time)) + \"/\" + string(v: date.year(t: r._time) % 100) + \");\" + r.session_id}))\n  |> keep(columns: [\"_value\"])",
+        "definition": "SELECT session_id::text AS \"__value\", coalesce(nullif(name, ''), 'session ' || session_id) AS \"__text\" FROM sessions WHERE race_id = ${raceid:sqlstring} ORDER BY start_time NULLS LAST, session_id",
         "allValue": ".*",
         "includeAll": true,
         "label": "Session",
@@ -1264,9 +1170,9 @@
         "name": "session",
         "options": [],
         "query": {
-          "query": "import \"date\"\nfrom(bucket: \"race_sessions\")\n  |> range(start: 0)\n  |> filter(fn: (r) => r._measurement == \"session\" and r.race_id == \"${raceid}\" and r._field == \"session_name\")\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({_value: r._value + \" (\" + string(v: date.month(t: r._time)) + \"/\" + string(v: date.monthDay(t: r._time)) + \"/\" + string(v: date.year(t: r._time) % 100) + \");\" + r.session_id}))\n  |> keep(columns: [\"_value\"])"
+          "format": "table",
+          "rawSql": "SELECT session_id::text AS \"__value\", coalesce(nullif(name, ''), 'session ' || session_id) AS \"__text\" FROM sessions WHERE race_id = ${raceid:sqlstring} ORDER BY start_time NULLS LAST, session_id"
         },
-        "regex": "/(?<text>.+);(?<value>.+)/",
         "refresh": 2,
         "sort": 0,
         "type": "query"

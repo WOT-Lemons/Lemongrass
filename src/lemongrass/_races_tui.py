@@ -8,12 +8,13 @@ from typing import ClassVar
 from textual import work
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
+from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, SelectionList
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
-from lemongrass import _influx
+from lemongrass import _db, _influx
 from lemongrass._backfill_tui import RaceListModel, RefineScreen
 from lemongrass._laps_tui import ImportScreen
 from lemongrass._tui import LogPaneScreen, _sink_bound
@@ -147,7 +148,8 @@ class DiagnoseCarScreen(Screen):
         if not car_number:
             return
         if _influx.invalid_flux_ids([car_number]):
-            self.query_one('#status', Label).update(f'invalid car number: {car_number!r}')
+            self.query_one('#status', Label).update(
+                Content(f'invalid car number: {car_number!r}'))
             return
         self.app.push_screen(DiagnoseOutputScreen(self.race_id, car_number))
 
@@ -194,11 +196,22 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         yield Footer()
 
     def on_mount(self):
-        """Start the log drain timer, then load rows if Influx is configured."""
+        """Start the log drain timer, then load rows if Influx and the database
+        are both configured.
+
+        Race rows come from Postgres (via ``fetch_race_rows`` -> ``_db.list_races``);
+        checking ``db_password_present`` up front avoids a worker-thread
+        ``SystemExit`` from ``_db.database_url`` bubbling past the worker's
+        ``except Exception`` and killing the load silently.
+        """
         self.set_interval(0.25, self._drain_log)
         if not _influx.influx_token_present():
             self.query_one('#status', Label).update(
                 '⚠ Influx token not set — race data unavailable')
+            return
+        if not _db.db_password_present():
+            self.query_one('#status', Label).update(
+                '⚠ database password not set — race data unavailable')
             return
         self._load()
 
@@ -213,8 +226,8 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         sl = self.query_one('#races', SelectionList)
         hi = self.row_for_highlight()
         checked = len(sl.selected)
-        self.query_one('#status', Label).update(
-            f'highlighted: #{hi["race_id"] if hi else "-"} · checked: {checked}')
+        self.query_one('#status', Label).update(Content(
+            f'highlighted: #{hi["race_id"] if hi else "-"} · checked: {checked}'))
 
     @work(thread=True, exclusive=True)
     def _load(self):
@@ -232,7 +245,12 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
             self.app.call_from_thread(self._show, rows)
 
     def _fail(self, message):
-        self.query_one('#status', Label).update(f'load failed: {message}')
+        # Content(), not a bare str: Label.update() parses a str as console
+        # markup, and an error whose text contains a bracketed segment the
+        # parser reads as a tag (an Influx 401 body, say) raises MarkupError
+        # right here — crashing the app on the path whose whole job is to
+        # report the failure without crashing.
+        self.query_one('#status', Label).update(Content(f'load failed: {message}'))
 
     def _show(self, rows):
         self._rows = rows

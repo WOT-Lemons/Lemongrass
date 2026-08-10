@@ -28,7 +28,7 @@ from influxdb_client import Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from race_monitor import RaceMonitorClient, get_streaming_command
 
-from lemongrass import _config, _env, _influx
+from lemongrass import _config, _db, _env, _influx
 from lemongrass._env import resolve_tokens
 
 UNDERLINE = "-" * 80
@@ -74,11 +74,11 @@ _SETTLED_BUFFER_S = 4 * 86400  # 4 days
 
 @dataclass(frozen=True)
 class StoredRace:
-    """Race-completeness fields read back from a stored race point.
+    """Race-completeness fields read back from the stored race row (Postgres).
 
-    Any field is None when absent from the point (schema_version and
+    Any field is None when absent from the row (schema_version and
     expected_lap_count predate the fields they name; end_time_epoc is missing
-    only from a malformed point) — callers must guard against None before
+    only from a malformed row) — callers must guard against None before
     comparing them.
     """
     schema_version: int | None
@@ -113,6 +113,10 @@ class RaceMetadata:
     track_name: str
     series_name: str | None
     end_time_epoc: int
+    # RaceMonitor's numeric series identifier. Kept alongside series_name
+    # because event matching is series-scoped: a name alone cannot
+    # distinguish two series that share a display name.
+    series_id: int | None = None
 
 
 @dataclass
@@ -776,11 +780,17 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     observer.on_status(UNDERLINE)
 
     race_meta_written = True
+    pending_sessions = []
     if opts.network_mode:
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-        race_meta_written = push_influx_race(ctx, race_ts_ms)
+        race_meta_written = store_race(ctx, race_ts_ms)
         if live_session_id is not None:
-            push_influx_session(ctx, live_session_id, live_session_name, None)
+            if race_meta_written:
+                store_session(ctx, live_session_id, live_session_name, None)
+            else:
+                # The race row isn't stored yet; monitor_routine flushes this
+                # once it is, same as any session change discovered mid-poll.
+                pending_sessions.append((live_session_id, live_session_name))
         if laps:
             # class_position intentionally discarded: historical laps were completed before
             # launch so any position we compute now is stale. monitor_routine owns
@@ -802,11 +812,14 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     if opts.monitor_mode:
         return monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
                                session_id=live_session_id, race_meta_written=race_meta_written,
+                               pending_sessions=pending_sessions,
                                observer=observer, _stop_event=_stop_event)
 
     if opts.network_mode and not race_meta_written:
-        # No monitor loop to retry in; signal a failed run so a rerun restores
-        # the (possibly deleted) race metadata point.
+        # No monitor loop to retry in; signal a failed run so a rerun retries
+        # the write and brings the race row up to date (store_race's upsert is
+        # atomic — a False return means the write didn't happen, not that a
+        # previously stored row was lost).
         return MonitorStatus.WRITE_FAILED
 
 
@@ -973,9 +986,23 @@ def old_race(ctx, opts):
                     race_ts_ms = (
                         ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                     )
-                    if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
+                    if not store_race(ctx, race_ts_ms, expected, len(pending_writes)):
                         logging.error(
                             "Race metadata write failed for race %s — failing the "
+                            "run so the next backfill retries", ctx.race_id)
+                        return 1
+                    # The skip checks only look at laps and standings, so a run
+                    # whose session write failed after they were already complete
+                    # would land here forever with a stale session set. Rewrite
+                    # the sessions on the skip path too — store_sessions replaces
+                    # the race's whole set in one transaction, so repeating it on
+                    # an already-correct race is a no-op.
+                    if not store_sessions(ctx, [
+                            (session['session_id'], session['session_name'],
+                             session['start_epoc'])
+                            for session in pending_writes]):
+                        logging.error(
+                            "Session write incomplete for race %s — failing the "
                             "run so the next backfill retries", ctx.race_id)
                         return 1
                     logging.info(
@@ -1015,26 +1042,27 @@ def old_race(ctx, opts):
             logging.warning("Skipping race stamp so next run will re-backfill")
             return 1
 
-        sessions_ok = delete_existing_sessions(ctx)
-        for session in pending_writes:
-            if not push_influx_session(
-                    ctx, session['session_id'], session['session_name'],
-                    session['start_epoc']):
-                sessions_ok = False
-        if not sessions_ok:
-            # A failed delete or a failed session write can leave the sessions
-            # bucket holding stale, partial, or mixed records. Bail out here,
-            # before the race is stamped complete, so the next backfill redoes
-            # the whole rewrite instead of leaving an unrepairable session gap
-            # that --skip-if-complete can't detect (it never checks sessions).
+        # The race row must land before any session: sessions.race_id is a
+        # foreign key, so a session for an unstored race is rejected outright,
+        # the race is never stamped, and each retry repeats the failure. Influx
+        # had no referential integrity, which is why the old order worked.
+        if not store_race(ctx, race_ts_ms, expected, len(pending_writes)):
             logging.error(
-                "Session write incomplete for race %s — failing the run so the "
+                "Race metadata write failed for race %s — failing the run so the "
                 "next backfill retries", ctx.race_id)
             return 1
 
-        if not push_influx_race(ctx, race_ts_ms, expected, len(pending_writes)):
+        if not store_sessions(ctx, [
+                (session['session_id'], session['session_name'],
+                 session['start_epoc'])
+                for session in pending_writes]):
+            # store_sessions replaces the race's whole set in one transaction,
+            # so a failure leaves the previous set intact. Bail out before the
+            # standings phase so the next backfill redoes the rewrite rather
+            # than leaving a session gap --skip-if-complete cannot detect (it
+            # never checks sessions).
             logging.error(
-                "Race metadata write failed for race %s — failing the run so the "
+                "Session write incomplete for race %s — failing the run so the "
                 "next backfill retries", ctx.race_id)
             return 1
 
@@ -1139,7 +1167,7 @@ def write_csv(filename, competitor_lap_times):
 
 
 def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
-                    session_id=None, race_meta_written=True,
+                    session_id=None, race_meta_written=True, pending_sessions=None,
                     observer=None) -> MonitorStatus | None:
     """Poll for new laps during a live race, displaying and optionally pushing each
     to InfluxDB via the given observer (defaults to _StdoutObserver).
@@ -1151,10 +1179,17 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     _stop_event may be injected for testing; defaults to a new threading.Event.
     session_id is tracked across polls and tags each written lap point; a new
     session push fires whenever the live session ID changes.
-    race_meta_written reflects whether the caller's initial push_influx_race
+    race_meta_written reflects whether the caller's initial store_race
     succeeded; when False (or after the epoch is corrected below) the metadata
-    write is retried each poll until it lands, so a transient delete/write
-    failure self-heals without aborting lap capture.
+    write is retried each poll until it lands, so a transient write failure
+    self-heals without aborting lap capture. A session change while
+    race_meta_written is False cannot be written outright — sessions.race_id
+    is a foreign key, so a session for an unstored race would be rejected —
+    so it is queued in pending_sessions instead. pending_sessions is an
+    optional iterable of (session_id, session_name) pairs the caller already
+    deferred (e.g. live_race's own initial write); every poll, once the race
+    row is known stored, the whole queue is flushed in order, oldest first,
+    and cleared.
     """
     if observer is None:
         observer = _StdoutObserver()
@@ -1166,6 +1201,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     stop = _stop_event if _stop_event is not None else threading.Event()
     poll_count = 0
     prev_standings = {}
+    pending_sessions = list(pending_sessions) if pending_sessions else []
     try:
         while not stop.wait(timeout=opts.interval):
             poll_count += 1
@@ -1195,7 +1231,23 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 race_ts_ms = (
                     ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                 )
-                race_meta_written = push_influx_race(ctx, race_ts_ms)
+                race_meta_written = store_race(ctx, race_ts_ms)
+
+            if opts.network_mode and race_meta_written and pending_sessions:
+                # The race row just landed (or already had): flush every session
+                # change queued while it was missing, oldest first, so none of
+                # them are silently lost. A flush attempt itself can fail (a
+                # transient Postgres error) — store_session returns False for a
+                # logged failure, and an entry that fails stays queued for the
+                # next poll rather than being dropped by an unconditional
+                # clear(), which would reintroduce the drop-and-warn behavior
+                # this queue exists to replace.
+                still_pending = [
+                    (pending_id, pending_name)
+                    for pending_id, pending_name in pending_sessions
+                    if not store_session(ctx, pending_id, pending_name, None)
+                ]
+                pending_sessions[:] = still_pending
 
             try:
                 session_response = ctx.client.live.get_session(ctx.race_id)
@@ -1209,9 +1261,19 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     observer.on_session_change(session.get('Name', ''))
                     session_id = new_session_id
                     prev_standings = {}
-                    if opts.network_mode:
-                        push_influx_session(
-                            ctx, session_id, session.get('Name'), None)
+                    if opts.network_mode and race_meta_written:
+                        # session_id has already advanced, so the change is never
+                        # detected again — a failed write must go on the queue or
+                        # the session row stays missing for the rest of the race.
+                        if not store_session(ctx, session_id, session.get('Name'), None):
+                            pending_sessions.append((session_id, session.get('Name')))
+                    elif opts.network_mode:
+                        pending_sessions.append((session_id, session.get('Name')))
+                        logging.warning(
+                            "Deferring session %s write for race %s: the race "
+                            "row is not stored yet, so the write would be "
+                            "rejected by the foreign key. It will be flushed "
+                            "once the race row lands.", session_id, ctx.race_id)
             else:
                 logging.debug("get_session returned no session; may be between sessions")
 
@@ -1538,75 +1600,101 @@ def push_influx(ctx, laps, monitor_mode, competitor_name=None, car_info=None,
     return True
 
 
-def push_influx_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
-    """Write one race metadata point to the races bucket, replacing any prior point.
+def _epoch_to_dt(epoch_s):
+    """Convert a whole-second epoch to an aware datetime; 0 or None -> None.
 
-    Returns True on success. Returns False when metadata is missing or the
-    delete/write fails — the delete may have already removed the old point, so
-    a False return means the race may now be absent from the races bucket and
-    the caller must treat the run as failed so a retry restores it.
+    Zero is not a timestamp — it is how Influx spelled "unknown" in a numeric
+    field. Storing it as 1970-01-01 is what made the session picker show
+    1970 dates.
+    """
+    return datetime.fromtimestamp(epoch_s, tz=UTC) if epoch_s else None
+
+
+def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
+    """Insert or update this race's row in Postgres.
+
+    Returns True on success, False when metadata is missing or the write
+    fails. Unlike the delete-then-write it replaces, the upsert is a single
+    atomic statement: a failure leaves the previously stored row exactly as it
+    was, so a False return no longer means the race may have vanished. The
+    caller still fails the run so a retry brings the row up to date.
+
+    timestamp_ms is kept in milliseconds at the boundary because both callers
+    compute it that way (start epoch, or wall clock when the epoch has not
+    been posted yet).
     """
     if ctx.metadata is None:
-        logging.warning("push_influx_race called with no metadata for race %s", ctx.race_id)
+        logging.warning("store_race called with no metadata for race %s", ctx.race_id)
         return False
+    meta = ctx.metadata
     try:
-        ctx.delete_api.delete(
-            start='1970-01-01T00:00:00Z',
-            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
-            predicate=f'_measurement="race" AND race_id="{ctx.race_id}"',
-            bucket=_influx.BUCKET_RACES,
-        )
-        meta = ctx.metadata
-        point = (
-            Point("race")
-            .tag("race_id", ctx.race_id)
-            .tag("race_name", meta.race_name)
-            .tag("track_name", meta.track_name)
-            .tag("series_name", meta.series_name)
-            .field("end_time_epoc", meta.end_time_epoc)
-            .time(timestamp_ms, WritePrecision.MS)
-        )
-        if expected_lap_count is not None:
-            point.field("schema_version", SCHEMA_VERSION)
-            point.field("expected_lap_count", expected_lap_count)
-            point.field("session_count", session_count)
-        ctx.write_api.write(bucket=_influx.BUCKET_RACES, record=point)
+        _db.upsert_race(_db.RaceRow(
+            race_id=ctx.race_id,
+            race_time=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            name=meta.race_name or '',
+            track_name=meta.track_name or '',
+            series_id=meta.series_id,
+            series_name=meta.series_name,
+            end_time=_epoch_to_dt(meta.end_time_epoc),
+            expected_lap_count=expected_lap_count,
+            session_count=session_count if expected_lap_count is not None else None,
+            lap_schema_version=(
+                SCHEMA_VERSION if expected_lap_count is not None else None),
+        ))
         return True
     except Exception as e:
         logging.error("Writing race failed: %s", e)
         return False
 
 
-def push_influx_session(ctx, session_id, session_name, start_epoc):
-    """Write one session metadata point to the race_sessions bucket, replacing any prior point.
+def _session_rows(ctx, sessions):
+    """Build SessionRows from (session_id, session_name, start_epoc) triples."""
+    return [_db.SessionRow(session_id=int(session_id), race_id=ctx.race_id,
+                           name=session_name or '',
+                           start_time=_epoch_to_dt(start_epoc))
+            for session_id, session_name, start_epoc in sessions]
 
-    Returns True on success, False if the delete or write failed (logged, not
-    raised) so callers that need every session to land — such as old_race's
-    rewrite loop — can tell a partial write from a complete one.
+
+def store_session(ctx, session_id, session_name, start_epoc):
+    """Insert or update one session row. The live monitor's write.
+
+    Returns True on success, False if the write failed (logged, not raised).
+    A None or zero start_epoc stores NULL: the live path learns a session's id
+    before its start time, and NULL renders as an honest blank in the picker
+    rather than 1970.
     """
     try:
-        ctx.delete_api.delete(
-            start=EPOCH_START,
-            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
-            predicate=f'_measurement="session" AND session_id="{session_id}"',
-            bucket=_influx.BUCKET_SESSIONS,
-        )
-        start_epoc_ms = (start_epoc or 0) * 1000
-        point = (
-            Point("session")
-            .tag("race_id", ctx.race_id)
-            .tag("session_id", str(session_id))
-            .field("session_name", session_name or "")
-            .field("start_epoc", start_epoc or 0)
-            .time(start_epoc_ms, WritePrecision.MS)
-        )
-        ctx.write_api.write(bucket=_influx.BUCKET_SESSIONS, record=point)
+        _db.upsert_session(_session_rows(
+            ctx, [(session_id, session_name, start_epoc)])[0])
         return True
     except Exception as e:
         logging.error(
             "Writing session failed for race %s session %s: %s",
             ctx.race_id, session_id, e,
         )
+        return False
+
+
+def store_sessions(ctx, sessions):
+    """Make this race's stored sessions exactly `sessions`, in one transaction.
+
+    The backfill's write. It replaces rather than merges because a session
+    that dedupe collapsed away must not linger in the picker — the reason the
+    old code ran a race-wide delete before its rewrite loop. Doing both halves
+    in one statement batch removes the window where the race had no sessions
+    at all.
+
+    Returns True on success, False if the transaction failed (logged, not
+    raised). old_race writes the race row first (a foreign key requires it),
+    so a False here happens with the race already stamped complete; old_race
+    still fails the run so the next backfill redoes the whole rewrite, which
+    leaves the previous session set intact rather than an unrepairable gap.
+    """
+    try:
+        _db.replace_sessions(ctx.race_id, _session_rows(ctx, sessions))
+        return True
+    except Exception as e:
+        logging.error("Writing sessions failed for race %s: %s", ctx.race_id, e)
         return False
 
 
@@ -1686,35 +1774,6 @@ def delete_existing_laps(ctx):
         return False
 
 
-def delete_existing_sessions(ctx):
-    """Delete all session points for this race so a backfill can replace them.
-
-    push_influx_session only deletes the session_id it is about to rewrite, so a
-    session that dedupe collapsed away would otherwise linger in the bucket and
-    keep showing up in the dashboard's session picker.
-
-    The delete predicate is race_id-only, so despite the name it also removes
-    session records written by the live-monitor path, which tags race_id
-    identically. This self-heals: old_race always rewrites every session for
-    the race afterward. But the name suggests a narrower scope than it has.
-
-    Returns True on success, False if the delete failed (logged, not raised) —
-    old_race treats a failed delete the same as a failed session write: it
-    aborts before stamping the race complete.
-    """
-    try:
-        ctx.delete_api.delete(
-            start=EPOCH_START,
-            stop=datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
-            predicate=f'_measurement="session" AND race_id="{ctx.race_id}"',
-            bucket=_influx.BUCKET_SESSIONS,
-        )
-        return True
-    except Exception as e:
-        logging.error("Deleting existing sessions failed: %s", e)
-        return False
-
-
 def delete_existing_standings(ctx):
     """Delete all standings points for this race so a backfill can replace them.
 
@@ -1759,29 +1818,22 @@ def existing_standings_counts_fieldwide(ctx):
 
 
 def stored_race_completeness(ctx):
-    """Read the stored race metadata point for ctx.race_id from the races bucket.
+    """Read the stored race row for ctx.race_id from Postgres.
 
-    Returns a StoredRace, or None when no race point exists. schema_version and
-    expected_lap_count are None when the point predates the fields they name —
-    callers must guard against None before comparing them numerically.
+    Returns a StoredRace, or None when the race is not stored. schema_version
+    and expected_lap_count are None for a race imported from Influx that
+    predates those fields — callers must guard against None before comparing
+    them numerically. end_time is converted back to a whole-second epoch
+    because stored_end_settled compares it against time.time().
     """
-    tables = ctx.query_api.query(
-        f'from(bucket: "{_influx.BUCKET_RACES}")\n'
-        f'  |> range(start: {EPOCH_START})\n'
-        f'  |> filter(fn: (r) => r._measurement == "race"\n'
-        f'      and r.race_id == "{ctx.race_id}")\n'
-        f'  |> last()\n'
-        f'  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")'
+    row = _db.get_race(ctx.race_id)
+    if row is None:
+        return None
+    return StoredRace(
+        schema_version=row.lap_schema_version,
+        expected_lap_count=row.expected_lap_count,
+        end_time_epoc=int(row.end_time.timestamp()) if row.end_time else 0,
     )
-    for table in tables:
-        for record in table.records:
-            vals = record.values
-            return StoredRace(
-                schema_version=vals.get('schema_version'),
-                expected_lap_count=vals.get('expected_lap_count'),
-                end_time_epoc=vals.get('end_time_epoc'),
-            )
-    return None
 
 
 def stored_end_settled(stored):
@@ -1798,12 +1850,14 @@ def stored_end_settled(stored):
 
 
 def race_complete_in_influx(ctx, stored):
-    """True when the stored race point proves this race is complete and current.
+    """True when the stored race row proves this race is complete and current.
 
-    Mirrors old_race's skip predicate but sources the expected lap total from the
-    stored race point (Influx) instead of a RaceMonitor fetch. `stored` is passed
-    in already-fetched so main() does not query the race point twice. The
-    is-not-None guard is required: a pre-existing point has expected_lap_count
+    Mirrors old_race's skip predicate but sources the expected lap total and
+    schema version from the stored race row (Postgres) instead of a
+    RaceMonitor fetch, then compares them against the actual lap counts,
+    which stay in Influx (hence the function's name). `stored` is passed in
+    already-fetched so main() does not query the race row twice. The
+    is-not-None guard is required: a pre-existing row has expected_lap_count
     None, and None > 0 raises TypeError in Python 3.
     """
     if stored is None or stored.schema_version != SCHEMA_VERSION:
@@ -1819,20 +1873,20 @@ def race_complete_in_influx(ctx, stored):
 
 
 def _influx_only_skip(race_id):
-    """True when race_id is complete, current, and ended per Influx alone.
+    """True when race_id is complete, current, and ended per stored data alone.
 
-    Opens a short-lived read-only Influx connection and answers the backfill skip
-    decision without any RaceMonitor call. Any race that is not definitively
-    ended (see stored_end_settled) returns False so it falls through to the normal
-    flow's is_live check.
+    Answers the backfill skip decision without any RaceMonitor call: the race
+    row comes from Postgres, the lap and standings counts from Influx. Any
+    race that is not definitively ended (see stored_end_settled) returns False
+    so it falls through to the normal flow's is_live check.
     """
+    ctx = RaceContext(race_id, None, None, None, 0)
+    stored = stored_race_completeness(ctx)
+    if stored is None or not stored_end_settled(stored):
+        return False
     with _influx.connect() as influx_client:
-        ctx = RaceContext(race_id, None, None, None, 0,
-                          query_api=influx_client.query_api())
-        stored = stored_race_completeness(ctx)
-        return (stored is not None
-                and stored_end_settled(stored)
-                and race_complete_in_influx(ctx, stored))
+        ctx.query_api = influx_client.query_api()
+        return race_complete_in_influx(ctx, stored)
 
 
 def _build_class_index(session_details):
@@ -2156,6 +2210,7 @@ def _resolve_race_metadata(race_details, client):
         track_name=race['Track'],
         series_name=series_name,
         end_time_epoc=race.get('EndDateEpoc', 0),
+        series_id=series_id,
     )
 
 

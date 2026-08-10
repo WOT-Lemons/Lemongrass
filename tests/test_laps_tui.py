@@ -171,6 +171,22 @@ class TestPickerScreen:
             assert len(hits.children) == 1
 
 
+    @pytest.mark.asyncio
+    async def test_search_term_containing_markup_characters_is_echoed_literally(self):
+        # The typed term is echoed into the status Label, which parses a str as
+        # console markup — so a term with a bracketed segment shaped like a tag
+        # would crash the picker instead of searching.
+        client = _client_with_race()
+        app = LapsApp(client)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.screen.query_one('#query', Input).value = "[x='y': 'z']"
+            await pilot.press('enter')
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+        client.results.search_results.assert_called_with("[x='y': 'z']")
+
+
 class TestNotLiveScreen:
     @pytest.mark.asyncio
     async def test_import_choice_reaches_import_confirm(self):
@@ -259,6 +275,7 @@ class TestWaitForLiveScreen:
         with patch('lemongrass.laps.wait_for_live', return_value=True), \
                 patch('lemongrass.laps.wait_for_car', return_value=True), \
                 patch('lemongrass.laps.live_race', return_value=None), \
+                patch('lemongrass._laps_tui._db.db_password_present', return_value=True), \
                 patch('lemongrass._influx.connect'):
             async with app.run_test() as pilot:
                 await self._start(pilot, app, client)
@@ -562,6 +579,7 @@ class TestCarSelectScreen:
         # before live_race; patch that too so the worker thread never touches the
         # network or requires INFLUX_TELEMETRY_TOKEN to be set.
         with patch('lemongrass.laps.live_race', return_value=None), \
+                patch('lemongrass._laps_tui._db.db_password_present', return_value=True), \
                 patch('lemongrass._influx.connect'):
             async with app.run_test() as pilot:
                 app.push_screen(CarSelectScreen(client, 42, 'Sears'))
@@ -588,6 +606,48 @@ class TestCarSelectScreen:
             await pilot.press('enter')
             await pilot.pause()
         assert app.monitor_args is None
+
+    @pytest.mark.asyncio
+    async def test_network_write_without_db_password_does_not_start_monitor(self):
+        # Finding 1: network mode eventually calls laps.store_race, which calls
+        # _db.database_url() and sys.exit(1)s with no password set — a
+        # SystemExit that would escape the monitor worker's `except Exception`
+        # and kill it with no message. _start_monitor must refuse up front.
+        client = _client_live_session()
+        app = LapsApp(client)
+        with patch('lemongrass._laps_tui._db.db_password_present', return_value=False), \
+                patch.object(LapsApp, 'notify') as mock_notify:
+            async with app.run_test() as pilot:
+                app.push_screen(CarSelectScreen(client, 42, 'Sears'))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                number = app.screen.query_one('#car-number', Input)
+                number.focus()
+                number.value = '7'
+                await pilot.press('enter')
+                await pilot.pause()
+        assert app.monitor_args is None
+        mock_notify.assert_called_once()
+        assert 'database password' in mock_notify.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_offline_monitor_does_not_require_db_password(self):
+        # Non-network monitoring never touches Postgres, so it must not be
+        # gated on the db password check.
+        client = _client_live_session()
+        app = LapsApp(client)
+        with patch('lemongrass._laps_tui._db.db_password_present', return_value=False):
+            async with app.run_test() as pilot:
+                app.push_screen(CarSelectScreen(client, 42, 'Sears'))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                app.screen.query_one('#write', Checkbox).value = False
+                number = app.screen.query_one('#car-number', Input)
+                number.focus()
+                number.value = '7'
+                await pilot.press('enter')
+                await pilot.pause()
+        assert app.monitor_args == (42, '7', False, 30)
 
 
 class TestMonitorScreen:
@@ -889,13 +949,33 @@ class TestImportFlow:
         app = LapsApp(client)
         # The pushed ImportScreen's worker runs backfill_race; patch it so no
         # real import launches against the mock client.
-        with patch('lemongrass.laps.backfill_race', return_value=0):
+        with patch('lemongrass.laps.backfill_race', return_value=0), \
+                patch('lemongrass._laps_tui._db.db_password_present', return_value=True):
             async with app.run_test() as pilot:
                 app.push_screen(ImportConfirmScreen(client, 42, 'Sears'))
                 await pilot.pause()
                 await pilot.press('enter')
                 await pilot.pause()
                 assert isinstance(app.screen, ImportScreen)
+
+    @pytest.mark.asyncio
+    async def test_no_db_password_does_not_start_import(self):
+        # Finding 1: backfill_race always runs with network_mode=True and calls
+        # laps.store_race, which sys.exit(1)s with no db password set — a
+        # SystemExit that would escape the import worker's `except Exception`.
+        # _start_import must refuse up front with a clean notification.
+        client = MagicMock()
+        app = LapsApp(client)
+        with patch('lemongrass._laps_tui._db.db_password_present', return_value=False), \
+                patch.object(LapsApp, 'notify') as mock_notify:
+            async with app.run_test() as pilot:
+                app.push_screen(ImportConfirmScreen(client, 42, 'Sears'))
+                await pilot.pause()
+                await pilot.press('enter')
+                await pilot.pause()
+                assert not isinstance(app.screen, ImportScreen)
+        mock_notify.assert_called_once()
+        assert 'database password' in mock_notify.call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_import_runs_backfill_and_reports(self):
@@ -976,7 +1056,8 @@ class TestFinalImportPrompt:
         client = MagicMock()
         app = LapsApp(client)
         # Confirming pushes ImportScreen, whose worker runs backfill_race — patch it.
-        with patch('lemongrass.laps.backfill_race', return_value=0):
+        with patch('lemongrass.laps.backfill_race', return_value=0), \
+                patch('lemongrass._laps_tui._db.db_password_present', return_value=True):
             async with app.run_test() as pilot:
                 app.offer_final_import(42)
                 await pilot.pause()
