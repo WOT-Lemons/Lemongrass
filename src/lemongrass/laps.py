@@ -780,11 +780,17 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     observer.on_status(UNDERLINE)
 
     race_meta_written = True
+    pending_sessions = []
     if opts.network_mode:
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
         race_meta_written = store_race(ctx, race_ts_ms)
-        if live_session_id is not None and race_meta_written:
-            store_session(ctx, live_session_id, live_session_name, None)
+        if live_session_id is not None:
+            if race_meta_written:
+                store_session(ctx, live_session_id, live_session_name, None)
+            else:
+                # The race row isn't stored yet; monitor_routine flushes this
+                # once it is, same as any session change discovered mid-poll.
+                pending_sessions.append((live_session_id, live_session_name))
         if laps:
             # class_position intentionally discarded: historical laps were completed before
             # launch so any position we compute now is stale. monitor_routine owns
@@ -806,6 +812,7 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     if opts.monitor_mode:
         return monitor_routine(ctx, laps, opts, competitor_name=competitor_name, car_info=car_info,
                                session_id=live_session_id, race_meta_written=race_meta_written,
+                               pending_sessions=pending_sessions,
                                observer=observer, _stop_event=_stop_event)
 
     if opts.network_mode and not race_meta_written:
@@ -1144,7 +1151,7 @@ def write_csv(filename, competitor_lap_times):
 
 
 def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_event=None,
-                    session_id=None, race_meta_written=True,
+                    session_id=None, race_meta_written=True, pending_sessions=None,
                     observer=None) -> MonitorStatus | None:
     """Poll for new laps during a live race, displaying and optionally pushing each
     to InfluxDB via the given observer (defaults to _StdoutObserver).
@@ -1159,9 +1166,14 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     race_meta_written reflects whether the caller's initial store_race
     succeeded; when False (or after the epoch is corrected below) the metadata
     write is retried each poll until it lands, so a transient write failure
-    self-heals without aborting lap capture. Session writes are skipped while
-    race_meta_written is False: sessions.race_id is a foreign key, so a
-    session for an unstored race would be rejected outright.
+    self-heals without aborting lap capture. A session change while
+    race_meta_written is False cannot be written outright — sessions.race_id
+    is a foreign key, so a session for an unstored race would be rejected —
+    so it is queued in pending_sessions instead. pending_sessions is an
+    optional iterable of (session_id, session_name) pairs the caller already
+    deferred (e.g. live_race's own initial write); every poll, once the race
+    row is known stored, the whole queue is flushed in order, oldest first,
+    and cleared.
     """
     if observer is None:
         observer = _StdoutObserver()
@@ -1173,6 +1185,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
     stop = _stop_event if _stop_event is not None else threading.Event()
     poll_count = 0
     prev_standings = {}
+    pending_sessions = list(pending_sessions) if pending_sessions else []
     try:
         while not stop.wait(timeout=opts.interval):
             poll_count += 1
@@ -1204,6 +1217,14 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 )
                 race_meta_written = store_race(ctx, race_ts_ms)
 
+            if opts.network_mode and race_meta_written and pending_sessions:
+                # The race row just landed (or already had): flush every session
+                # change queued while it was missing, oldest first, so none of
+                # them are silently lost.
+                for pending_id, pending_name in pending_sessions:
+                    store_session(ctx, pending_id, pending_name, None)
+                pending_sessions.clear()
+
             try:
                 session_response = ctx.client.live.get_session(ctx.race_id)
             except Exception:
@@ -1219,11 +1240,12 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     if opts.network_mode and race_meta_written:
                         store_session(ctx, session_id, session.get('Name'), None)
                     elif opts.network_mode:
+                        pending_sessions.append((session_id, session.get('Name')))
                         logging.warning(
-                            "Skipping session %s write for race %s: the race "
-                            "row is not stored, so the write would be rejected "
-                            "by the foreign key. The next poll retries the "
-                            "race write first.", session_id, ctx.race_id)
+                            "Deferring session %s write for race %s: the race "
+                            "row is not stored yet, so the write would be "
+                            "rejected by the foreign key. It will be flushed "
+                            "once the race row lands.", session_id, ctx.race_id)
             else:
                 logging.debug("get_session returned no session; may be between sessions")
 
@@ -1635,8 +1657,10 @@ def store_sessions(ctx, sessions):
     at all.
 
     Returns True on success, False if the transaction failed (logged, not
-    raised): old_race treats that the same as before, aborting before the race
-    is stamped complete so the next backfill redoes the whole rewrite.
+    raised). old_race writes the race row first (a foreign key requires it),
+    so a False here happens with the race already stamped complete; old_race
+    still fails the run so the next backfill redoes the whole rewrite, which
+    leaves the previous session set intact rather than an unrepairable gap.
     """
     try:
         _db.replace_sessions(ctx.race_id, _session_rows(ctx, sessions))

@@ -3232,29 +3232,26 @@ class TestMergeDuplicateSessions:
         assert original['competitors'][0]['competitor_name'] == 'Driver'
 
 
-def _run_old_race_happy_path(monkeypatch):
-    """Drive old_race through a successful backfill with all I/O stubbed.
+def _make_competitor(number, comp_id, position):
+    """Build one SortedCompetitors entry for old_race's historical-session fixtures."""
+    return {
+        'Number': number, 'Category': '1',
+        'ID': comp_id, 'SessionID': 1, 'RaceID': 999,
+        'FirstName': 'Driver', 'LastName': number,
+        'Position': position, 'Laps': '1', 'LastLapTime': '',
+        'BestPosition': position, 'BestLap': '1',
+        'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
+        'Transponder': '', 'Nationality': '', 'AdditionalData': '',
+        'LapTimes': [
+            {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': position,
+             'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
+        ],
+    }
 
-    Returns old_race's exit code. Built from the arrangement the existing
-    old_race tests already use — reuse theirs rather than inventing a new one,
-    so the two stay in sync.
-    """
-    def _make_competitor(number, comp_id, position):
-        return {
-            'Number': number, 'Category': '1',
-            'ID': comp_id, 'SessionID': 1, 'RaceID': 999,
-            'FirstName': 'Driver', 'LastName': number,
-            'Position': position, 'Laps': '1', 'LastLapTime': '',
-            'BestPosition': position, 'BestLap': '1',
-            'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
-            'Transponder': '', 'Nationality': '', 'AdditionalData': '',
-            'LapTimes': [
-                {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': position,
-                 'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
-            ],
-        }
 
-    session_details = {
+def _session_details_two_cars():
+    """Session with tracked car 42 and competitor 99."""
+    return {
         'Successful': True,
         'Session': {
             'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
@@ -3265,10 +3262,25 @@ def _run_old_race_happy_path(monkeypatch):
             ],
         },
     }
-    ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
+
+
+def _ctx(session_details, car_number='42'):
+    """RaceContext wired to hand back one historical session via the client mock."""
+    ctx = _mod.RaceContext('999', car_number, MagicMock(), MagicMock(), 0)
     ctx.delete_api = MagicMock()
     ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
     ctx.client.results.session_details.return_value = session_details
+    return ctx
+
+
+def _run_old_race_happy_path(monkeypatch):
+    """Drive old_race through a successful backfill with all I/O stubbed.
+
+    Returns old_race's exit code. Built from the arrangement the existing
+    old_race tests already use — reuse theirs rather than inventing a new one,
+    so the two stay in sync.
+    """
+    ctx = _ctx(_session_details_two_cars())
     opts = _mod.RaceOptions(network_mode=True)
 
     monkeypatch.setattr(_mod, '_resolve_class_historical', lambda *a, **k: ('A', {1: 1}))
@@ -3286,8 +3298,9 @@ def test_old_race_writes_the_race_row_before_any_session(monkeypatch):
                         lambda *a, **k: calls.append('race') or True)
     monkeypatch.setattr(_mod, 'store_sessions',
                         lambda *a, **k: calls.append('sessions') or True)
-    _run_old_race_happy_path(monkeypatch)   # see step 2
+    rc = _run_old_race_happy_path(monkeypatch)   # see step 2
     assert calls.index('race') < calls.index('sessions')
+    assert rc is None
 
 
 def test_old_race_skips_sessions_when_the_race_row_fails(monkeypatch):
@@ -3338,46 +3351,101 @@ def test_monitor_routine_writes_the_session_once_the_race_row_lands():
          patch.object(_mod, 'push_influx_standings_live', return_value={}):
         _mod.monitor_routine(ctx, [], opts, session_id='old',
                              race_meta_written=False, _stop_event=stop)
-    store.assert_called_once()
+    store.assert_called_once_with(ctx, 1, 'S1', None)
+
+
+def test_monitor_routine_flushes_a_deferred_session_once_the_race_row_lands():
+    """The race row lands one poll late: the session change seen while it was
+    still missing must not be dropped — it is written as soon as the retry
+    inside the same loop succeeds, not just the next fresh session change."""
+    stop = threading.Event()
+    ctx = _monitor_ctx()          # live.get_session always returns Session ID 1 'S1'
+    ctx.write_api = MagicMock()
+    opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+    poll_count = 0
+
+    def fake_refresh(c):
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count >= 2:
+            stop.set()
+        return []
+
+    with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh), \
+         patch.object(_mod, 'store_race', side_effect=[False, True]), \
+         patch.object(_mod, 'store_session') as store, \
+         patch.object(_mod, 'push_influx_standings_live', return_value={}):
+        _mod.monitor_routine(ctx, [], opts, race_meta_written=False, _stop_event=stop)
+    # Poll 1: session 1 is new but the race row isn't stored yet -> deferred.
+    # Poll 2: store_race succeeds -> the deferred entry is flushed, once.
+    store.assert_called_once_with(ctx, 1, 'S1', None)
+
+
+def test_monitor_routine_flushes_multiple_deferred_sessions_in_order():
+    """Two session changes happen while the race row is still missing; both
+    must be written, oldest first, not just the most recent one."""
+    stop = threading.Event()
+    ctx = _monitor_ctx()
+    ctx.write_api = MagicMock()
+    opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+    session_a = {'Successful': True, 'Session': {
+        'ID': 1, 'Name': 'Session A', 'Competitors': {}, 'Classes': {}}}
+    session_b = {'Successful': True, 'Session': {
+        'ID': 2, 'Name': 'Session B', 'Competitors': {}, 'Classes': {}}}
+    ctx.client.live.get_session.side_effect = [session_a, session_b, session_b]
+
+    poll_count = 0
+
+    def fake_refresh(c):
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count >= 3:
+            stop.set()
+        return []
+
+    with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh), \
+         patch.object(_mod, 'store_race', side_effect=[False, False, True]), \
+         patch.object(_mod, 'store_session') as store, \
+         patch.object(_mod, 'push_influx_standings_live', return_value={}):
+        _mod.monitor_routine(ctx, [], opts, race_meta_written=False, _stop_event=stop)
+    # Poll 1 defers session A, poll 2 defers session B (race row still
+    # missing), poll 3's successful store_race flushes both, in order.
+    assert store.call_args_list == [
+        call(ctx, 1, 'Session A', None),
+        call(ctx, 2, 'Session B', None),
+    ]
+
+
+def test_monitor_routine_does_not_rewrite_a_flushed_session_on_a_later_poll():
+    """Once the deferred queue is flushed it must be cleared — a later poll
+    with the race row already stored and no new session change must not
+    replay the same write."""
+    stop = threading.Event()
+    ctx = _monitor_ctx()          # live.get_session always returns Session ID 1 'S1'
+    ctx.write_api = MagicMock()
+    opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+    poll_count = 0
+
+    def fake_refresh(c):
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count >= 3:
+            stop.set()
+        return []
+
+    with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh), \
+         patch.object(_mod, 'store_race', side_effect=[False, True]), \
+         patch.object(_mod, 'store_session') as store, \
+         patch.object(_mod, 'push_influx_standings_live', return_value={}):
+        _mod.monitor_routine(ctx, [], opts, race_meta_written=False, _stop_event=stop)
+    # Poll 1 defers, poll 2 flushes, poll 3 has nothing new -> still one call.
+    store.assert_called_once_with(ctx, 1, 'S1', None)
 
 
 class TestOldRaceFullField:
-    def _make_competitor(self, number, comp_id, position):
-        return {
-            'Number': number, 'Category': '1',
-            'ID': comp_id, 'SessionID': 1, 'RaceID': 999,
-            'FirstName': 'Driver', 'LastName': number,
-            'Position': position, 'Laps': '1', 'LastLapTime': '',
-            'BestPosition': position, 'BestLap': '1',
-            'BestLapTime': '0:01:30.000', 'TotalTime': '0:01:30.000',
-            'Transponder': '', 'Nationality': '', 'AdditionalData': '',
-            'LapTimes': [
-                {'Lap': '1', 'LapTime': '0:01:30.000', 'Position': position,
-                 'FlagStatus': 0, 'TotalTime': '0:01:30.000'},
-            ],
-        }
-
-    def _session_details_two_cars(self):
-        """Session with tracked car 42 and competitor 99."""
-        return {
-            'Successful': True,
-            'Session': {
-                'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
-                'Categories': {'1': {'ID': '1', 'Name': 'A'}},
-                'SortedCompetitors': [
-                    self._make_competitor('42', 1, '1'),
-                    self._make_competitor('99', 2, '2'),
-                ],
-            },
-        }
-
-    def _ctx(self, session_details, car_number='42'):
-        ctx = _mod.RaceContext('999', car_number, MagicMock(), MagicMock(), 0)
-        ctx.delete_api = MagicMock()
-        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
-        ctx.client.results.session_details.return_value = session_details
-        return ctx
-
     _capture_points = staticmethod(_capture_lap_points)
 
     @staticmethod
@@ -3385,7 +3453,7 @@ class TestOldRaceFullField:
         return point.to_line_protocol().split('car_number=', 1)[1].split(',', 1)[0]
 
     def test_writes_all_competitors_not_just_tracked(self):
-        ctx = self._ctx(self._session_details_two_cars())
+        ctx = _ctx(_session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
@@ -3398,7 +3466,7 @@ class TestOldRaceFullField:
         assert {self._car_number(p) for p in captured} == {'42', '99'}
 
     def test_resolve_class_called_per_competitor(self):
-        ctx = self._ctx(self._session_details_two_cars())
+        ctx = _ctx(_session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(
             _mod, '_resolve_class_historical', return_value=('A', {1: 1})
@@ -3411,7 +3479,7 @@ class TestOldRaceFullField:
         assert {c.args[0] for c in mock_resolve.call_args_list} == {'42', '99'}
 
     def test_build_lap_points_receives_explicit_car_number(self):
-        ctx = self._ctx(self._session_details_two_cars())
+        ctx = _ctx(_session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
@@ -3425,7 +3493,7 @@ class TestOldRaceFullField:
             assert 'car_number=' in point.to_line_protocol()
 
     def test_race_not_stamped_when_write_fails(self):
-        ctx = self._ctx(self._session_details_two_cars())
+        ctx = _ctx(_session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, '_write_points_chunked', side_effect=Exception('write error')):
@@ -3437,19 +3505,19 @@ class TestOldRaceFullField:
 
     def test_non_integer_car_number_skipped(self):
         """Competitors with non-integer car numbers (e.g. 'SC') are not written."""
-        sc_competitor = self._make_competitor('SC', 99, '0')
+        sc_competitor = _make_competitor('SC', 99, '0')
         session = {
             'Successful': True,
             'Session': {
                 'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
                 'Categories': {'1': {'ID': '1', 'Name': 'A'}},
                 'SortedCompetitors': [
-                    self._make_competitor('42', 1, '1'),
+                    _make_competitor('42', 1, '1'),
                     sc_competitor,
                 ],
             },
         }
-        ctx = self._ctx(session)
+        ctx = _ctx(session)
         opts = _mod.RaceOptions(network_mode=True)
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
@@ -3476,12 +3544,12 @@ class TestOldRaceFullField:
                 'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
                 'Categories': {'1': {'ID': '1', 'Name': 'A'}},
                 'SortedCompetitors': [
-                    self._make_competitor('42', 1, '1'),
-                    self._make_competitor(' 2', 2, '2'),
+                    _make_competitor('42', 1, '1'),
+                    _make_competitor(' 2', 2, '2'),
                 ],
             },
         }
-        ctx = self._ctx(session)
+        ctx = _ctx(session)
         opts = _mod.RaceOptions(network_mode=True)
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
@@ -3506,12 +3574,12 @@ class TestOldRaceFullField:
                 'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 0,
                 'Categories': {'1': {'ID': '1', 'Name': 'A'}},
                 'SortedCompetitors': [
-                    self._make_competitor('42', 1, '1'),
-                    self._make_competitor(' 2', 2, '2'),
+                    _make_competitor('42', 1, '1'),
+                    _make_competitor(' 2', 2, '2'),
                 ],
             },
         }
-        ctx = self._ctx(session)
+        ctx = _ctx(session)
         opts = _mod.RaceOptions(network_mode=True)
         captured, cm = self._capture_points()
         with cm:
@@ -3526,7 +3594,7 @@ class TestOldRaceFullField:
 
     def test_validation_aborts_when_no_laps_collected(self):
         """Tracked car found but has zero laps — do not touch InfluxDB."""
-        competitor_no_laps = self._make_competitor('42', 1, '1')
+        competitor_no_laps = _make_competitor('42', 1, '1')
         competitor_no_laps['LapTimes'] = []
         session = {
             'Successful': True,
@@ -3536,7 +3604,7 @@ class TestOldRaceFullField:
                 'SortedCompetitors': [competitor_no_laps],
             },
         }
-        ctx = self._ctx(session)
+        ctx = _ctx(session)
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, 'delete_existing_laps') as mock_del:
             with patch.object(_mod, 'store_race'):
@@ -3546,14 +3614,14 @@ class TestOldRaceFullField:
         mock_del.assert_not_called()
 
     def test_store_sessions_called_once_with_all_sessions(self):
-        ctx = self._ctx(self._session_details_two_cars())
+        ctx = _ctx(_session_details_two_cars())
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}, {'ID': 2}]}
         # Two genuinely different sessions (distinct start epochs) so the
         # duplicate-session merge does not collapse them into one.
-        other_session = self._session_details_two_cars()
+        other_session = _session_details_two_cars()
         other_session['Session']['SessionStartDateEpoc'] = 1000
         ctx.client.results.session_details.side_effect = [
-            self._session_details_two_cars(), other_session]
+            _session_details_two_cars(), other_session]
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'store_sessions') as mock_sessions:
@@ -3565,7 +3633,7 @@ class TestOldRaceFullField:
         assert len(mock_sessions.call_args.args[1]) == 2
 
     def test_store_sessions_called_with_correct_session_id(self):
-        ctx = self._ctx(self._session_details_two_cars())
+        ctx = _ctx(_session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'store_sessions') as mock_sessions:
@@ -3580,7 +3648,7 @@ class TestOldRaceFullField:
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
         ctx.delete_api = MagicMock()
         ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
-        ctx.client.results.session_details.return_value = self._session_details_two_cars()
+        ctx.client.results.session_details.return_value = _session_details_two_cars()
         opts = _mod.RaceOptions(network_mode=False)
         with patch.object(_mod, 'store_sessions') as mock_sessions:
             with patch.object(_mod, 'print_rankings'):
@@ -3588,7 +3656,7 @@ class TestOldRaceFullField:
         mock_sessions.assert_not_called()
 
     def test_build_lap_points_receives_session_id(self):
-        ctx = self._ctx(self._session_details_two_cars())
+        ctx = _ctx(_session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         captured, cm = self._capture_points()
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
@@ -3608,13 +3676,13 @@ class TestOldRaceFullField:
             'Session': {
                 'ID': 1, 'RaceID': 999, 'Name': 'S1', 'SessionStartDateEpoc': 500,
                 'Categories': {'1': {'ID': '1', 'Name': 'A'}},
-                'SortedCompetitors': [self._make_competitor('42', 1, '1')],
+                'SortedCompetitors': [_make_competitor('42', 1, '1')],
             },
         }
 
     def test_duplicate_sessions_write_laps_once(self):
         details = self._duplicated_session_details()
-        ctx = self._ctx(details)
+        ctx = _ctx(details)
         # RaceMonitor hands back four IDs for one real session
         ctx.client.results.sessions_for_race.return_value = {
             'Sessions': [{'ID': 1}, {'ID': 2}, {'ID': 3}, {'ID': 4}]}
@@ -3632,7 +3700,7 @@ class TestOldRaceFullField:
 
     def test_expected_lap_count_matches_merged_writes(self):
         details = self._duplicated_session_details()
-        ctx = self._ctx(details)
+        ctx = _ctx(details)
         ctx.client.results.sessions_for_race.return_value = {
             'Sessions': [{'ID': 1}, {'ID': 2}, {'ID': 3}, {'ID': 4}]}
         ctx.client.results.session_details.return_value = details
@@ -3659,7 +3727,7 @@ class TestOldRaceFullField:
         store_sessions' single-transaction replace. old_race still fails the
         run so the next backfill retries the rewrite.
         """
-        ctx = self._ctx(self._session_details_two_cars())
+        ctx = _ctx(_session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'store_race', return_value=True) as mock_race:
@@ -3674,7 +3742,7 @@ class TestOldRaceFullField:
         """The happy path: the session write succeeds, so the race is still
         stamped complete exactly as before this fix.
         """
-        ctx = self._ctx(self._session_details_two_cars())
+        ctx = _ctx(_session_details_two_cars())
         opts = _mod.RaceOptions(network_mode=True)
         with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
             with patch.object(_mod, 'store_race') as mock_race:
