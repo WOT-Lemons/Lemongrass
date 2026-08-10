@@ -249,9 +249,9 @@ class SessionRow:
     the backfill path (results.session_details -> Session['ID'], itself sourced
     from results.sessions_for_race's session ids) both name sessions with the
     same 'ID' field from the same RaceMonitor API family, for the same race —
-    one id space. push_influx_session's session_id-only delete predicate
-    already assumed this. start_time is nullable — the live path learns a
-    session's id before its start time, and NULL beats storing 1970.
+    one id space. The old Influx session writer's session_id-only delete
+    predicate already assumed this. start_time is nullable — the live path
+    learns a session's id before its start time, and NULL beats storing 1970.
     """
 
     session_id: int

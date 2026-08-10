@@ -329,8 +329,10 @@ def run_backfill(races, dry_run=False, force=False):
 
 
 def run_upgrade_stored(query_api, dry_run=False, force=False):
-    """Query InfluxDB for stored races with stale schema versions and re-backfill them.
+    """Enumerate stored races from Postgres and re-backfill ones stale in InfluxDB.
 
+    Race identity and names come from Postgres; staleness is still a question
+    about lap and standings data, so it's still checked against InfluxDB.
     A race is skipped only when both its laps and its standings are at the current
     SCHEMA_VERSION; laps that are current but whose standings are stale or missing
     are re-backfilled. force=True re-backfills every stored race regardless.
@@ -352,9 +354,9 @@ def run_upgrade_stored(query_api, dry_run=False, force=False):
     # every race, created lazily on the first re-backfill and closed in finally.
     client = None
     try:
-        # race_id keys are Influx tag strings; sort numerically so the run is a
-        # predictable ascending sweep rather than a lexicographic one where a
-        # shorter id (e.g. "9793") lands amid the longer six-digit ids.
+        # race_id keys are strings (Postgres races.race_id); sort numerically so
+        # the run is a predictable ascending sweep rather than a lexicographic
+        # one where a shorter id (e.g. "9793") lands amid the longer six-digit ids.
         for race_id, race_name in sorted(stored_races.items(), key=lambda kv: int(kv[0])):
             total_tables = query_api.query(
                 f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
