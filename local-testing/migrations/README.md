@@ -110,9 +110,9 @@ the `lemongrass db import-legacy` / `export-legacy` commands.
 
    A healthy dry run has `races read == races would-write` (nothing written yet, so
    `written` is `0`) and a small, explained `sessions skipped` count matching the
-   orphan race id(s) printed. **These example figures are illustrative only** — they
-   have not been produced against real captured data; a rehearsal against captured
-   real race data should record the actual observed counts here once it happens.
+   orphan race id(s) printed. The counts above are shaped like a full production
+   deployment; the numbers themselves are made up. For counts actually observed, see
+   [Observed rehearsal](#observed-rehearsal) below.
 
 4. Run the import for real:
 
@@ -151,8 +151,56 @@ the `lemongrass db import-legacy` / `export-legacy` commands.
 
    A healthy `--only-missing` run satisfies `races read == races written +
    skipped-existing` and `sessions read == sessions written + skipped +
-   skipped-existing`. **These figures are also illustrative, not observed** — a
-   rehearsal has not yet been run against captured data.
+   skipped-existing`. These figures are illustrative too — see
+   [Observed rehearsal](#observed-rehearsal).
+
+## Observed rehearsal
+
+Run twice from a clean stack (`docker compose down -v`, restore the three legacy
+buckets by name, run steps 2-4 and 6) against four real races captured by the
+pre-cutover writer. Both runs produced identical output:
+
+    # step 3, --dry-run
+    races:    read     4  written     0  would-write     4
+    sessions: read    12  written     0  skipped     0  would-write    12
+    now stored: 0 race(s), 0 session(s)
+
+    # step 4, real import
+    races:    read     4  written     4
+    sessions: read    12  written    12  skipped     0
+    now stored: 4 race(s), 12 session(s)
+
+    # step 6, --only-missing
+    races:    read     4  written     0  skipped-existing     4
+    sessions: read    12  written     0  skipped     0  skipped-existing    12
+    now stored: 4 race(s), 12 session(s)
+
+**No orphan sessions appeared**, so the orphan line was never printed and
+`sessions skipped` stayed `0` in every run. A deployment whose Influx history has
+sessions whose race point was deleted or never written will see a non-zero count
+there; this fixture has none, so that path is exercised only by the unit tests.
+
+What the rehearsal confirmed beyond the counts:
+
+- `session_count` on each imported race row equals its actual session count (3, 4,
+  2, 3).
+- `series_id` is NULL on every row and `series_name` is populated — the legacy
+  points carry no series id, so it cannot be backfilled and is plumbed at capture
+  time instead.
+- `race_time` comes from the race point's *timestamp*; there is no `race_time`
+  field to read.
+- Three distinct spellings of one track and two spellings of one race name survive
+  as written — `name` and `track_name` are raw passthrough.
+- A session with an empty name imports and re-exports intact.
+- `races list`, the races browser, and the dashboards all show actual lap counts
+  from Influx joined to the Postgres attributes; three of the four races have fewer
+  actual laps than `expected_lap_count` (3, 2, and 11 short).
+- `races prune` deletes the Influx data first and the Postgres race row last, whose
+  cascade removes that race's sessions; a second prune of the same id reports
+  not-found.
+- The rollback path round-trips: `export-legacy`, split with the `awk` above, and
+  written back into scratch buckets reproduces all 4 races and all 12 sessions with
+  identical identity, timestamps, and field values.
 
 ## Rollback
 
