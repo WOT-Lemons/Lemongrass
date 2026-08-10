@@ -29,7 +29,7 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
-from lemongrass import _influx
+from lemongrass import _db, _influx
 from lemongrass._tui import _LogSink, _race_label, _routed_output, _sink_bound
 
 
@@ -141,10 +141,32 @@ class LapsFlowMixin:
         self.push_screen(WaitForLiveScreen(self.client, race_id, race_name))
 
     def _start_monitor(self, race_id, car_number, network, interval):
+        """Push MonitorScreen, validating the database up front when it will write.
+
+        Network mode writes race metadata via ``laps.store_race``, which calls
+        ``_db.database_url`` — with no password set that raises ``SystemExit``
+        deep in the monitor worker thread, past its ``except Exception``, and
+        the worker dies with no message. Checking ``db_password_present`` here
+        turns that into a clean, user-visible notification instead.
+        """
+        if network and not _db.db_password_present():
+            self.notify('database password not set — cannot write race data',
+                        severity='error')
+            return
         self.monitor_args = (race_id, car_number, network, interval)
         self.push_screen(MonitorScreen(self.client, race_id, car_number, network, interval))
 
     def _start_import(self, race_id, race_name):
+        """Push ImportScreen, validating the database up front.
+
+        A completed-race import always runs with network_mode=True, so it
+        always calls ``laps.store_race`` — see ``_start_monitor`` for why that
+        needs a database check ahead of the worker thread.
+        """
+        if not _db.db_password_present():
+            self.notify('database password not set — cannot import race data',
+                        severity='error')
+            return
         self.push_screen(ImportScreen(self.client, race_id, race_name))
 
     def offer_final_import(self, race_id):

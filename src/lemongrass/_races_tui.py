@@ -13,7 +13,7 @@ from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, S
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
-from lemongrass import _influx
+from lemongrass import _db, _influx
 from lemongrass._backfill_tui import RaceListModel, RefineScreen
 from lemongrass._laps_tui import ImportScreen
 from lemongrass._tui import LogPaneScreen, _sink_bound
@@ -194,11 +194,22 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         yield Footer()
 
     def on_mount(self):
-        """Start the log drain timer, then load rows if Influx is configured."""
+        """Start the log drain timer, then load rows if Influx and the database
+        are both configured.
+
+        Race rows come from Postgres (via ``fetch_race_rows`` -> ``_db.list_races``);
+        checking ``db_password_present`` up front avoids a worker-thread
+        ``SystemExit`` from ``_db.database_url`` bubbling past the worker's
+        ``except Exception`` and killing the load silently.
+        """
         self.set_interval(0.25, self._drain_log)
         if not _influx.influx_token_present():
             self.query_one('#status', Label).update(
                 '⚠ Influx token not set — race data unavailable')
+            return
+        if not _db.db_password_present():
+            self.query_one('#status', Label).update(
+                '⚠ database password not set — race data unavailable')
             return
         self._load()
 
