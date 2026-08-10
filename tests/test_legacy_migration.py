@@ -2,6 +2,8 @@ import re
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from lemongrass import _legacy_migration as _mod
 
 
@@ -261,6 +263,36 @@ def test_session_line_matches_the_original_point_shape():
     assert 'session_name="Qualifying"' in line
     assert 'start_epoc=1777636800i' in line
     assert line.endswith(' 1777636800000000000')
+
+
+@pytest.mark.parametrize('break_char', ['\n', '\r'])
+@pytest.mark.parametrize('field', ['name', 'track_name', 'series_name'])
+def test_race_line_rejects_line_breaks_in_tags(field, break_char):
+    # Line protocol delimits records with a newline and offers no escape, so a
+    # tag carrying one would split the point into two corrupt records.
+    from lemongrass import _db
+    row = _db.RaceRow(race_id='101', name='Spring', track_name='Thompson',
+                      series_name='Lemons',
+                      race_time=datetime(2026, 5, 1, tzinfo=UTC))
+    setattr(row, field, f'bad{break_char}value')
+    with pytest.raises(ValueError, match='line break'):
+        _mod.race_line(row)
+
+
+@pytest.mark.parametrize('break_char', ['\n', '\r'])
+def test_session_line_rejects_line_breaks_in_the_race_id_tag(break_char):
+    from lemongrass import _db
+    with pytest.raises(ValueError, match='line break'):
+        _mod.session_line(_db.SessionRow(
+            session_id=55, race_id=f'1{break_char}01', name='Qualifying'))
+
+
+@pytest.mark.parametrize('break_char', ['\n', '\r'])
+def test_session_line_rejects_line_breaks_in_the_name(break_char):
+    from lemongrass import _db
+    with pytest.raises(ValueError, match='line break'):
+        _mod.session_line(_db.SessionRow(
+            session_id=55, race_id='101', name=f'Qual{break_char}ifying'))
 
 
 def test_session_line_null_start_time_is_zero_at_the_epoch():

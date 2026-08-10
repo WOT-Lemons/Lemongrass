@@ -52,11 +52,12 @@ buckets into PostgreSQL. Laps, standings, telemetry, and PiSugar data are unaffe
 they stay in InfluxDB. Run once, per environment, when deploying the build that includes
 the `lemongrass db import-legacy` / `export-legacy` commands.
 
-> **Note:** the `local-testing/` Grafana dashboard variables are not repointed at
-> Postgres by this migration — that is a separate, not-yet-implemented change. Until it
-> lands, the local dashboards will keep resolving races and sessions from the legacy
-> Influx buckets and will not show races written after cutover. Production dashboards
-> are managed elsewhere and are a separate sub-project's responsibility.
+> **Note:** the `local-testing/` Grafana dashboards resolve races and sessions from
+> Postgres via the `wotl-postgres` datasource, so they need that datasource provisioned
+> (`docker compose up` does it) and the schema applied before their race pickers
+> populate. The legacy Influx datasources stay provisioned for the pre-cutover buckets.
+> Production dashboards are managed elsewhere and are a separate sub-project's
+> responsibility.
 
 ## Prerequisite
 

@@ -57,8 +57,8 @@
       "title": "Race Name",
       "type": "stat",
       "datasource": {
-        "type": "influxdb",
-        "uid": "wotl-races-ql"
+        "type": "grafana-postgresql-datasource",
+        "uid": "wotl-postgres"
       },
       "gridPos": {
         "h": 3,
@@ -88,55 +88,23 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "last"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
         },
-        "textMode": "name",
+        "textMode": "value",
         "wideLayout": true
       },
       "targets": [
         {
           "datasource": {
-            "type": "influxdb",
-            "uid": "wotl-races-ql"
+            "type": "grafana-postgresql-datasource",
+            "uid": "wotl-postgres"
           },
-          "measurement": "race",
-          "policy": "default",
-          "orderByTime": "ASC",
-          "resultFormat": "time_series",
-          "refId": "A",
-          "select": [
-            [
-              {
-                "params": [
-                  "end_time_epoc"
-                ],
-                "type": "field"
-              },
-              {
-                "params": [],
-                "type": "last"
-              }
-            ]
-          ],
-          "tags": [
-            {
-              "key": "race_id",
-              "operator": "=",
-              "value": "$raceid"
-            }
-          ],
-          "groupBy": [
-            {
-              "params": [
-                "race_name::tag"
-              ],
-              "type": "tag"
-            }
-          ],
-          "alias": "$tag_race_name"
+          "format": "table",
+          "rawSql": "SELECT name FROM races WHERE race_id = ${raceid:sqlstring}",
+          "refId": "A"
         }
       ]
     },
@@ -145,8 +113,8 @@
       "title": "Track",
       "type": "stat",
       "datasource": {
-        "type": "influxdb",
-        "uid": "wotl-races-ql"
+        "type": "grafana-postgresql-datasource",
+        "uid": "wotl-postgres"
       },
       "gridPos": {
         "h": 3,
@@ -176,55 +144,23 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "last"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
         },
-        "textMode": "name",
+        "textMode": "value",
         "wideLayout": true
       },
       "targets": [
         {
           "datasource": {
-            "type": "influxdb",
-            "uid": "wotl-races-ql"
+            "type": "grafana-postgresql-datasource",
+            "uid": "wotl-postgres"
           },
-          "measurement": "race",
-          "policy": "default",
-          "orderByTime": "ASC",
-          "resultFormat": "time_series",
-          "refId": "A",
-          "select": [
-            [
-              {
-                "params": [
-                  "end_time_epoc"
-                ],
-                "type": "field"
-              },
-              {
-                "params": [],
-                "type": "last"
-              }
-            ]
-          ],
-          "tags": [
-            {
-              "key": "race_id",
-              "operator": "=",
-              "value": "$raceid"
-            }
-          ],
-          "groupBy": [
-            {
-              "params": [
-                "track_name::tag"
-              ],
-              "type": "tag"
-            }
-          ],
-          "alias": "$tag_track_name"
+          "format": "table",
+          "rawSql": "SELECT track_name FROM races WHERE race_id = ${raceid:sqlstring}",
+          "refId": "A"
         }
       ]
     },
@@ -233,8 +169,8 @@
       "title": "Series",
       "type": "stat",
       "datasource": {
-        "type": "influxdb",
-        "uid": "wotl-races-ql"
+        "type": "grafana-postgresql-datasource",
+        "uid": "wotl-postgres"
       },
       "gridPos": {
         "h": 3,
@@ -264,55 +200,23 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "last"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
         },
-        "textMode": "name",
+        "textMode": "value",
         "wideLayout": true
       },
       "targets": [
         {
           "datasource": {
-            "type": "influxdb",
-            "uid": "wotl-races-ql"
+            "type": "grafana-postgresql-datasource",
+            "uid": "wotl-postgres"
           },
-          "measurement": "race",
-          "policy": "default",
-          "orderByTime": "ASC",
-          "resultFormat": "time_series",
-          "refId": "A",
-          "select": [
-            [
-              {
-                "params": [
-                  "end_time_epoc"
-                ],
-                "type": "field"
-              },
-              {
-                "params": [],
-                "type": "last"
-              }
-            ]
-          ],
-          "tags": [
-            {
-              "key": "race_id",
-              "operator": "=",
-              "value": "$raceid"
-            }
-          ],
-          "groupBy": [
-            {
-              "params": [
-                "series_name::tag"
-              ],
-              "type": "tag"
-            }
-          ],
-          "alias": "$tag_series_name"
+          "format": "table",
+          "rawSql": "SELECT coalesce(series_name, '') AS series_name FROM races WHERE race_id = ${raceid:sqlstring}",
+          "refId": "A"
         }
       ]
     },

@@ -58,12 +58,16 @@ def test_upsert_race_preserves_completeness_on_a_live_write(db):
 def test_upsert_race_bumps_updated_at(db):
     from lemongrass import _db
     _db.upsert_race(_race())
+    # Back-date the insert's server_default stamp: without this, a conflict
+    # update that never touches updated_at leaves second == first, which a
+    # `>=` assertion would still pass.
     with db.begin() as conn:
+        conn.execute(text("UPDATE races SET updated_at = now() - interval '1 day'"))
         first = conn.execute(text("SELECT updated_at FROM races")).scalar()
     _db.upsert_race(_race(name="Renamed"))
     with db.begin() as conn:
         second = conn.execute(text("SELECT updated_at FROM races")).scalar()
-    assert second >= first
+    assert second > first
 
 
 def test_upsert_race_accepts_empty_names(db):

@@ -452,18 +452,6 @@ class TestValidateBackfill:
                 assert _mod.validate_backfill(['101'], query_api) is False
         assert any('NO laps' in r.message for r in caplog.records)
 
-    def test_returns_false_when_race_metadata_missing(self):
-        query_api = MagicMock()
-        query_api.query.return_value = _count_tables(15)
-        with patch.object(_mod._db, 'get_race', return_value=None):
-            assert _mod.validate_backfill(['101'], query_api) is False
-
-    def test_laps_not_queried_when_race_metadata_missing(self):
-        query_api = MagicMock()
-        with patch.object(_mod._db, 'get_race', return_value=None):
-            _mod.validate_backfill(['101'], query_api)
-        assert query_api.query.call_count == 0
-
     def test_validate_backfill_reports_missing_metadata_from_postgres(self, caplog):
         query_api = MagicMock()
         with patch('lemongrass.race_backfill._db.get_race', return_value=None):
@@ -784,6 +772,11 @@ def test_upgrade_stored_enumerates_postgres_races():
     query_api.query.return_value = _count_tables(0)   # no laps -> skip both
     with patch('lemongrass.race_backfill._db.list_races', return_value=rows):
         assert _mod.run_upgrade_stored(query_api) == []
+    # [] is also what an empty list_races produces, so pin that both races
+    # actually reached the lap-count queries.
+    flux = ' '.join(c.args[0] for c in query_api.query.call_args_list)
+    assert 'race_id == "9793"' in flux
+    assert 'race_id == "144185"' in flux
 
 
 class TestParseStartDate:

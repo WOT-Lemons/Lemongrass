@@ -152,8 +152,23 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
     return summary
 
 
+def _reject_line_breaks(what, value):
+    """Raise if `value` carries a line break.
+
+    Line protocol has no escape for LF/CR — the newline *is* the record
+    delimiter — so a value carrying one splits the point into two corrupt
+    records that Influx would half-accept. Fail the export loudly instead of
+    writing a file that silently loses data on restore.
+    """
+    if '\n' in value or '\r' in value:
+        raise ValueError(
+            f"{what} contains a line break, which Influx line protocol cannot "
+            f"represent: {value!r}")
+
+
 def _escape_tag(value):
     """Escape a line-protocol tag value: commas, spaces, and equals signs."""
+    _reject_line_breaks('tag value', value)
     return (value.replace('\\', '\\\\').replace(',', '\\,')
                  .replace(' ', '\\ ').replace('=', '\\='))
 
@@ -212,6 +227,7 @@ def session_line(row):
     """
     tags = _tags([('race_id', row.race_id), ('session_id', str(row.session_id))])
     start = _dt_to_epoch(row.start_time)
+    _reject_line_breaks('session name', row.name or '')
     name = (row.name or '').replace('\\', '\\\\').replace('"', '\\"')
     fields = f'session_name="{name}",start_epoc={start}i'
     return f"session{tags} {fields} {start * 1_000_000_000}"

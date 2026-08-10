@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import lemongrass.races as _mod
-from lemongrass.races import fetch_race_rows, prune_races
+from lemongrass.races import prune_races
 
 races_mod = _mod
 
@@ -27,24 +27,6 @@ def _tables(mapping):
 def _row(race_id, name, when):
     from lemongrass import _db
     return _db.RaceRow(race_id=race_id, race_time=when, name=name)
-
-
-class TestFetchRaceRows:
-    def test_joins_sql_race_with_flux_counts(self):
-        rows = [_row('144185', 'Sears Pointless', datetime(2026, 6, 1, tzinfo=UTC))]
-        query_api = MagicMock()
-        query_api.query.side_effect = [
-            _tables({'144185': 100}),
-            _tables({'144185': 100}),
-        ]
-        with patch('lemongrass.races._db.list_races', return_value=rows):
-            got = fetch_race_rows(query_api)
-        assert len(got) == 1
-        assert got[0]['race_id'] == '144185'
-        assert got[0]['name'] == 'Sears Pointless'
-        assert got[0]['date'] == '2026-06-01'
-        assert got[0]['total'] == 100
-        assert got[0]['current'] == 100
 
 
 def test_fetch_race_rows_joins_sql_attributes_with_flux_counts():

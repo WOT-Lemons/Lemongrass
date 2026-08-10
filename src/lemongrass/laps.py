@@ -991,6 +991,20 @@ def old_race(ctx, opts):
                             "Race metadata write failed for race %s — failing the "
                             "run so the next backfill retries", ctx.race_id)
                         return 1
+                    # The skip checks only look at laps and standings, so a run
+                    # whose session write failed after they were already complete
+                    # would land here forever with a stale session set. Rewrite
+                    # the sessions on the skip path too — store_sessions replaces
+                    # the race's whole set in one transaction, so repeating it on
+                    # an already-correct race is a no-op.
+                    if not store_sessions(ctx, [
+                            (session['session_id'], session['session_name'],
+                             session['start_epoc'])
+                            for session in pending_writes]):
+                        logging.error(
+                            "Session write incomplete for race %s — failing the "
+                            "run so the next backfill retries", ctx.race_id)
+                        return 1
                     logging.info(
                         "SKIP: race %s already complete and current (%d laps, schema v%d)",
                         ctx.race_id, total, SCHEMA_VERSION)
@@ -1248,7 +1262,11 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     session_id = new_session_id
                     prev_standings = {}
                     if opts.network_mode and race_meta_written:
-                        store_session(ctx, session_id, session.get('Name'), None)
+                        # session_id has already advanced, so the change is never
+                        # detected again — a failed write must go on the queue or
+                        # the session row stays missing for the rest of the race.
+                        if not store_session(ctx, session_id, session.get('Name'), None):
+                            pending_sessions.append((session_id, session.get('Name')))
                     elif opts.network_mode:
                         pending_sessions.append((session_id, session.get('Name')))
                         logging.warning(

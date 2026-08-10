@@ -238,11 +238,17 @@ def get_race(race_id, conn=None):
 
 
 def list_races(conn=None):
-    """Return every stored race, newest race_time first."""
+    """Return every stored race, newest race_time first.
+
+    race_id breaks ties so the order is total and stable — export_legacy writes
+    in this order, and two races sharing a race_time would otherwise shuffle
+    between runs.
+    """
     from sqlalchemy import select
     with connection(conn) as c:
         rows = c.execute(
-            select(_schema.races).order_by(_schema.races.c.race_time.desc())
+            select(_schema.races).order_by(_schema.races.c.race_time.desc(),
+                                           _schema.races.c.race_id)
         ).all()
     return [_race_row(r) for r in rows]
 

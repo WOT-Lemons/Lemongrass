@@ -2980,6 +2980,34 @@ class TestOldRaceMetadataFailure:
                     result = _mod.old_race(ctx, opts)
         assert result == 1
 
+    def test_skip_path_rewrites_the_sessions(self):
+        """The skip checks never look at sessions, so a run whose session write
+        failed after laps and standings were already complete would land on the
+        skip path forever with a stale session set unless it rewrites them."""
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide',
+                              return_value=(1, 1)):
+                with patch.object(_mod, 'store_race', return_value=True):
+                    with patch.object(_mod, 'store_sessions',
+                                      return_value=True) as mock_sessions:
+                        result = _mod.old_race(ctx, opts)
+        assert result is None
+        assert mock_sessions.call_count == 1
+        assert [s[0] for s in mock_sessions.call_args.args[1]] == [1]
+
+    def test_skip_path_fails_run_when_the_session_rewrite_fails(self):
+        ctx = self._ctx()
+        opts = _mod.RaceOptions(network_mode=True, skip_if_complete=True)
+        with patch.object(_mod, 'existing_lap_counts_fieldwide', return_value=(1, 1)):
+            with patch.object(_mod, 'existing_standings_counts_fieldwide',
+                              return_value=(1, 1)):
+                with patch.object(_mod, 'store_race', return_value=True):
+                    with patch.object(_mod, 'store_sessions', return_value=False):
+                        result = _mod.old_race(ctx, opts)
+        assert result == 1
+
     def test_write_path_fails_run_when_metadata_write_fails(self):
         ctx = self._ctx()
         opts = _mod.RaceOptions(network_mode=True)
@@ -3493,6 +3521,38 @@ def test_monitor_routine_keeps_a_failed_flush_entry_queued_for_the_next_poll():
     # Poll 1 defers session 1 (race row missing). Poll 2's store_race succeeds
     # and the flush attempt fails (transient error) -> stays queued, not
     # dropped. Poll 3 flushes it successfully.
+    assert store.call_args_list == [
+        call(ctx, 1, 'S1', None),
+        call(ctx, 1, 'S1', None),
+    ]
+
+
+def test_monitor_routine_queues_a_failed_immediate_session_write():
+    """A session change writes straight through once the race row exists. The
+    local session_id has already advanced by then, so the change is never
+    detected again — a failed write must join the retry queue or the session
+    row stays missing for the rest of the race."""
+    stop = threading.Event()
+    ctx = _monitor_ctx()          # live.get_session always returns Session ID 1 'S1'
+    ctx.write_api = MagicMock()
+    opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+    poll_count = 0
+
+    def fake_refresh(c):
+        nonlocal poll_count
+        poll_count += 1
+        if poll_count >= 3:
+            stop.set()
+        return []
+
+    with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh), \
+         patch.object(_mod, 'store_race', return_value=True), \
+         patch.object(_mod, 'store_session', side_effect=[False, True]) as store, \
+         patch.object(_mod, 'push_influx_standings_live', return_value={}):
+        _mod.monitor_routine(ctx, [], opts, race_meta_written=True, _stop_event=stop)
+    # Poll 1's immediate write fails and queues; poll 2 flushes it; poll 3 has
+    # nothing left to do.
     assert store.call_args_list == [
         call(ctx, 1, 'S1', None),
         call(ctx, 1, 'S1', None),
