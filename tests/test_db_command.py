@@ -1,5 +1,6 @@
 import logging
 import sys
+from unittest.mock import patch
 
 from sqlalchemy import inspect
 
@@ -40,3 +41,20 @@ def test_current_reports_head_after_upgrade(monkeypatch, clean_db, postgres_url,
     monkeypatch.setattr(sys, "argv", ["lemongrass-db", "current"])
     assert db.main() == 0
     assert "0001" in capsys.readouterr().out
+
+
+def test_import_legacy_dispatches_and_prints_counts(monkeypatch, capsys):
+    from lemongrass import db as db_mod
+    summary = {'races_read': 3, 'races_written': 3, 'sessions_read': 4,
+               'sessions_written': 3, 'sessions_skipped': 1,
+               'orphan_race_ids': ['64202']}
+    monkeypatch.setattr(sys, 'argv', ['lemongrass-db', 'import-legacy', '--dry-run'])
+    with patch('lemongrass._influx.connect'), \
+         patch('lemongrass._legacy_migration.import_legacy',
+               return_value=summary) as run, \
+         patch('lemongrass._db.list_races', return_value=[]), \
+         patch('lemongrass._db.list_sessions', return_value=[]):
+        assert db_mod.main() == 0
+    assert run.call_args.kwargs['dry_run'] is True
+    out = capsys.readouterr().out
+    assert '64202' in out
