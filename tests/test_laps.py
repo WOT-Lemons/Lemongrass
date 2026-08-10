@@ -5269,10 +5269,22 @@ def test_influx_only_skip_reads_the_race_row_from_postgres():
          patch.object(_mod, 'stored_race_completeness',
                       side_effect=lambda c: ctx_seen.append(c.race_id) or None):
         assert _mod._influx_only_skip('999') is False
-    # The race row no longer comes from Influx, but the lap and standings
-    # counts still do, so the connection is still opened.
+    # The race row comes from Postgres and is not a skip candidate here, so
+    # the unstored case does no Influx I/O at all.
     assert ctx_seen == ['999']
+    conn.assert_not_called()
+
+
+def test_influx_only_skip_opens_influx_only_for_a_settled_skip_candidate():
+    complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000)
+    with patch.object(_mod._influx, 'connect') as conn, \
+         patch.object(_mod, 'stored_race_completeness', return_value=complete), \
+         patch.object(_mod, 'stored_end_settled', return_value=True), \
+         patch.object(_mod, 'race_complete_in_influx', return_value=True) as rci:
+        conn.return_value.__enter__.return_value.query_api.return_value = MagicMock()
+        assert _mod._influx_only_skip('999') is True
     conn.assert_called_once()
+    rci.assert_called_once()
 
 
 class TestStoredEndSettled:

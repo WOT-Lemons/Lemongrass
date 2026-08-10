@@ -1846,18 +1846,17 @@ def _influx_only_skip(race_id):
     """True when race_id is complete, current, and ended per stored data alone.
 
     Answers the backfill skip decision without any RaceMonitor call: the race
-    row comes from Postgres, the lap and standings counts from a short-lived
-    read-only Influx connection. Any race that is not definitively ended (see
-    stored_end_settled) returns False so it falls through to the normal flow's
-    is_live check.
+    row comes from Postgres, the lap and standings counts from Influx. Any
+    race that is not definitively ended (see stored_end_settled) returns False
+    so it falls through to the normal flow's is_live check.
     """
+    ctx = RaceContext(race_id, None, None, None, 0)
+    stored = stored_race_completeness(ctx)
+    if stored is None or not stored_end_settled(stored):
+        return False
     with _influx.connect() as influx_client:
-        ctx = RaceContext(race_id, None, None, None, 0,
-                          query_api=influx_client.query_api())
-        stored = stored_race_completeness(ctx)
-        return (stored is not None
-                and stored_end_settled(stored)
-                and race_complete_in_influx(ctx, stored))
+        ctx.query_api = influx_client.query_api()
+        return race_complete_in_influx(ctx, stored)
 
 
 def _build_class_index(session_details):
