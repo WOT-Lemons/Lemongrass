@@ -92,3 +92,23 @@ id = 145   # 24 Hours of Lemons
   id = "gp-du-lac"
   name = "GP du Lac Chargoggagogg(etc)"
   keywords = ["gp du lac", "chargoggagogg"]
+
+  [[series.event]]
+  id = "halloween-hooptiefest"
+  name = "Halloween Hooptiefest"
+  keywords = ["halloween"]
+
+  [[series.event]]
+  id = "real-hoopties-nj"
+  name = "Real Hoopties of New Jersey"
+  keywords = ["hoopties of new jersey", "hoopties of nj"]
+
+  [[series.event]]
+  id = "bracket-grand-prix"
+  name = "Bracket Grand Prix"
+  keywords = ["bracket grand prix", "bracket grad prix"]
+
+  [[series.event]]
+  id = "pitt-maneuver"
+  name = "The Pitt Maneuver"
+  keywords = ["pitt maneuver", "lemons pitt"]

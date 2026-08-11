@@ -477,6 +477,62 @@ def test_event_matches_every_race_name_spelling(race_name):
     assert got.event_id == "gp-du-lac"
 
 
+# The 23 real production race names that had no event before the four new
+# 24 Hours of Lemons events were curated (halloween-hooptiefest,
+# real-hoopties-nj, bracket-grand-prix, pitt-maneuver). Names are verbatim
+# from the production race list, typos included.
+@pytest.mark.parametrize("track_name,race_name,event_id", [
+    ("New Hampshire Motor Speedway", "24 Lemons- Halloween Hooptiefest",
+     "halloween-hooptiefest"),
+    ("New Jersey Motorsports Park", "Lemons - Real Hoopties of New Jersey",
+     "real-hoopties-nj"),
+    ("New Hampshire Motor Speedway", "Lemons - Halloween Hooptiefest",
+     "halloween-hooptiefest"),
+    ("New Jersey Motorsports Park",
+     "24 Hours of Lemons-Reat Hoopties of NJ @ Hooptiecon, Presented by Yokohama",
+     "real-hoopties-nj"),
+    ("New Hampshire Motor Speedway", "24 Hours of Lemons- Halloween Hooptiefest",
+     "halloween-hooptiefest"),
+    ("New Hampshire Motor Speedway", "24 Hours of Lemons-Halloween H-Fest-2020",
+     "halloween-hooptiefest"),
+    ("New Jersey Motorsports Park", "Yokohama Real Hoopties Of New Jersey",
+     "real-hoopties-nj"),
+    ("New Hampshire Motor Speedway", "Halloween Hooptiefest",
+     "halloween-hooptiefest"),
+    ("Pittsburgh International Race Complex", "24 Hours of Lemons-PITT",
+     "pitt-maneuver"),
+    ("New Jersey Motorsports Park",
+     "24 Hours of Lemons - Yokohama Real Hoopties of NJ", "real-hoopties-nj"),
+    ("Thompson Motor Speedway", "Bracket Grad Prix", "bracket-grand-prix"),
+    ("New Hampshire Motor Speedway", "Halloween Hooptiefest 2022",
+     "halloween-hooptiefest"),
+    ("New Jersey Motorsports Park", "Yokohama Real Hoopties of New Jersey 2023",
+     "real-hoopties-nj"),
+    ("Thompson Motor Speedway", "Bracket Grand Prix 2023", "bracket-grand-prix"),
+    ("New Hampshire Motor Speedway", "Halloween Hooptiefest 2023",
+     "halloween-hooptiefest"),
+    ("Pittsburgh International Race Complex", "The Pitt Maneuver",
+     "pitt-maneuver"),
+    ("New Jersey Motorsports Park", "Real Hoopties of New Jersey 2024",
+     "real-hoopties-nj"),
+    ("Thompson Motor Speedway", "Bracket Grand Prix 2024", "bracket-grand-prix"),
+    ("New Hampshire Motor Speedway", "Halloween Hooptiefest 2024",
+     "halloween-hooptiefest"),
+    ("Pittsburgh International Race Complex", "The Pitt Maneuver",
+     "pitt-maneuver"),
+    ("New Jersey Motorsports Park", "Real Hoopties of New Jersey 2025",
+     "real-hoopties-nj"),
+    ("New Hampshire Motor Speedway", "Halloween Hoopiefest 2025",
+     "halloween-hooptiefest"),
+    ("New Jersey Motorsports Park", "Real Hoopties of New Jersey 2026",
+     "real-hoopties-nj"),
+])
+def test_previously_unresolved_production_race_names_resolve_to_one_event(
+        track_name, race_name, event_id):
+    got = _tracks.resolve(track_name, race_name, 145)
+    assert got.event_id == event_id
+
+
 def test_event_lookup_is_scoped_to_the_named_series():
     got = _tracks.resolve("Thompson Motor Speedway", "GP du Lac 2023", 999)
     assert got.event_id is None
