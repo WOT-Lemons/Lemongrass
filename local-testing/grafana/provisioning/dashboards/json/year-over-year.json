@@ -32,7 +32,7 @@
         {
           "refId": "A",
           "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
-          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\n\ndata =\n  from(bucket: \"laps\")\n    |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"lap\")\n    |> filter(fn: (r) => ${pairs:raw})\n    |> filter(fn: (r) => r._field == \"lap_time\")\n    |> map(fn: (r) => ({r with year: dict.get(dict: years, key: r.race_id, default: \"unknown\")}))\n    |> toFloat()\n\nmed =\n  data\n    |> group(columns: [\"year\"])\n    |> median()\n    |> map(fn: (r) => ({year: r.year, stat: \"median\", _value: r._value}))\n\nbest =\n  data\n    |> group(columns: [\"year\"])\n    |> min()\n    |> map(fn: (r) => ({year: r.year, stat: \"best\", _value: r._value}))\n\nunion(tables: [med, best])\n  |> pivot(rowKey: [\"year\"], columnKey: [\"stat\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"year\"])"
+          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\n\ndata =\n  from(bucket: \"laps\")\n    |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"lap\")\n    |> filter(fn: (r) => ${pairs:raw})\n    |> filter(fn: (r) => r._field == \"lap_time\")\n    |> map(fn: (r) => ({r with year: dict.get(dict: years, key: r.race_id, default: \"unknown\")}))\n    |> toFloat()\n\nmed =\n  data\n    |> group(columns: [\"year\"])\n    |> median()\n    |> map(fn: (r) => ({year: r.year, stat: \"median\", _value: r._value}))\n\nbest =\n  data\n    |> filter(fn: (r) => r._value > 0)\n    |> group(columns: [\"year\"])\n    |> min()\n    |> map(fn: (r) => ({year: r.year, stat: \"best\", _value: r._value}))\n\nunion(tables: [med, best])\n  |> pivot(rowKey: [\"year\"], columnKey: [\"stat\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"year\"])"
         }
       ]
     },
@@ -102,7 +102,7 @@
           "links": [
             {
               "title": "Open this race",
-              "url": "/d/SI7eTlIMk/laps?var-raceid=${__data.fields.race_id}"
+              "url": "/d/SI7eTlIMk/laps?var-raceid=${__data.fields.race_id}&from=0&to=now"
             }
           ]
         },
@@ -118,7 +118,7 @@
         {
           "refId": "A",
           "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
-          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\nraces = dict.fromList(pairs: ${racemap:raw})\n\nfrom(bucket: \"laps\")\n  |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n  |> filter(fn: (r) => r._measurement == \"lap\")\n  |> filter(fn: (r) => ${pairs:raw})\n  |> filter(fn: (r) => r._field == \"lap_time\")\n  |> group()\n  |> min()\n  |> map(fn: (r) => ({\n      best_lap: r._value,\n      race_id: r.race_id,\n      race: dict.get(dict: races, key: r.race_id, default: \"unknown\"),\n      year: dict.get(dict: years, key: r.race_id, default: \"unknown\"),\n    }))"
+          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\nraces = dict.fromList(pairs: ${racemap:raw})\n\nfrom(bucket: \"laps\")\n  |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n  |> filter(fn: (r) => r._measurement == \"lap\")\n  |> filter(fn: (r) => ${pairs:raw})\n  |> filter(fn: (r) => r._field == \"lap_time\")\n  |> filter(fn: (r) => r._value > 0)\n  |> group()\n  |> min()\n  |> map(fn: (r) => ({\n      best_lap: r._value,\n      race_id: r.race_id,\n      race: dict.get(dict: races, key: r.race_id, default: \"unknown\"),\n      year: dict.get(dict: years, key: r.race_id, default: \"unknown\"),\n    }))"
         }
       ]
     },

@@ -292,6 +292,30 @@ def test_the_query_panels_share_their_load_bearing_flux_constraints():
         assert '_field == "lap_no"' in _panel_query(panels[panel_id]), panel_id
 
 
+def test_the_best_and_yoy_panels_floor_lap_time_before_taking_the_minimum():
+    # A lap_time of 0 exists in real data (e.g. race 158120, every car) and
+    # would otherwise win min() outright, rendering "best lap" as 00:00.000
+    # and collapsing panel 1's `best` series for that year. The floor must
+    # only affect the `best` pipeline in panel 1, never `median`.
+    panels = {p['id']: p for p in _panels(json.loads(YEAR_OVER_YEAR.read_text()))}
+
+    panel4_query = _panel_query(panels[4])
+    assert re.search(
+        r'_field == "lap_time"\)\s*\n\s*\|> filter\(fn: \(r\) => r\._value > 0\)\s*\n'
+        r'\s*\|> group\(\)\s*\n\s*\|> min\(\)',
+        panel4_query), 'panel 4 must filter r._value > 0 before min()'
+
+    panel1_query = _panel_query(panels[1])
+    best_pipeline = panel1_query.split('best =')[1]
+    assert re.search(
+        r'\|> filter\(fn: \(r\) => r\._value > 0\)\s*\n\s*\|> group\(columns: \["year"\]\)\s*\n'
+        r'\s*\|> min\(\)',
+        best_pipeline), 'panel 1 best series must filter r._value > 0 before min()'
+    median_pipeline = panel1_query.split('med =')[1].split('best =')[0]
+    assert 'r._value > 0' not in median_pipeline, (
+        'the median series must not be floored -- it never had the zero-lap bug')
+
+
 def test_the_best_lap_tile_links_into_the_per_race_dashboard():
     # The link is the only drill-down from an aggregate back to a single race.
     # laps.json's uid and its race variable name are what make it resolve; a
@@ -307,5 +331,10 @@ def test_the_best_lap_tile_links_into_the_per_race_dashboard():
             assert len(links) == 1
             assert laps_uid in links[0]['url']
             assert 'var-raceid=${__data.fields.race_id}' in links[0]['url']
+            # Grafana data links don't inherit the source dashboard's time
+            # range, and laps.json defaults to now-30m: without an explicit
+            # range here, opening this link for any older race renders blank.
+            assert 'from=' in links[0]['url']
+            assert 'to=' in links[0]['url']
             return
     raise AssertionError('no "Best lap ever" panel found in the dashboard')
