@@ -258,6 +258,7 @@ def test_data_is_cached(tmp_path):
     ("Thompson Motor Speedway", "thompson", None),
     ("Thompson Speedway Motorsports Park", "thompson", None),
     ("Thompson Raceway Motorsports Park", "thompson", None),
+    ("Thompson Raceway", "thompson", None),
     ("Gingerman", "gingerman", None),
     ("Gingerman Raceway", "gingerman", None),
     ("The Ridge", "the-ridge", None),

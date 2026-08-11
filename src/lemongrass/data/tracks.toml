@@ -15,7 +15,7 @@
 id = "thompson"
 name = "Thompson Speedway Motorsports Park"
 aliases = ["thompson motor speedway", "thompson raceway motorsports park",
-           "thompson speedway"]
+           "thompson speedway", "thompson raceway"]
 
 [[venue]]
 id = "gingerman"
