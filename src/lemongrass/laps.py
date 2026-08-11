@@ -792,8 +792,7 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     race_meta_written = True
     pending_sessions = []
     if opts.network_mode:
-        race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-        race_meta_written = store_race(ctx, race_ts_ms)
+        race_meta_written = store_race(ctx)
         if race_meta_written:
             store_entry(ctx)
         if live_session_id is not None:
@@ -1001,10 +1000,7 @@ def old_race(ctx, opts):
                 # state is rare).
                 std_total, std_current = existing_standings_counts_fieldwide(ctx)
                 if std_total > 0 and std_current == std_total:
-                    race_ts_ms = (
-                        ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-                    )
-                    if not store_race(ctx, race_ts_ms, expected, len(pending_writes)):
+                    if not store_race(ctx, expected, len(pending_writes)):
                         logging.error(
                             "Race metadata write failed for race %s — failing the "
                             "run so the next backfill retries", ctx.race_id)
@@ -1039,7 +1035,6 @@ def old_race(ctx, opts):
             "Writing %d session(s), %d competitor(s)...",
             len(pending_writes), total_competitors)
 
-        race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
         _apply_total_time_offsets(pending_writes)
         try:
             for session in pending_writes:
@@ -1061,7 +1056,7 @@ def old_race(ctx, opts):
         # foreign key, so a session for an unstored race is rejected outright,
         # the race is never stamped, and each retry repeats the failure. Influx
         # had no referential integrity, which is why the old order worked.
-        if not store_race(ctx, race_ts_ms, expected, len(pending_writes)):
+        if not store_race(ctx, expected, len(pending_writes)):
             logging.error(
                 "Race metadata write failed for race %s — failing the run so the "
                 "next backfill retries", ctx.race_id)
@@ -1240,10 +1235,7 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 # RaceMonitor still hasn't posted a start epoch — the point must
                 # not stay missing just because the epoch never arrives; the
                 # epoch recheck above forces a rewrite if it shows up later.
-                race_ts_ms = (
-                    ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
-                )
-                race_meta_written = store_race(ctx, race_ts_ms)
+                race_meta_written = store_race(ctx)
                 if race_meta_written:
                     store_entry(ctx)
 
@@ -1668,7 +1660,7 @@ def _sync_tracks_once():
             _tracks_sync_failed = True
 
 
-def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
+def store_race(ctx, expected_lap_count=None, session_count=None):
     """Insert or update this race's row in Postgres.
 
     Returns True on success, False when metadata is missing or the write
@@ -1677,22 +1669,27 @@ def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
     was, so a False return no longer means the race may have vanished. The
     caller still fails the run so a retry brings the row up to date.
 
-    timestamp_ms is kept in milliseconds at the boundary because both callers
-    compute it that way (start epoch, or wall clock when the epoch has not
-    been posted yet). A zero ctx.start_epoc is exactly the second case — every
-    caller writes the same fallback — so the row is flagged as carrying an
-    estimated race_time, which upsert_race will insert but not overwrite with.
+    The race time is derived here rather than passed in. It is the start epoch
+    when RaceMonitor has posted one, and the wall clock when it has not — and
+    that second case is exactly what makes the row's race_time an estimate,
+    which upsert_race inserts but never overwrites with. Value and flag are
+    two halves of one decision, so computing them anywhere but together lets a
+    caller pass a wall-clock time with a known start epoch (freezing a wrong
+    race_time) or a real epoch flagged as a guess (letting a restart drag it
+    forward again).
     """
     if ctx.metadata is None:
         logging.warning("store_race called with no metadata for race %s", ctx.race_id)
         return False
     meta = ctx.metadata
+    estimated = ctx.start_epoc == 0
+    timestamp_ms = int(time.time() * 1000) if estimated else ctx.start_epoc * 1000
     try:
         _sync_tracks_once()
         _db.upsert_race(_db.RaceRow(
             race_id=ctx.race_id,
             race_time=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
-            race_time_estimated=ctx.start_epoc == 0,
+            race_time_estimated=estimated,
             name=meta.race_name or '',
             track_name=meta.track_name or '',
             series_id=meta.series_id,
@@ -2000,6 +1997,13 @@ def _influx_only_skip(race_id):
     were already complete would skip on every rerun and keep a stale set
     forever. A legacy row with no stored session_count has nothing to compare
     and is left alone.
+
+    Only a shortfall counts. session_count is written by the backfill alone,
+    from its post-dedupe write list, while the live monitor inserts session
+    rows without bumping it — so a surplus is the normal result of monitoring
+    a race that was backfilled earlier, not a lost write, and treating it as
+    one would re-fetch the whole race under the rate limit on every later
+    backfill and never converge.
     """
     ctx = RaceContext(race_id, None, None, None, 0)
     stored = stored_race_completeness(ctx)
@@ -2007,7 +2011,7 @@ def _influx_only_skip(race_id):
         return False
     if stored.session_count is not None:
         have = len(_db.list_sessions(race_id))
-        if have != stored.session_count:
+        if have < stored.session_count:
             logging.info(
                 "Race %s has %d of %d sessions stored; not skipping so the "
                 "backfill can rewrite them", race_id, have, stored.session_count)

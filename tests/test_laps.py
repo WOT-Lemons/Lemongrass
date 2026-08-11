@@ -1976,7 +1976,9 @@ class TestLiveRaceMetadataFailure:
                                          race_meta_written=False)
 
         assert mock_race.call_count == 1
-        assert mock_race.call_args[0][1] > 1_000_000_000_000  # wall-clock ms, not 0
+        # start_epoc is still 0 here — store_race turns that into the
+        # wall-clock fallback, flagged as an estimate, rather than a 1970 row.
+        assert mock_race.call_args[0][0].start_epoc == 0
 
 
 class TestOldRaceClassWiring:
@@ -2132,21 +2134,9 @@ class TestOldRaceClassWiring:
                 with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        assert mock_race.call_args.args[1] == 5000 * 1000
-
-    def test_old_race_store_race_uses_wall_clock_when_start_epoc_zero(self):
-        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
-        ctx.delete_api = MagicMock()
-        opts = _mod.RaceOptions(network_mode=True)
-        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
-        ctx.client.results.session_details.return_value = self._session_details()
-        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'store_race') as mock_race:
-                    with patch.object(_mod, 'print_rankings'):
-                        with patch.object(_mod.time, 'time', return_value=12345.0):
-                            _mod.old_race(ctx, opts)
-        assert mock_race.call_args.args[1] == 12345000
+        # store_race derives the race time from the ctx it is handed, so what
+        # this path owes it is a ctx carrying the fetched start epoch.
+        assert mock_race.call_args.args[0].start_epoc == 5000
 
     def test_old_race_store_race_not_called_when_not_network_mode(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
@@ -2408,19 +2398,9 @@ class TestLiveClassWiring:
                 with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
-        assert mock_race.call_args.args[1] == 1000 * 1000
-
-    def test_live_race_store_race_timestamp_uses_wall_clock_when_start_epoc_zero(self):
-        ctx = self._make_ctx()
-        ctx.start_epoc = 0
-        opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
-            with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'store_race') as mock_race:
-                    with patch.object(_mod, 'print_rankings'):
-                        _mod.live_race(ctx, opts)
-        assert mock_race.called
-        assert mock_race.call_args.args[1] > 0
+        # store_race derives the race time from the ctx it is handed, so what
+        # this path owes it is a ctx carrying the current start epoch.
+        assert mock_race.call_args.args[0].start_epoc == 1000
 
     def test_live_race_store_race_called_even_when_no_laps(self):
         ctx = self._make_ctx()
@@ -2742,7 +2722,7 @@ class TestMonitorRoutineEpocRecheck:
                                      _stop_event=self._stop_after(1))
         assert ctx.start_epoc == 5000
 
-    def test_calls_store_race_with_updated_timestamp(self):
+    def test_calls_store_race_once_the_epoch_is_known(self):
         ctx = self._make_ctx(start_epoc=0)
         opts = _mod.RaceOptions(network_mode=True, interval=30)
         ctx.client.race.details.return_value = {
@@ -2753,7 +2733,10 @@ class TestMonitorRoutineEpocRecheck:
             with patch.object(_mod, 'store_race') as mock_race:
                 _mod.monitor_routine(ctx, [self._existing_lap], opts,
                                      _stop_event=self._stop_after(1))
-        mock_race.assert_called_once_with(ctx, 5000 * 1000)
+        # The recheck stamped the epoch onto the ctx before the retry, which
+        # is the whole point: store_race reads its race time from there.
+        mock_race.assert_called_once_with(ctx)
+        assert ctx.start_epoc == 5000
 
     def test_updates_metadata_end_time_epoc_when_api_returns_epoc(self):
         ctx = self._make_ctx(start_epoc=0)
@@ -2899,9 +2882,10 @@ def _meta(**kw):
 
 
 def test_store_race_converts_epochs_to_timestamps():
-    ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
+    ctx = _mod.RaceContext('101', None, None, None, 1_700_000_000,
+                           metadata=_meta())
     with patch.object(_mod._db, 'upsert_race') as up:
-        assert _mod.store_race(ctx, 1_700_000_000_000, 120, 2) is True
+        assert _mod.store_race(ctx, 120, 2) is True
     row = up.call_args.args[0]
     assert row.race_id == '101'
     assert row.race_time == datetime.fromtimestamp(1_700_000_000, tz=UTC)
@@ -2915,7 +2899,7 @@ def test_store_race_converts_epochs_to_timestamps():
 def test_store_race_omits_completeness_on_the_live_path():
     ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
     with patch.object(_mod._db, 'upsert_race') as up:
-        assert _mod.store_race(ctx, 1_700_000_000_000) is True
+        assert _mod.store_race(ctx) is True
     row = up.call_args.args[0]
     assert row.expected_lap_count is None
     assert row.session_count is None
@@ -2923,42 +2907,50 @@ def test_store_race_omits_completeness_on_the_live_path():
 
 
 def test_store_race_flags_a_wall_clock_race_time_as_an_estimate():
-    # start_epoc 0 means RaceMonitor has not posted StartDateEpoc, so every
-    # caller passes wall-clock now(). Marking it lets upsert_race insert the
-    # guess without ever overwriting a start time that is already known.
+    # start_epoc 0 means RaceMonitor has not posted StartDateEpoc, so the row
+    # carries wall-clock now(). Deriving the timestamp and the flag together
+    # is what keeps them from ever disagreeing. Marking it lets upsert_race
+    # insert the guess without overwriting a start time that is already known.
     ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
-    with patch.object(_mod._db, 'upsert_race') as up:
-        _mod.store_race(ctx, 1_700_000_000_000)
-    assert up.call_args.args[0].race_time_estimated is True
+    with patch.object(_mod._db, 'upsert_race') as up, \
+         patch.object(_mod.time, 'time', return_value=12345.0):
+        _mod.store_race(ctx)
+    row = up.call_args.args[0]
+    assert row.race_time_estimated is True
+    assert row.race_time == datetime.fromtimestamp(12345, tz=UTC)
 
 
 def test_store_race_does_not_flag_a_known_start_epoch():
     ctx = _mod.RaceContext('101', None, None, None, 1_700_000_000,
                            metadata=_meta())
-    with patch.object(_mod._db, 'upsert_race') as up:
-        _mod.store_race(ctx, 1_700_000_000_000)
-    assert up.call_args.args[0].race_time_estimated is False
+    with patch.object(_mod._db, 'upsert_race') as up, \
+         patch.object(_mod.time, 'time', return_value=12345.0):
+        _mod.store_race(ctx)
+    row = up.call_args.args[0]
+    assert row.race_time_estimated is False
+    # The start epoch wins over the wall clock, not the other way round.
+    assert row.race_time == datetime.fromtimestamp(1_700_000_000, tz=UTC)
 
 
 def test_store_race_zero_end_epoch_becomes_none():
     ctx = _mod.RaceContext('101', None, None, None, 0,
                            metadata=_meta(end_time_epoc=0))
     with patch.object(_mod._db, 'upsert_race') as up:
-        _mod.store_race(ctx, 1_700_000_000_000)
+        _mod.store_race(ctx)
     assert up.call_args.args[0].end_time is None
 
 
 def test_store_race_without_metadata_returns_false():
     ctx = _mod.RaceContext('101', None, None, None, 0)
     with patch.object(_mod._db, 'upsert_race') as up:
-        assert _mod.store_race(ctx, 1_700_000_000_000) is False
+        assert _mod.store_race(ctx) is False
     up.assert_not_called()
 
 
 def test_store_race_returns_false_on_error(caplog):
     ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
     with patch.object(_mod._db, 'upsert_race', side_effect=Exception('boom')):
-        assert _mod.store_race(ctx, 1_700_000_000_000) is False
+        assert _mod.store_race(ctx) is False
     assert 'boom' in caplog.text
 
 
@@ -3880,8 +3872,8 @@ class TestOldRaceFullField:
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
-        expected_arg = mock_stamp.call_args[0][2]
-        session_count_arg = mock_stamp.call_args[0][3]
+        expected_arg = mock_stamp.call_args[0][1]
+        session_count_arg = mock_stamp.call_args[0][2]
         assert expected_arg == len(captured)
         assert session_count_arg == 1
 
@@ -5482,6 +5474,21 @@ def test_influx_only_skip_still_skips_when_every_session_is_stored():
         assert _mod._influx_only_skip('999') is True
 
 
+def test_influx_only_skip_tolerates_more_sessions_than_the_count():
+    # session_count is written by the backfill only, post-dedupe; the live
+    # monitor inserts session rows without bumping it. A surplus is that, not
+    # a lost write, and re-fetching the whole race under the rate limit on
+    # every later backfill would be the cure being worse than the disease.
+    complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000, session_count=2)
+    with patch.object(_mod._influx, 'connect') as conn, \
+         patch.object(_mod, 'stored_race_completeness', return_value=complete), \
+         patch.object(_mod, 'stored_end_settled', return_value=True), \
+         patch.object(_mod, 'race_complete_in_influx', return_value=True), \
+         patch.object(_mod._db, 'list_sessions', return_value=[1, 2, 3]):
+        conn.return_value.__enter__.return_value.query_api.return_value = MagicMock()
+        assert _mod._influx_only_skip('999') is True
+
+
 def test_stored_race_completeness_carries_the_session_count():
     from lemongrass import _db
     ctx = _mod.RaceContext('999', None, None, None, 0)
@@ -5803,7 +5810,7 @@ def test_store_race_passes_identity_through():
         end_time_epoc=0, series_id=145, venue_id='thompson',
         event_id='gp-du-lac'))
     with patch('lemongrass._db.upsert_race') as upsert:
-        assert laps.store_race(ctx, 1_700_000_000_000) is True
+        assert laps.store_race(ctx) is True
     row = upsert.call_args.args[0]
     assert (row.venue_id, row.layout_id, row.event_id) == (
         'thompson', None, 'gp-du-lac')
@@ -5823,7 +5830,7 @@ def test_store_race_syncs_curated_tracks_before_writing(monkeypatch):
         end_time_epoc=0, venue_id='thompson'))
     with patch('lemongrass._db.sync_tracks') as sync, \
          patch('lemongrass._db.upsert_race') as upsert:
-        assert laps.store_race(ctx, 1_700_000_000_000) is True
+        assert laps.store_race(ctx) is True
     assert sync.called
     assert upsert.called
 
@@ -5840,7 +5847,7 @@ def test_store_race_still_writes_when_the_sync_fails(monkeypatch):
         end_time_epoc=0))
     with patch('lemongrass._db.sync_tracks', side_effect=RuntimeError('down')), \
          patch('lemongrass._db.upsert_race') as upsert:
-        assert laps.store_race(ctx, 1_700_000_000_000) is True
+        assert laps.store_race(ctx) is True
     assert upsert.called
 
 

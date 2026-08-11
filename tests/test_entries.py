@@ -141,7 +141,7 @@ def test_confirm_keeps_going_when_a_race_has_no_stored_row(capsys):
     # y to both entries; only the second gets an alias offer, answered n.
     with patch("builtins.input", side_effect=["y", "y", "n"]), \
          patch("lemongrass._db.set_entry", side_effect=write):
-        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 1)
+        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 1, False)
     assert "no race row for '101'" in capsys.readouterr().err
 
 
@@ -158,7 +158,7 @@ def test_confirm_treats_eof_as_declining_the_rest():
     # y, n to the alias, then EOF on the second entry's prompt.
     with patch("builtins.input", side_effect=["y", "n", EOFError]), \
          patch("lemongrass._db.set_entry"):
-        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 0)
+        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 0, True)
 
 
 def test_confirm_treats_eof_at_the_alias_prompt_as_no():
@@ -169,8 +169,27 @@ def test_confirm_treats_eof_at_the_alias_prompt_as_no():
     with patch("builtins.input", side_effect=["y", EOFError]), \
          patch("lemongrass._db.set_entry"), \
          patch("lemongrass._db.add_team_alias") as add_alias:
-        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 0)
+        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 0, True)
     add_alias.assert_not_called()
+
+
+def test_cli_propose_exits_nonzero_when_input_ran_out(capsys):
+    # A cron job or a redirect from /dev/null hits EOF on the first prompt.
+    # Ending cleanly is right; reporting success is not — nothing was
+    # recorded, and exit 0 would let the misconfiguration pass unnoticed.
+    from lemongrass import _db, entries
+    proposals = [{"race_id": "101", "car_number": "252",
+                  "competitor_name": "WOT Lemons", "existing_team_id": None}]
+    with patch("lemongrass._db.get_team",
+               return_value=_db.TeamRow("wot-lemons", "WOT Lemons")), \
+         patch("lemongrass._influx.connect"), \
+         patch.object(entries, "propose_entries", return_value=proposals), \
+         patch("builtins.input", side_effect=EOFError), \
+         patch("lemongrass._db.set_entry") as write:
+        assert _run(["lemongrass-entries", "propose", "--team", "wot-lemons",
+                     "--term", "wot lemons"]) == 1
+    write.assert_not_called()
+    assert "input ended" in capsys.readouterr().err
 
 
 def test_cli_propose_exits_nonzero_when_every_accepted_write_failed(capsys):
@@ -320,7 +339,7 @@ def test_confirm_writes_only_what_was_accepted(capsys):
     with patch("builtins.input", side_effect=["y", "n", "n"]), \
          patch("lemongrass._db.set_entry") as write, \
          patch("lemongrass._db.add_team_alias") as alias:
-        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 0)
+        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 0, False)
     write.assert_called_once_with("101", "252", "wot-lemons")
     assert not alias.called
 
@@ -352,7 +371,7 @@ def test_confirm_reports_an_alias_conflict_without_aborting(capsys):
          patch("lemongrass._db.set_entry") as write, \
          patch("lemongrass._db.add_team_alias",
                side_effect=ValueError("already recorded for team someone-else")):
-        written, failed = entries.confirm_proposals(proposals, "wot-lemons")
+        written, failed, _ = entries.confirm_proposals(proposals, "wot-lemons")
     # An alias conflict is not an entry failure: both entries were stored.
     assert failed == 0
     assert written == 2

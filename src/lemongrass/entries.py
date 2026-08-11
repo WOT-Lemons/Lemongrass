@@ -10,7 +10,7 @@ the number or from the team name, only from these rows.
 import argparse
 import sys
 
-from lemongrass import _config, _db
+from lemongrass import _config, _db, _prompt
 
 _SUBCOMMANDS = ('set', 'list', 'propose')
 
@@ -169,40 +169,34 @@ def propose_entries(query_api, terms, team_id):
     return proposals
 
 
-def _prompt(text):
-    """input(), returning None instead of raising on end of input.
-
-    Ctrl-D, or a redirected stdin that runs out, means "no more answers" — the
-    caller stops asking and reports what it already wrote, rather than dying
-    part-way through a loop whose earlier answers are already stored.
-    """
-    try:
-        return input(text)
-    except EOFError:
-        print()
-        return None
-
-
 def confirm_proposals(proposals, team_id):
     """Prompt for each proposal and write the accepted ones.
 
-    Returns (written, failed): counts of accepted proposals that were stored
-    and that could not be. failed is reported rather than raised so one
+    Returns (written, failed, aborted): counts of accepted proposals that were
+    stored and that could not be, and whether input ran out before the last
+    proposal was answered. failed is reported rather than raised so one
     unstorable race does not cost the operator every answer after it, but the
     caller needs it — "every write failed" must not exit 0.
+
+    aborted exists for the same reason. Ending cleanly on EOF must not also
+    turn a run that answered nothing into a success: a cron job with no stdin
+    would report "recorded 0 entries" and exit 0 while every proposal went
+    unrecorded, which is the misconfiguration being silently rewarded.
 
     Confirming also offers to record the matched spelling as an alias, so the
     term list improves with use instead of having to be remembered.
     """
     written = failed = 0
+    aborted = False
     for proposal in proposals:
         note = ''
         if proposal['existing_team_id']:
             note = f" (currently {proposal['existing_team_id']})"
-        answer = _prompt(
+        answer = _prompt.ask(
             f"race {proposal['race_id']} car {proposal['car_number']}: "
             f"{proposal['competitor_name']}{note} -> {team_id}? [y/N] ")
         if answer is None:
+            aborted = True
             break
         if answer.strip().lower() != 'y':
             continue
@@ -216,9 +210,10 @@ def confirm_proposals(proposals, team_id):
             failed += 1
             continue
         written += 1
-        alias = _prompt(f"  record {proposal['competitor_name']!r} as an alias "
+        alias = _prompt.ask(f"  record {proposal['competitor_name']!r} as an alias "
                         f"of {team_id}? [y/N] ")
         if alias is None:
+            aborted = True
             break
         if alias.strip().lower() == 'y':
             try:
@@ -228,7 +223,7 @@ def confirm_proposals(proposals, team_id):
                 # abort the loop: the entries already confirmed are good, and
                 # remaining proposals still deserve a prompt.
                 print(f"  {e}", file=sys.stderr)
-    return written, failed
+    return written, failed, aborted
 
 
 def _handle_propose():
@@ -259,10 +254,17 @@ def _handle_propose():
         return 0
     print(f"{len(proposals)} proposed entr"
           f"{'y' if len(proposals) == 1 else 'ies'}:")
-    written, failed = confirm_proposals(proposals, team_id)
+    written, failed, aborted = confirm_proposals(proposals, team_id)
     print(f"recorded {written} entr{'y' if written == 1 else 'ies'}")
     if failed:
         print(f"{failed} accepted entr{'y' if failed == 1 else 'ies'} could "
               f"not be recorded (see above)", file=sys.stderr)
+        return 1
+    if aborted:
+        # Answered proposals are stored and stay stored; the nonzero exit is
+        # about the ones never reached. Exiting 0 here would let a run with no
+        # usable stdin — cron, a redirect from /dev/null — pass its own
+        # monitoring while recording nothing.
+        print("input ended before every proposal was answered", file=sys.stderr)
         return 1
     return 0

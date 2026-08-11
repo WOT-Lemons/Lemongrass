@@ -584,6 +584,23 @@ def set_race_identity(race_id, venue_id, layout_id, event_id, conn=None):
     return result.rowcount > 0
 
 
+def clear_session_count(race_id, conn=None):
+    """Set one race's session_count back to NULL. True if the race exists.
+
+    An explicit UPDATE, for the same reason as set_race_identity: the COALESCE
+    in upsert_race can raise a count but never retract one. The legacy import
+    is the caller — a race whose sessions it could not copy must not keep a
+    count that no rewrite can ever satisfy.
+    """
+    from sqlalchemy import func, update
+    with connection(conn) as c:
+        result = c.execute(
+            update(_schema.races)
+            .where(_schema.races.c.race_id == race_id)
+            .values(session_count=None, updated_at=func.now()))
+    return result.rowcount > 0
+
+
 @dataclass
 class TeamRow:
     """One row of the teams table."""

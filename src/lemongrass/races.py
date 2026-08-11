@@ -12,7 +12,7 @@ import argparse
 import sys
 from datetime import UTC, datetime
 
-from lemongrass import _db, _influx
+from lemongrass import _db, _influx, _prompt
 
 EPOCH_START = '1970-01-01T00:00:00Z'
 
@@ -284,11 +284,7 @@ def _handle_prune():
             print(f"About to delete data for {len(race_ids)} race(s):")
             for rid in race_ids:
                 print(f"  {rid}  {race_names[rid]}")
-            try:
-                answer = input("Proceed? [y/N] ")
-            except EOFError:  # stdin closed mid-run is not consent to delete
-                answer = 'n'
-            if answer.strip().lower() != 'y':
+            if not _prompt.ask_yes("Proceed? [y/N] "):
                 print("Aborted.")
                 sys.exit(0)
 

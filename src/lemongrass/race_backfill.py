@@ -61,7 +61,7 @@ from datetime import UTC, date, datetime, timedelta
 import tomlkit
 from race_monitor import RaceMonitorClient, RaceMonitorError
 
-from lemongrass import _config, _db, _env, _influx
+from lemongrass import _config, _db, _env, _influx, _prompt
 from lemongrass._env import resolve_tokens
 
 _backfill_cfg = _config.load_config().races.backfill
@@ -506,14 +506,6 @@ def _print_config_snippet(result, *, series, terms):
           "LEMONGRASS_CONFIG:\n\n" + '\n'.join(lines) + '\n')
 
 
-def _ask_yes(prompt):
-    """One y/N prompt; EOF (stdin closed mid-run) counts as no."""
-    try:
-        return input(prompt).strip().lower() in ('y', 'yes')
-    except EOFError:
-        return False
-
-
 def _maybe_save_config(result):
     """Offer to persist changed search terms / pinned series after the TUI.
 
@@ -535,11 +527,11 @@ def _maybe_save_config(result):
     # re-advertise (and duplicate) it.
     series_unsaved = result.series_changed
     terms_unsaved = result.terms_changed
-    if result.series_changed and _ask_yes(
+    if result.series_changed and _prompt.ask_yes(
             f"Save series_id={result.series_id} to {path}? [y/N] "):
         series_unsaved = not _save_backfill_value(path, 'series_id',
                                                   result.series_id)
-    if result.terms_changed and _ask_yes(
+    if result.terms_changed and _prompt.ask_yes(
             f"Save updated search terms to {path}? [y/N] "):
         terms_unsaved = not _save_search_terms(path, result.terms)
     if series_unsaved or terms_unsaved:

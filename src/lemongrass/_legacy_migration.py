@@ -59,6 +59,14 @@ def read_legacy_races(query_api):
             rows.append(_db.RaceRow(
                 race_id=vals.get('race_id'),
                 race_time=record.get_time(),
+                # The legacy race point carried no race_time field — its
+                # timestamp IS the race time — and for a race captured live
+                # that timestamp is whatever wall clock the monitor guessed
+                # before StartDateEpoc was posted. Indistinguishable here, so
+                # every legacy race_time inserts but never overwrites: the
+                # first import fills an empty table, and a later catch-up run
+                # cannot regress a value the backfill has since corrected.
+                race_time_estimated=True,
                 # Influx drops empty-string tags entirely, so these come back
                 # absent for a race written from an unsuccessful details fetch.
                 name=vals.get('race_name') or '',
@@ -144,6 +152,10 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
     to write at all — an orphaned race, or a session id a different race
     already owns — so read == written-or-would-write + skipped +
     skipped_existing reconciles in every mode.
+
+    A race that lost a session id to another race has its session_count
+    cleared: the count it carried from Influx counts a session it will never
+    own, and leaving it set strands the race in a re-fetch-then-fail loop.
     """
     races = read_legacy_races(query_api)
     sessions = read_legacy_sessions(query_api)
@@ -172,6 +184,13 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
     # rather than insert, quietly taking the session off the first race.
     owners = {s.session_id: s.race_id for s in _db.list_sessions()}
     orphans = set()
+    # Races that lost a session to another race's claim. Their session_count
+    # came from the legacy race point and counts a session they will never
+    # own, and no rewrite can settle the difference — replace_sessions raises
+    # on an id another race holds. Left set, the count makes _influx_only_skip
+    # refuse the cheap skip forever and every backfill re-fetch the race and
+    # then fail on that same raise.
+    unsatisfiable = set()
     for row in sessions:
         if row.race_id not in existing_races:
             orphans.add(row.race_id)
@@ -183,6 +202,7 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
         owner = owners.get(row.session_id)
         if owner is not None and owner != row.race_id:
             summary['sessions_skipped'] += 1
+            unsatisfiable.add(row.race_id)
             logging.warning(
                 "session %s: already claimed by race %s, skipping the copy "
                 "under race %s", row.session_id, owner, row.race_id)
@@ -195,6 +215,10 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
             _db.upsert_session(row)
             summary['sessions_written'] += 1
         owners[row.session_id] = row.race_id
+
+    if not dry_run:
+        for race_id in sorted(unsatisfiable):
+            _db.clear_session_count(race_id)
 
     summary['orphan_race_ids'] = sorted(orphans)
     return summary
