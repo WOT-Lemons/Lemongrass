@@ -789,6 +789,8 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
     if opts.network_mode:
         race_ts_ms = ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
         race_meta_written = store_race(ctx, race_ts_ms)
+        if race_meta_written:
+            store_entry(ctx)
         if live_session_id is not None:
             if race_meta_written:
                 store_session(ctx, live_session_id, live_session_name, None)
@@ -1237,6 +1239,8 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                     ctx.start_epoc * 1000 if ctx.start_epoc != 0 else int(time.time() * 1000)
                 )
                 race_meta_written = store_race(ctx, race_ts_ms)
+                if race_meta_written:
+                    store_entry(ctx)
 
             if opts.network_mode and race_meta_written and pending_sessions:
                 # The race row just landed (or already had): flush every session
@@ -1688,6 +1692,36 @@ def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
         return True
     except Exception as e:
         logging.error("Writing race failed: %s", e)
+        return False
+
+
+def store_entry(ctx):
+    """Record this race's entry for the tracked car. True if a row was written.
+
+    The monitor already knows race_id and car_number, and [team] id in config
+    names the home team, so running a race records the entry as a side effect —
+    including the year the number changed because another entrant took ours.
+    Fieldwide backfill runs with car_number=None and writes nothing.
+
+    Never fails a race: a missing or misspelled team id is logged and skipped
+    rather than raising a foreign key violation into the write path.
+    """
+    if ctx.car_number is None:
+        return False
+    team_id = _config.load_config().team.id
+    if not team_id:
+        return False
+    if _db.get_team(team_id) is None:
+        logging.warning(
+            "team.id %r has no team row; run `lemongrass teams add %s <name>` "
+            "to record entries", team_id, team_id)
+        return False
+    try:
+        _db.set_entry(ctx.race_id, str(ctx.car_number).strip(), team_id)
+        return True
+    except Exception as e:
+        logging.error("Writing entry failed for race %s car %s: %s",
+                      ctx.race_id, ctx.car_number, e)
         return False
 
 

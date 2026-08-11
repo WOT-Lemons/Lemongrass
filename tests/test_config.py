@@ -335,3 +335,24 @@ class TestPostgresSection:
         c = _config.load_config()
         # The config layer names the env var; it must never carry the secret.
         assert not any("hunter2" in str(v) for v in vars(c.postgres).values())
+
+
+def test_team_id_defaults_to_empty_and_parses(tmp_path, monkeypatch):
+    from lemongrass import _config
+    monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
+    assert _config.load_config().team.id == ""
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    assert _config.load_config().team.id == "wot-lemons"
+
+
+def test_unknown_team_key_is_rejected(tmp_path, monkeypatch):
+    import pytest
+
+    from lemongrass import _config
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nname = "WOT Lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with pytest.raises(_config.ConfigError, match="team"):
+        _config.load_config()

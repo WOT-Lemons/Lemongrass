@@ -24,6 +24,9 @@ series_id = 0                              # 0 = disabled
 [racemonitor]
 tokens_env = "RACEMONITOR_TOKENS"          # env var holding the comma-separated token pool
 
+[team]
+id = ""                                    # our team_id; "" = don't record entries
+
 [telem]
 vin = ""                                   # "" = resolve VIN from OBD
 

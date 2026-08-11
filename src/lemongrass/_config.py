@@ -165,6 +165,13 @@ class PostgresConfig:
 
 
 @dataclass(frozen=True)
+class TeamConfig:
+    """Which team this deployment races as. Empty means "do not record entries"."""
+
+    id: str = ''
+
+
+@dataclass(frozen=True)
 class Config:
     """Top-level lemongrass configuration aggregating all sections."""
 
@@ -174,6 +181,7 @@ class Config:
     telem: TelemConfig = field(default_factory=TelemConfig)
     pisugar: PisugarConfig = field(default_factory=PisugarConfig)
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
+    team: TeamConfig = field(default_factory=TeamConfig)
 
 
 def load_config():
@@ -245,7 +253,7 @@ def _typed(d, key, default, kind, where):
 def _build_config(data):
     """Validate the top-level table and build a Config from its sections."""
     _reject_unknown(
-        data, {'influx', 'races', 'racemonitor', 'telem', 'pisugar', 'postgres'},
+        data, {'influx', 'races', 'racemonitor', 'telem', 'pisugar', 'postgres', 'team'},
         'top level')
     return Config(
         influx=_build_influx(data.get('influx', {})),
@@ -254,6 +262,7 @@ def _build_config(data):
         telem=_build_telem(data.get('telem', {})),
         pisugar=_build_pisugar(data.get('pisugar', {})),
         postgres=_build_postgres(data.get('postgres', {})),
+        team=_build_team(data.get('team', {})),
     )
 
 
@@ -347,6 +356,12 @@ def _build_telem(d):
             max_size=max_size,
         ),
     )
+
+
+def _build_team(d):
+    """Build TeamConfig from the [team] table."""
+    _reject_unknown(d, {'id'}, 'team')
+    return TeamConfig(id=_typed(d, 'id', TeamConfig().id, str, 'team'))
 
 
 def _build_pisugar(d):

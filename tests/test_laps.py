@@ -5765,3 +5765,119 @@ def test_sync_tracks_once_runs_only_once_per_process():
         laps._sync_tracks_once()
         laps._sync_tracks_once()
     assert sync.call_count == 1
+
+
+class TestCaptureRecordsTheEntry:
+    def test_live_race_records_the_entry_after_storing_the_race(self):
+        ctx = TestLiveRace()._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'print_rankings'), \
+             patch.object(_mod, 'push_influx'), \
+             patch.object(_mod, 'push_influx_standings_live', return_value={}), \
+             patch.object(_mod, 'store_race', return_value=True), \
+             patch.object(_mod, 'store_session'), \
+             patch.object(_mod, 'store_entry') as entry:
+            _mod.live_race(ctx, opts)
+        entry.assert_called_once_with(ctx)
+
+    def test_live_race_skips_the_entry_when_the_race_write_failed(self):
+        # entries.race_id is a foreign key; there is no race row to point at.
+        ctx = TestLiveRace()._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'print_rankings'), \
+             patch.object(_mod, 'push_influx'), \
+             patch.object(_mod, 'push_influx_standings_live', return_value={}), \
+             patch.object(_mod, 'store_race', return_value=False), \
+             patch.object(_mod, 'store_session'), \
+             patch.object(_mod, 'store_entry') as entry:
+            _mod.live_race(ctx, opts)
+        assert not entry.called
+
+    def test_monitor_routine_records_the_entry_on_the_retry_path(self):
+        # Built from the existing deferred-session test: poll 1 leaves the race
+        # row unwritten, poll 2's retry stores it — and must record the entry.
+        stop = threading.Event()
+        ctx = _monitor_ctx()
+        ctx.write_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        poll_count = 0
+
+        def fake_refresh(c):
+            nonlocal poll_count
+            poll_count += 1
+            if poll_count >= 2:
+                stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh), \
+             patch.object(_mod, 'store_race', side_effect=[False, True]), \
+             patch.object(_mod, 'store_session'), \
+             patch.object(_mod, 'store_entry') as entry, \
+             patch.object(_mod, 'push_influx_standings_live', return_value={}):
+            _mod.monitor_routine(ctx, [], opts, race_meta_written=False,
+                                 _stop_event=stop)
+        entry.assert_called_once_with(ctx)
+
+
+def _entry_ctx(car_number="252"):
+    from lemongrass import laps
+    return laps.RaceContext('101', car_number, None, None, 0,
+                            metadata=laps.RaceMetadata(
+                                race_name='GP du Lac', track_name='Thompson',
+                                series_name='Lemons', end_time_epoc=0))
+
+
+def test_store_entry_records_the_tracked_car_for_the_configured_team(tmp_path,
+                                                                     monkeypatch):
+    from unittest.mock import patch
+
+    from lemongrass import _db, laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.get_team',
+               return_value=_db.TeamRow('wot-lemons', 'WOT Lemons')), \
+         patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx(' 252 ')) is True
+    write.assert_called_once_with('101', '252', 'wot-lemons')
+
+
+def test_store_entry_does_nothing_without_a_configured_team(monkeypatch):
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
+    with patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx()) is False
+    assert not write.called
+
+
+def test_store_entry_does_nothing_fieldwide(monkeypatch, tmp_path):
+    # race-backfill runs with car_number=None and must create nothing.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx(None)) is False
+    assert not write.called
+
+
+def test_store_entry_warns_and_skips_when_the_team_row_is_missing(tmp_path,
+                                                                  monkeypatch,
+                                                                  caplog):
+    # entries.team_id is a foreign key; a typo'd config id must not fail a race.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "typo"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.get_team', return_value=None), \
+         patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx()) is False
+    assert not write.called
+    assert "typo" in caplog.text

@@ -587,3 +587,55 @@ def merge_teams(from_id, into_id, conn=None):
         c.execute(delete(_schema.teams).where(
             _schema.teams.c.team_id == from_id))
     return moved
+
+
+@dataclass
+class EntryRow:
+    """One row of the entries table: which team ran this number in this race."""
+
+    race_id: str
+    car_number: str
+    team_id: str
+
+
+def set_entry(race_id, car_number, team_id, conn=None):
+    """Record which team ran a car number in a race, replacing any prior answer.
+
+    car_number is trimmed on write; a stray leading space has reached the tag
+    layer before and blanked a whole dashboard.
+    """
+    from sqlalchemy.dialects.postgresql import insert
+    stmt = insert(_schema.entries).values(
+        race_id=race_id, car_number=str(car_number).strip(), team_id=team_id)
+    with connection(conn) as c:
+        c.execute(stmt.on_conflict_do_update(
+            index_elements=[_schema.entries.c.race_id,
+                            _schema.entries.c.car_number],
+            set_={'team_id': stmt.excluded.team_id}))
+
+
+def get_entry(race_id, car_number, conn=None):
+    """Return the EntryRow for one race and car number, or None."""
+    from sqlalchemy import select
+    with connection(conn) as c:
+        row = c.execute(
+            select(_schema.entries)
+            .where(_schema.entries.c.race_id == race_id,
+                   _schema.entries.c.car_number == str(car_number).strip())
+        ).first()
+    return EntryRow(row.race_id, row.car_number, row.team_id) if row else None
+
+
+def list_entries(team_id=None, race_id=None, conn=None):
+    """Return entries, optionally filtered by team or race, in a stable order."""
+    from sqlalchemy import select
+    stmt = select(_schema.entries)
+    if team_id is not None:
+        stmt = stmt.where(_schema.entries.c.team_id == team_id)
+    if race_id is not None:
+        stmt = stmt.where(_schema.entries.c.race_id == race_id)
+    stmt = stmt.order_by(_schema.entries.c.race_id,
+                         _schema.entries.c.car_number)
+    with connection(conn) as c:
+        rows = c.execute(stmt).all()
+    return [EntryRow(r.race_id, r.car_number, r.team_id) for r in rows]
