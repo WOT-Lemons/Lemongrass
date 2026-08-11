@@ -778,10 +778,12 @@ def test_identify_resolves_the_event_of_a_legacy_race_with_no_series_id():
         venue_id="thompson", layout_id=None, event_id="gp-du-lac")
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks"), \
-         patch("lemongrass._tracks.resolve", return_value=identity), \
+         patch("lemongrass._tracks.resolve", return_value=identity) as resolve, \
          patch("lemongrass._db.set_race_identity"):
         changes, _, _ = races_mod.identify_races()
     assert changes[0][2] == ("thompson", None, "gp-du-lac")
+    resolve.assert_called_once_with(
+        "Thompson Motor Speedway", "GP du Lac 2019", None)
 
 
 def test_identify_can_be_limited_to_named_races():
