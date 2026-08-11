@@ -193,6 +193,20 @@ def test_replace_sessions_leaves_other_races_alone(db):
     assert [s.session_id for s in _db.list_sessions("202")] == [99]
 
 
+def test_replace_sessions_refuses_to_steal_another_races_session(db):
+    # session_id is the primary key on the assumption that RaceMonitor mints
+    # ids globally, but nothing enforces that and the legacy import writes
+    # whatever Influx held. Reassigning the row would take the session off the
+    # other race's picker with no error and no way to notice.
+    from lemongrass import _db
+    _db.upsert_race(_race("101"))
+    _db.upsert_race(_race("202"))
+    _db.upsert_session(_session(99, race_id="202"))
+    with pytest.raises(ValueError, match="99"):
+        _db.replace_sessions("101", [_session(99)])
+    assert [s.session_id for s in _db.list_sessions("202")] == [99]
+
+
 def test_replace_sessions_with_an_empty_set_clears_the_race(db):
     from lemongrass import _db
     _db.upsert_race(_race())

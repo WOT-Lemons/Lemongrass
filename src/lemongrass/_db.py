@@ -107,7 +107,12 @@ def alembic_config(url=None):
     # already rendered. Accept either so tests can pass a plain URL string.
     if hasattr(url, 'render_as_string'):
         url = url.render_as_string(hide_password=False)
-    cfg.set_main_option('sqlalchemy.url', str(url))
+    # set_main_option writes into a ConfigParser, which reads a bare '%' as
+    # interpolation syntax and raises. render_as_string percent-encodes every
+    # reserved character in the password, so any password containing '@', '%',
+    # '/' or ':' arrives here already full of them. '%%' is the escape and
+    # reads back as a single '%', so the URL round-trips unchanged.
+    cfg.set_main_option('sqlalchemy.url', str(url).replace('%', '%%'))
     return cfg
 
 
@@ -327,9 +332,27 @@ def replace_sessions(race_id, rows, conn=None):
     delete is scoped to this race, so the live monitor's sessions for other
     races are untouched. One transaction means a failed row leaves the
     previous set intact for the next backfill to redo.
+
+    A session id already owned by a different race raises ValueError rather
+    than being reassigned. session_id is the primary key on the assumption
+    that RaceMonitor mints ids globally; nothing enforces that, and the legacy
+    import writes whatever Influx held. Silently rewriting race_id would take
+    the session off the other race's picker with no error and nothing to
+    notice it by until someone re-backfilled that race.
     """
-    from sqlalchemy import delete
+    from sqlalchemy import delete, select
     with connection(conn) as c:
+        ids = [r.session_id for r in rows]
+        if ids:
+            stolen = c.execute(
+                select(_schema.sessions.c.session_id)
+                .where(_schema.sessions.c.session_id.in_(ids),
+                       _schema.sessions.c.race_id != race_id)
+            ).scalars().all()
+            if stolen:
+                raise ValueError(
+                    f"session id(s) {sorted(stolen)} already belong to another "
+                    f"race; refusing to reassign them to {race_id!r}")
         for row in rows:
             c.execute(_session_upsert(row))
         stmt = delete(_schema.sessions).where(

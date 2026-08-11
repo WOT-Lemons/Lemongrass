@@ -253,6 +253,32 @@ class TestHandlePrune:
         predicates = [c.kwargs.get('predicate') for c in delete_api.delete.call_args_list]
         assert '_measurement="race"' in predicates[-1]
 
+    def test_prune_finds_a_race_that_exists_only_in_influx(self, capsys):
+        # Every pre-cutover race has Influx data and no Postgres row until
+        # `db import-legacy` runs, and prune is the only thing that would ever
+        # clean that data up. Keying the not-found guard solely on Postgres
+        # left those races unprunable except by hand-written delete predicates.
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', '64202', '--yes']):
+            fake_client = self._make_influx_client(races={})
+            fake_client.query_api.return_value.query.return_value = _tables(
+                {'64202': 1})
+            with patch('lemongrass._influx.connect', return_value=fake_client):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    _mod._handle_prune()
+        assert 'Deleted laps' in capsys.readouterr().out
+
+    def test_prune_still_rejects_a_race_in_neither_store(self, capsys):
+        # The guard exists to catch a typo before anything is deleted.
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', '64202', '--yes']):
+            fake_client = self._make_influx_client(races={})
+            with patch('lemongrass._influx.connect', return_value=fake_client):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    with pytest.raises(SystemExit) as exc:
+                        _mod._handle_prune()
+        assert exc.value.code != 0
+        assert 'not found' in capsys.readouterr().err
+        assert not fake_client.delete_api.return_value.delete.called
+
     def test_prune_exits_when_no_influx_token(self):
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
             with patch.dict('os.environ', {}, clear=True):
