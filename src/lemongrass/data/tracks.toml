@@ -14,9 +14,10 @@
 #     SHORTER than it must be listed as an alias ("Gingerman", "Nola").
 #
 # A layout name may be promoted to a VENUE alias when the production data
-# carries it with no venue prefix at all ("thunderbolt" on "njmp"). This
-# trades layout precision (layout ends up NULL) for venue resolution, and
-# is intentional, not a bug to be "fixed" away.
+# carries it with no venue prefix at all ("thunderbolt" on "njmp"). The venue
+# match then consumes the whole text, so `resolve` falls back to matching that
+# venue's layouts against the full track name instead of the (now empty)
+# remainder, and still finds the layout. This is intentional, not a bug.
 
 [[venue]]
 id = "thompson"

@@ -359,12 +359,24 @@ def resolve(track_name, race_name, series_id):
     stops resolution: layouts are keyed (venue_id, layout_id), so a layout
     without its venue is a foreign key violation waiting to happen, and an
     event without a venue is of no use to a year-over-year comparison.
+
+    Production data carries at least one layout name with no venue prefix at
+    all ("Thunderbolt", never "NJMP Thunderbolt"). That gets rescued by
+    promoting the layout name to a venue alias, but the venue match then
+    consumes the whole normalized text, leaving no remainder for the layout
+    match to see. When that happens, retry the layout match against the full
+    normalized track name instead of the (now empty) remainder. This only
+    ever adds matches — a remainder that already named the layout is
+    unaffected — and a track name that names no layout still yields None,
+    since the layout candidates themselves are unchanged.
     """
     track_data = data()
     venue, remainder = _best_match(normalize(track_name), track_data.venues)
     if venue is None:
         return TrackIdentity()
     layout = _best_match(remainder, venue.layouts)[0] if remainder else None
+    if layout is None:
+        layout = _best_match(normalize(track_name), venue.layouts)[0]
     return TrackIdentity(
         venue_id=venue.venue_id,
         layout_id=layout.layout_id if layout is not None else None,
