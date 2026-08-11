@@ -28,12 +28,16 @@ def test_shipped_file_loads_and_has_the_known_venues():
     data = _tracks.data()
     ids = {v.venue_id for v in data.venues}
     assert {"thompson", "gingerman", "the-ridge", "nola", "road-atlanta",
-            "sonoma", "high-plains", "autobahn", "njmp"} <= ids
+            "sonoma", "high-plains", "autobahn", "njmp", "pittrace"} <= ids
     njmp = next(v for v in data.venues if v.venue_id == "njmp")
     assert {lay.layout_id for lay in njmp.layouts} == {"thunderbolt", "lightning"}
     thompson = next(v for v in data.venues if v.venue_id == "thompson")
     # A venue with one unnamed course declares no layouts at all.
     assert thompson.layouts == ()
+    # Events are a naming convention, not a place, and are deliberately not
+    # curated in the shipped file; race.event_id stays NULL until they have a
+    # better home.
+    assert data.series == ()
 
 
 def test_shipped_file_is_readable_as_package_data():
@@ -258,6 +262,7 @@ def test_data_is_cached(tmp_path):
     ("Thompson Motor Speedway", "thompson", None),
     ("Thompson Speedway Motorsports Park", "thompson", None),
     ("Thompson Raceway Motorsports Park", "thompson", None),
+    ("Thompson Raceway", "thompson", None),
     ("Gingerman", "gingerman", None),
     ("Gingerman Raceway", "gingerman", None),
     ("The Ridge", "the-ridge", None),
@@ -273,8 +278,22 @@ def test_data_is_cached(tmp_path):
     ("Autobahn Country Club", "autobahn", None),
     ("Autobahn Country Club - Joliet, IL", "autobahn", None),
     ("New Jersey Motorsports Park", "njmp", None),
+    ("NJMP", "njmp", None),
     ("New Jersey Motorsports Park - Thunderbolt Course", "njmp", "thunderbolt"),
     ("New Jersey Motorsports Park - Lightning Course", "njmp", "lightning"),
+    ("NJMP Thunderbolt", "njmp", "thunderbolt"),
+    ("Thunderbolt", "njmp", "thunderbolt"),
+    ("Thunderbolt Course", "njmp", "thunderbolt"),
+    ("NJMP Lightning", "njmp", "lightning"),
+    ("Lightning", "njmp", "lightning"),
+    # A bare layout word with extra trailing text is NOT rescued -- that
+    # would be the land grab the alias promotion used to commit: a race at
+    # some other "Thunderbolt" facility silently resolving to njmp.
+    ("Thunderbolt Speedway", None, None),
+    ("Thunderbolt Raceway Park", None, None),
+    ("Pittsburgh International Race Complex", "pittrace", None),
+    ("Pittsburgh Int'l Race Complex", "pittrace", None),
+    ("Pittsburgh International Raceway", "pittrace", None),
 ])
 def test_resolve_maps_every_known_spelling(track_name, venue_id, layout_id):
     got = _tracks.resolve(track_name, "", None)
@@ -308,6 +327,49 @@ id = 900
     # Naming the series still resolves it.
     assert _tracks._match_event(
         "spring classic", data.series, 145) == "lemons-spring"
+
+
+def test_series_id_scopes_the_event_lookup(tmp_path):
+    # The shipped file carries no events, so the two halves of the scoping
+    # contract -- an id searches only that series, NULL searches all of them --
+    # need a fixture of their own to stay covered.
+    path = _write(tmp_path, """
+[[series]]
+id = 145
+
+  [[series.event]]
+  id = "lemons-spring"
+  name = "Spring"
+  keywords = ["spring classic"]
+""")
+    data = _tracks.load(path)
+    assert _tracks._match_event("spring classic", data.series, 145) == "lemons-spring"
+    assert _tracks._match_event("spring classic", data.series, None) == "lemons-spring"
+    assert _tracks._match_event("spring classic", data.series, 900) is None
+
+
+def test_resolve_normalizes_the_race_name_before_matching_events(tmp_path):
+    # _match_event is tested directly above with already-normalized text,
+    # which covers none of resolve()'s own normalize(race_name) call. Keywords
+    # are stored normalized but race names never are, so this only passes if
+    # resolve() normalizes what it passes to _match_event.
+    path = _write(tmp_path, """
+[[venue]]
+id = "thompson"
+name = "Thompson Speedway Motorsports Park"
+
+[[series]]
+id = 145
+
+  [[series.event]]
+  id = "lemons-spring"
+  name = "Spring"
+  keywords = ["spring classic"]
+""")
+    _tracks._DATA = _tracks.load(path)
+    got = _tracks.resolve(
+        "Thompson Speedway Motorsports Park", "Lemons - SPRING Classic!, 2019", 145)
+    assert got.event_id == "lemons-spring"
 
 
 def test_two_events_in_one_series_matching_one_name_resolve_to_nothing(tmp_path):
@@ -457,28 +519,25 @@ def test_bare_venue_yields_no_layout():
     assert got.layout_id is None
 
 
-@pytest.mark.parametrize("race_name", [
-    "GP du Lac Chargoggagoggmanchauggagoggchaubunagungamaugg",
-    "GP du Lac 2023",
-    "The GP du Lac",
-    "Lemons Chargoggagogg 24",
-])
-def test_event_matches_every_race_name_spelling(race_name):
-    got = _tracks.resolve("Thompson Motor Speedway", race_name, 145)
-    assert got.event_id == "gp-du-lac"
+def test_event_is_not_resolved_when_the_venue_is_not(tmp_path):
+    # The shipped file carries no events, so this needs its own fixture: an
+    # event-matching race name must still yield event_id is None when the
+    # venue does not resolve, and yield the event id when it does.
+    path = _write(tmp_path, """
+[[venue]]
+id = "thompson"
+name = "Thompson Speedway Motorsports Park"
 
+[[series]]
+id = 145
 
-def test_event_lookup_is_scoped_to_the_named_series():
-    got = _tracks.resolve("Thompson Motor Speedway", "GP du Lac 2023", 999)
-    assert got.event_id is None
-
-
-def test_event_lookup_with_no_series_searches_every_series():
-    # Influx never stored series_id, so every db import-legacy race has it NULL.
-    got = _tracks.resolve("Thompson Motor Speedway", "GP du Lac 2023", None)
-    assert got.event_id == "gp-du-lac"
-
-
-def test_event_is_not_resolved_when_the_venue_is_not():
+  [[series.event]]
+  id = "gp-du-lac"
+  name = "GP du Lac"
+  keywords = ["gp du lac"]
+""")
+    _tracks._DATA = _tracks.load(path)
     got = _tracks.resolve("Nowhere Speedway", "GP du Lac 2023", 145)
     assert got.event_id is None
+    got = _tracks.resolve("Thompson Speedway Motorsports Park", "GP du Lac 2023", 145)
+    assert got.event_id == "gp-du-lac"

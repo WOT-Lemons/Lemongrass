@@ -1,21 +1,36 @@
-# Canonical venues, layouts, and events for track identity.
+# Canonical venues and layouts for track identity.
 #
 # This file is curated by hand and reviewed in a pull request — it states facts
 # about the world, identical for every deployment. `lemongrass tracks sync`
-# copies it into the venues/layouts/events tables; `lemongrass races identify`
+# copies it into the venues/layouts tables; `lemongrass races identify`
 # re-tags stored races from it and reports every track name it could not match.
 #
+# Events are deliberately NOT curated here: an event is a naming convention
+# rather than a place, so `race.event_id` stays NULL until there is a better
+# home for it. The loader and schema still support a `[[series]]` /
+# `[[series.event]]` table, and remain fully exercised by tests — this file
+# simply carries none.
+#
 # Rules the loader enforces, and the two the curator has to remember:
-#   * A venue whose only course is unnamed declares NO [[venue.layout]] at all.
+#   * A venue declares NO [[venue.layout]] when no surveyed track name carries
+#     a course name — not necessarily because the venue has only one course
+#     ("pittrace" has named configurations; none appear in the data).
 #   * Matching is one-directional prefix matching, so an input LONGER than the
 #     canonical name needs nothing ("Road Atlanta, Braselton GA"), but any form
 #     SHORTER than it must be listed as an alias ("Gingerman", "Nola").
+#
+# A track name that is exactly a layout name, with no venue prefix at all
+# ("Thunderbolt" for "njmp"), is rescued by `resolve` itself: when no venue
+# matches, it tries every venue's layouts against the whole track name, exact
+# match only. A bare layout name must NEVER be added as a venue alias for
+# this -- that promotion is a land grab, claiming any track name that merely
+# starts with the layout word for this venue, even at a different facility.
 
 [[venue]]
 id = "thompson"
 name = "Thompson Speedway Motorsports Park"
 aliases = ["thompson motor speedway", "thompson raceway motorsports park",
-           "thompson speedway"]
+           "thompson speedway", "thompson raceway"]
 
 [[venue]]
 id = "gingerman"
@@ -60,22 +75,19 @@ aliases = []
 [[venue]]
 id = "njmp"
 name = "New Jersey Motorsports Park"
-aliases = []
+aliases = ["njmp"]
 
   [[venue.layout]]
   id = "thunderbolt"
   name = "Thunderbolt Course"
-  aliases = []
+  aliases = ["thunderbolt"]
 
   [[venue.layout]]
   id = "lightning"
   name = "Lightning Course"
-  aliases = []
+  aliases = ["lightning"]
 
-[[series]]
-id = 145   # 24 Hours of Lemons
-
-  [[series.event]]
-  id = "gp-du-lac"
-  name = "GP du Lac Chargoggagoggmanchauggagoggchaubunagungamaugg"
-  keywords = ["gp du lac", "chargoggagogg"]
+[[venue]]
+id = "pittrace"
+name = "Pittsburgh International Race Complex"
+aliases = ["pittsburgh int l race complex", "pittsburgh international raceway"]

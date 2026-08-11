@@ -351,6 +351,24 @@ def _match_event(race_name, series, series_id):
     return matches.pop() if len(matches) == 1 else None
 
 
+def _rescue_bare_layout(normalized_track_name, venues):
+    """Return (venue, layout) for a track name that names a layout with no
+    venue prefix at all ("Thunderbolt", never "NJMP Thunderbolt").
+
+    Tries every venue's layouts against the WHOLE normalized track name,
+    exact match only — equality against a layout's candidates, never the
+    prefix matching ``_match`` does elsewhere. Prefix matching here would
+    resurrect the land grab this rescue replaces: "Thunderbolt Speedway" is
+    not Thunderbolt Course, and must stay unresolved rather than silently
+    picking up njmp.
+    """
+    for venue in venues:
+        for layout in venue.layouts:
+            if normalized_track_name in layout.candidates:
+                return venue, layout
+    return None, None
+
+
 def resolve(track_name, race_name, series_id):
     """Resolve free-text race metadata to a TrackIdentity of three nullable ids.
 
@@ -359,11 +377,24 @@ def resolve(track_name, race_name, series_id):
     stops resolution: layouts are keyed (venue_id, layout_id), so a layout
     without its venue is a foreign key violation waiting to happen, and an
     event without a venue is of no use to a year-over-year comparison.
+
+    The one exception is ``_rescue_bare_layout``: production data carries at
+    least one layout name with no venue prefix at all ("Thunderbolt", never
+    "NJMP Thunderbolt"), and that gets one more chance, by exact match only,
+    before resolution gives up.
     """
     track_data = data()
-    venue, remainder = _best_match(normalize(track_name), track_data.venues)
+    normalized_track_name = normalize(track_name)
+    venue, remainder = _best_match(normalized_track_name, track_data.venues)
     if venue is None:
-        return TrackIdentity()
+        venue, layout = _rescue_bare_layout(normalized_track_name, track_data.venues)
+        if venue is None:
+            return TrackIdentity()
+        return TrackIdentity(
+            venue_id=venue.venue_id,
+            layout_id=layout.layout_id,
+            event_id=_match_event(normalize(race_name), track_data.series, series_id),
+        )
     layout = _best_match(remainder, venue.layouts)[0] if remainder else None
     return TrackIdentity(
         venue_id=venue.venue_id,

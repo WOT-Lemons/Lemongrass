@@ -5779,20 +5779,25 @@ class TestMainTuiLaunch:
 
 
 def test_resolve_race_metadata_carries_track_identity():
-    from unittest.mock import MagicMock
+    from unittest.mock import MagicMock, patch
 
-    from lemongrass import laps
+    from lemongrass import _tracks, laps
     client = MagicMock()
     client.common.current_races.return_value = {
         'Races': [{'SeriesName': '24 Hours of Lemons'}]}
-    meta = laps._resolve_race_metadata({
-        'Successful': True,
-        'Race': {'Name': 'GP du Lac 2023',
-                 'Track': 'New Jersey Motorsports Park - Thunderbolt Course',
-                 'SeriesID': 145, 'EndDateEpoc': 0},
-    }, client)
+    identity = _tracks.TrackIdentity(
+        venue_id='njmp', layout_id='thunderbolt', event_id='gp-du-lac')
+    with patch('lemongrass._tracks.resolve', return_value=identity) as resolve:
+        meta = laps._resolve_race_metadata({
+            'Successful': True,
+            'Race': {'Name': 'GP du Lac 2023',
+                     'Track': 'New Jersey Motorsports Park - Thunderbolt Course',
+                     'SeriesID': 145, 'EndDateEpoc': 0},
+        }, client)
     assert (meta.venue_id, meta.layout_id, meta.event_id) == (
         'njmp', 'thunderbolt', 'gp-du-lac')
+    resolve.assert_called_once_with(
+        'New Jersey Motorsports Park - Thunderbolt Course', 'GP du Lac 2023', 145)
 
 
 def test_resolve_race_metadata_on_a_failed_fetch_has_no_identity():
