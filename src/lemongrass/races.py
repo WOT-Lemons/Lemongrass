@@ -34,9 +34,12 @@ def main():
         sys.exit(1)
     subcmd = sys.argv.pop(1)
     sys.argv[0] = f'lemongrass-races-{subcmd}'
-    {'list': _handle_list, 'prune': _handle_prune,
-     'backfill': _handle_backfill, 'diagnose': _handle_diagnose,
-     'identify': _handle_identify}[subcmd]()
+    # Returned, not discarded: cli.main exits with this, and `identify` uses a
+    # non-zero code to report a race id that has no stored row. The other
+    # handlers return None, which sys.exit already treats as 0.
+    return {'list': _handle_list, 'prune': _handle_prune,
+            'backfill': _handle_backfill, 'diagnose': _handle_diagnose,
+            'identify': _handle_identify}[subcmd]()
 
 
 def run_races_tui(client):
@@ -264,10 +267,11 @@ def identify_races(race_ids=None, dry_run=False):
     at all: it is free of the 6 req/min limit and works offline. Only rows
     whose ids actually changed are written.
 
-    Returns (changes, unresolved): changes is a list of
+    Returns (changes, unresolved, missing): changes is a list of
     (race_id, before_ids, after_ids) triples; unresolved maps each track name
     that matched no venue to how many races carry it — the worklist for the
-    next tracks.toml edit.
+    next tracks.toml edit; missing lists the requested race ids that have no
+    stored row, so a typo reads differently from "already correct".
     """
     from lemongrass import _tracks
     if not dry_run:
@@ -275,9 +279,11 @@ def identify_races(race_ids=None, dry_run=False):
         # would otherwise fail every UPDATE that used it.
         _db.sync_tracks(_tracks.data())
     rows = _db.list_races()
+    missing = []
     if race_ids:
         wanted = set(race_ids)
         rows = [row for row in rows if row.race_id in wanted]
+        missing = sorted(wanted - {row.race_id for row in rows})
     changes, unresolved = [], {}
     for row in rows:
         identity = _tracks.resolve(row.track_name, row.name, row.series_id)
@@ -289,7 +295,7 @@ def identify_races(race_ids=None, dry_run=False):
             changes.append((row.race_id, before, after))
             if not dry_run:
                 _db.set_race_identity(row.race_id, *after)
-    return changes, unresolved
+    return changes, unresolved, missing
 
 
 def _format_ids(ids):
@@ -307,8 +313,8 @@ def _handle_identify():
                         help='Report what would change without writing')
     args = parser.parse_args()
 
-    changes, unresolved = identify_races(race_ids=args.race_id or None,
-                                         dry_run=args.dry_run)
+    changes, unresolved, missing = identify_races(
+        race_ids=args.race_id or None, dry_run=args.dry_run)
     for race_id, before, after in changes:
         print(f"{race_id:<10} {_format_ids(before)} -> {_format_ids(after)}")
     verb = 'would change' if args.dry_run else 'changed'
@@ -318,3 +324,8 @@ def _handle_identify():
         for name, count in sorted(unresolved.items(),
                                   key=lambda kv: (-kv[1], kv[0])):
             print(f"  {count:4d}  {name or '(blank)'}")
+    for race_id in missing:
+        # Without this a typo'd id is indistinguishable from a race that was
+        # already tagged correctly: both print "0 race(s) changed".
+        print(f"No race row stored for race {race_id}", file=sys.stderr)
+    return 1 if missing else 0

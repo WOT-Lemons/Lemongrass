@@ -627,7 +627,7 @@ def test_identify_resolves_a_stored_race():
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks"), \
          patch("lemongrass._db.set_race_identity") as write:
-        changes, unresolved = races_mod.identify_races()
+        changes, unresolved, _ = races_mod.identify_races()
     assert changes == [("101", (None, None, None),
                         ("thompson", None, "gp-du-lac"))]
     assert unresolved == {}
@@ -643,7 +643,7 @@ def test_identify_leaves_unresolved_races_null_and_counts_them():
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks"), \
          patch("lemongrass._db.set_race_identity") as write:
-        changes, unresolved = races_mod.identify_races()
+        changes, unresolved, _ = races_mod.identify_races()
     assert changes == []
     assert unresolved == {"Mystery Park": 2}
     assert not write.called
@@ -658,7 +658,7 @@ def test_identify_is_idempotent():
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks"), \
          patch("lemongrass._db.set_race_identity") as write:
-        changes, _ = races_mod.identify_races()
+        changes, _, _ = races_mod.identify_races()
     assert changes == []
     assert not write.called
 
@@ -671,7 +671,7 @@ def test_identify_dry_run_writes_nothing():
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks") as sync, \
          patch("lemongrass._db.set_race_identity") as write:
-        changes, _ = races_mod.identify_races(dry_run=True)
+        changes, _, _ = races_mod.identify_races(dry_run=True)
     assert len(changes) == 1
     assert not write.called
     assert not sync.called
@@ -685,7 +685,7 @@ def test_identify_resolves_the_event_of_a_legacy_race_with_no_series_id():
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks"), \
          patch("lemongrass._db.set_race_identity"):
-        changes, _ = races_mod.identify_races()
+        changes, _, _ = races_mod.identify_races()
     assert changes[0][2] == ("thompson", None, "gp-du-lac")
 
 
@@ -698,5 +698,63 @@ def test_identify_can_be_limited_to_named_races():
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks"), \
          patch("lemongrass._db.set_race_identity"):
-        changes, _ = races_mod.identify_races(race_ids=["102"])
+        changes, _, _ = races_mod.identify_races(race_ids=["102"])
     assert [c[0] for c in changes] == ["102"]
+
+
+def test_identify_reports_race_ids_with_no_stored_row():
+    # A typo'd id must not read the same as "already correct".
+    rows = [_stored("101", "GP du Lac", "Thompson Motor Speedway", 145)]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity"):
+        _, _, missing = races_mod.identify_races(race_ids=["101", "999", "998"])
+    assert missing == ["998", "999"]
+
+
+class TestHandleIdentify:
+    def _run(self, argv, result):
+        with patch.object(sys, 'argv', ['lemongrass-races-identify', *argv]), \
+             patch.object(_mod, 'identify_races', return_value=result) as ident:
+            code = _mod._handle_identify()
+        return code, ident
+
+    def test_reports_changes_and_returns_zero(self, capsys):
+        changes = [("101", (None, None, None), ("thompson", None, "gp-du-lac"))]
+        code, ident = self._run([], (changes, {}, []))
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "101        -/-/- -> thompson/-/gp-du-lac" in out
+        assert "1 race(s) changed" in out
+        ident.assert_called_once_with(race_ids=None, dry_run=False)
+
+    def test_dry_run_switches_the_verb_and_the_flag(self, capsys):
+        code, ident = self._run(['--dry-run'], ([], {}, []))
+        assert code == 0
+        assert "0 race(s) would change" in capsys.readouterr().out
+        ident.assert_called_once_with(race_ids=None, dry_run=True)
+
+    def test_passes_positional_race_ids_through(self):
+        _, ident = self._run(['101', '102'], ([], {}, []))
+        ident.assert_called_once_with(race_ids=['101', '102'], dry_run=False)
+
+    def test_unresolved_report_is_sorted_by_count_then_name(self, capsys):
+        unresolved = {"Zed Park": 1, "Mystery Park": 3, "Alpha Park": 1, "": 2}
+        code, _ = self._run([], ([], unresolved, []))
+        lines = capsys.readouterr().out.splitlines()
+        assert code == 0
+        assert lines[1] == "unresolved track names (add to tracks.toml):"
+        assert [line.split(None, 1)[1] for line in lines[2:]] == [
+            "Mystery Park", "(blank)", "Alpha Park", "Zed Park"]
+
+    def test_missing_race_ids_are_reported_and_exit_nonzero(self, capsys):
+        code, _ = self._run(['999'], ([], {}, ["999"]))
+        assert code == 1
+        assert "No race row stored for race 999" in capsys.readouterr().err
+
+    def test_the_exit_code_survives_dispatch_through_main(self):
+        # Testing the handler alone would not catch races.main() discarding
+        # what the handler returns, which is what cli.main exits with.
+        with patch.object(sys, 'argv', ['lemongrass-races', 'identify', '999']), \
+             patch.object(_mod, 'identify_races', return_value=([], {}, ["999"])):
+            assert _mod.main() == 1

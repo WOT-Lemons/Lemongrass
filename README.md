@@ -348,10 +348,10 @@ attached to a terminal); non-interactively, or when a subcommand is given,
 | Subcommand | Description |
 | ------------ | ------------- |
 | `list` | Show all stored races with lap counts and schema status |
-| `prune RACE_ID...` | Delete all data for one or more races from InfluxDB |
+| `prune RACE_ID...` | Delete all data for one or more races: laps and standings from InfluxDB, then the race row from PostgreSQL, cascading to its sessions and entries |
 | `backfill` | Run historical backfill for all tracked races (delegates to `lemongrass race-backfill`; use `--help` for all options) |
 | `diagnose RACE_ID CAR_NUMBER` | Compare RaceMonitor vs InfluxDB lap counts for a specific car |
-| `identify [--dry-run]` | Re-tag every stored race with venue, layout, and event ids resolved from `tracks.toml` (see [Track identity](#track-identity)) |
+| `identify [RACE_ID...] [--dry-run]` | Re-tag stored races (every race, or only the ones named) with venue, layout, and event ids resolved from `tracks.toml` (see [Track identity](#track-identity)) |
 
 ### Examples
 
@@ -403,7 +403,10 @@ lemongrass races identify             # write the new ids
 `races identify` reads only what is already stored, so it makes no RaceMonitor calls and
 is not subject to the API rate limit. A race whose track name matches nothing is left
 with NULL ids and keeps showing its raw `track_name`; there is no fallback tag to clean
-up later. `lemongrass tracks sync` copies the file into the database on its own, and
+up later. Naming race ids re-tags only those races; an id with no stored row is
+reported on stderr and exits non-zero, so a typo does not read as "already correct".
+
+`lemongrass tracks sync [--dry-run]` copies the file into the database on its own, and
 `lemongrass db upgrade` runs it as its final step.
 
 ### Teams
@@ -438,7 +441,7 @@ lemongrass entries <subcommand> [args]
 | Subcommand | Description |
 | ------------ | ------------- |
 | `set RACE_ID CAR_NUMBER [--team TEAM_ID]` | Record one race/car/team entry (`--team` defaults to `[team] id` from the config file) |
-| `list [--team TEAM_ID]` | Print stored entries, optionally filtered to one team |
+| `list [--team TEAM_ID] [--race RACE_ID]` | Print stored entries, optionally filtered to one team or one race |
 | `propose --term TERM [--term TERM ...] [--team TEAM_ID]` | Scan stored competitor names for a match and interactively confirm which entries to record (and optionally save the matched spelling as a new alias) |
 
 A live capture with `[team] id` set records its own entry automatically; `entries` is for

@@ -127,14 +127,24 @@ def _string_list(table, key, where):
     return value
 
 
-def _candidates(name, aliases):
+def _candidates(name, aliases, where):
     """Normalized name plus aliases, deduplicated, longest first.
 
     Longest-first is the whole tie-breaking story: the first candidate that
     matches is the longest one that matches, and two distinct candidates of
     equal length cannot both match the same text (an equal-length prefix is an
     equality).
+
+    A name of nothing but separators (``"---"``, or any name with no ASCII
+    alphanumerics at all) normalizes to the empty string, which _match would
+    then treat as a candidate that equals the empty track name every failed
+    details fetch produces -- silently tagging every unresolved race with that
+    venue. _string_list already rejects an empty alias; this rejects the name.
     """
+    if not normalize(name):
+        raise TrackDataError(
+            f"{where} name {name!r} normalizes to nothing; names need at "
+            f"least one letter or digit")
     seen = {normalize(name), *(normalize(a) for a in aliases)}
     # Secondary alphabetical key: sorting a set by length alone leaves
     # equal-length candidates in hash order, which varies with PYTHONHASHSEED.
@@ -158,8 +168,9 @@ def _list_of_tables(value, where):
 def _load_venues(raw_venues):
     """Build the validated venue tuple."""
     venues, venue_ids = [], set()
-    # Maps a normalized candidate to (venue_id, original text) so a collision
-    # names both colliding entries and the shared candidate, not just one.
+    # Maps a normalized candidate to the venue id that claimed it, so a
+    # collision names both colliding venues and the shared candidate rather
+    # than just the one being loaded.
     venue_candidate_owners = {}
     for raw in raw_venues:
         _reject_unknown(raw, {"id", "name", "aliases", "layout"}, "[[venue]]")
@@ -170,7 +181,7 @@ def _load_venues(raw_venues):
         where = f"[[venue]] {venue_id}"
         name = _text(raw, "name", where)
         aliases = _string_list(raw, "aliases", where)
-        venue_candidates = _candidates(name, aliases)
+        venue_candidates = _candidates(name, aliases, where)
         for candidate in venue_candidates:
             owner = venue_candidate_owners.get(candidate)
             if owner is not None:
@@ -191,7 +202,7 @@ def _load_venues(raw_venues):
             lwhere = f"{where} layout {layout_id}"
             layout_name = _text(raw_layout, "name", lwhere)
             layout_candidates = _candidates(
-                layout_name, _string_list(raw_layout, "aliases", lwhere))
+                layout_name, _string_list(raw_layout, "aliases", lwhere), lwhere)
             for candidate in layout_candidates:
                 owner = layout_candidate_owners.get(candidate)
                 if owner is not None:
@@ -311,21 +322,36 @@ def _match_layout(remainder, layouts):
 
 
 def _match_event(race_name, series, series_id):
-    """Return the first event id whose keyword appears in the race name, or None.
+    """Return the event id whose keyword appears in the race name, or None.
 
-    An integer series_id selects only that series; None searches every series
-    in file order, which is what the back catalogue needs — Influx never stored
-    series_id, so every legacy race has it NULL and everything stored is Lemons.
+    An integer series_id selects only that series; None searches every series,
+    which is what the back catalogue needs — Influx never stored series_id, so
+    every legacy race has it NULL, and read_legacy_races leaves it NULL
+    permanently rather than re-fetching it.
+
+    A NULL series_id that matches events in more than one series resolves to
+    None rather than to whichever series the file lists first. Today there is
+    one series, so this cannot fire; the moment a second is added, "first in
+    file order" would silently tag ~184 legacy races with an event they never
+    ran, and a wrong event id is worse than an unresolved one — identify_races
+    reports unresolved names as a worklist, but reports a wrong tag as a
+    perfectly ordinary change.
     """
     if not race_name:
         return None
+    matches = []
     for entry in series:
         if series_id is not None and entry.series_id != series_id:
             continue
         for event in entry.events:
             if any(keyword in race_name for keyword in event.keywords):
-                return event.event_id
-    return None
+                matches.append((entry.series_id, event.event_id))
+                break
+    if not matches:
+        return None
+    if len({s for s, _ in matches}) > 1:
+        return None
+    return matches[0][1]
 
 
 def resolve(track_name, race_name, series_id):

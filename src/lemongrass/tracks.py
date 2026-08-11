@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 """lemongrass tracks subcommand: keep the curated track data and the tables in step.
 
-Subcommand: sync. `db upgrade` runs the same sync as its final step, and any
-command that writes a race syncs first, so this exists for the case where a
-curator edits tracks.toml and wants to see the effect without running either.
+Subcommand: sync. `db upgrade` runs the same sync as its final step, and
+store_race syncs before it writes, so this exists for the case where a curator
+edits tracks.toml and wants to see the effect without running either.
+(`db import-legacy` writes race rows without syncing, which is safe only
+because legacy rows carry NULL identity columns and so reference nothing.)
 """
 import argparse
 import sys

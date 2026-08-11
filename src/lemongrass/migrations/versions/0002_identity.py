@@ -53,6 +53,7 @@ def upgrade():
             ['team_id'], ['teams.team_id'],
             name='fk_team_aliases_team_id_teams', ondelete='CASCADE'),
     )
+    op.create_index('ix_team_aliases_team_id', 'team_aliases', ['team_id'])
     op.create_table(
         'entries',
         sa.Column('race_id', sa.Text(), nullable=False),
@@ -105,6 +106,7 @@ def downgrade():
 
     op.drop_index('ix_entries_team_id', table_name='entries')
     op.drop_table('entries')
+    op.drop_index('ix_team_aliases_team_id', table_name='team_aliases')
     op.drop_table('team_aliases')
     op.drop_table('teams')
     op.drop_table('events')

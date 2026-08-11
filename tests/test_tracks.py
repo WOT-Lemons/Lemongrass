@@ -152,6 +152,33 @@ aliases = ["  "]
         _tracks.load(path)
 
 
+def test_venue_name_that_normalizes_to_nothing_is_rejected(tmp_path):
+    # Otherwise the venue's only candidate is '', which equals the empty track
+    # name a failed details fetch produces -- tagging every unresolved race
+    # with this venue.
+    path = _write(tmp_path, """
+[[venue]]
+id = "a"
+name = "---"
+""")
+    with pytest.raises(_tracks.TrackDataError, match="normalizes to nothing"):
+        _tracks.load(path)
+
+
+def test_layout_name_that_normalizes_to_nothing_is_rejected(tmp_path):
+    path = _write(tmp_path, """
+[[venue]]
+id = "a"
+name = "A"
+
+  [[venue.layout]]
+  id = "l"
+  name = "!!!"
+""")
+    with pytest.raises(_tracks.TrackDataError, match="normalizes to nothing"):
+        _tracks.load(path)
+
+
 def test_empty_keyword_is_rejected(tmp_path):
     # An empty keyword is a substring of every race name.
     path = _write(tmp_path, """
@@ -252,6 +279,42 @@ def test_data_is_cached(tmp_path):
 def test_resolve_maps_every_known_spelling(track_name, venue_id, layout_id):
     got = _tracks.resolve(track_name, "", None)
     assert (got.venue_id, got.layout_id) == (venue_id, layout_id)
+
+
+def test_a_null_series_id_matching_two_series_resolves_to_nothing(tmp_path):
+    # Legacy races have series_id NULL permanently (read_legacy_races never
+    # re-fetches it). Taking the first match in file order would tag them with
+    # an event they never ran, and identify_races reports that as an ordinary
+    # change rather than as a gap. Unresolved is the honest answer.
+    path = _write(tmp_path, """
+[[series]]
+id = 145
+
+  [[series.event]]
+  id = "lemons-spring"
+  name = "Spring"
+  keywords = ["spring classic"]
+
+[[series]]
+id = 900
+
+  [[series.event]]
+  id = "other-spring"
+  name = "Spring"
+  keywords = ["spring classic"]
+""")
+    data = _tracks.load(path)
+    assert _tracks._match_event("spring classic", data.series, None) is None
+    # Naming the series still resolves it.
+    assert _tracks._match_event(
+        "spring classic", data.series, 145) == "lemons-spring"
+
+
+def test_a_candidate_must_end_on_a_word_boundary():
+    # "Nola" is a real curated candidate and a bare character prefix of
+    # "Nolan Speedway"; matching it there would tag a different track.
+    got = _tracks.resolve("Nolan Speedway", "", None)
+    assert got.venue_id is None
 
 
 def test_unmapped_track_resolves_to_nothing():

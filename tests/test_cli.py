@@ -338,6 +338,32 @@ def test_operational_error_after_connecting_is_not_reported_as_unreachable(
     assert "statement timeout" in err
 
 
+def test_missing_schema_points_at_db_upgrade(monkeypatch, capsys, tmp_path):
+    from sqlalchemy.exc import ProgrammingError
+
+    # The first-run state of a fresh deploy: the server is up and the database
+    # exists, but `db upgrade` has not been run. 42P01 is a ProgrammingError,
+    # not an OperationalError, so without its own branch it is a traceback.
+    orig = _PgError('relation "races" does not exist', "42P01")
+    code, err = _run_cli_raising(
+        monkeypatch, capsys, tmp_path,
+        ProgrammingError("SELECT * FROM races", {}, orig))
+    assert code == 1
+    assert "lemongrass db upgrade" in err
+    assert 'relation "races" does not exist' in err
+
+
+def test_other_programming_errors_are_not_swallowed(monkeypatch, capsys, tmp_path):
+    # A genuine SQL bug (42703 undefined_column) must keep its traceback
+    # rather than be mislabelled as a missing schema.
+    from sqlalchemy.exc import ProgrammingError
+
+    orig = _PgError('column "nope" does not exist', "42703")
+    with pytest.raises(ProgrammingError):
+        _run_cli_raising(monkeypatch, capsys, tmp_path,
+                         ProgrammingError("SELECT nope", {}, orig))
+
+
 class TestExitCodePropagation:
     def test_subcommand_return_value_becomes_exit_code(self):
         """laps.main() returns 1 on failure; the dispatcher must not swallow it."""

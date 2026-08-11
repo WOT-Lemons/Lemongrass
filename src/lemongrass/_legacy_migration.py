@@ -167,7 +167,11 @@ def _reject_line_breaks(what, value):
 
 
 def _escape_tag(value):
-    """Escape a line-protocol tag value: commas, spaces, and equals signs."""
+    """Escape a line-protocol tag value: backslashes, commas, spaces, equals.
+
+    Backslash first, and it has to be: escaping it after the others would go
+    back over the backslashes this function just inserted and double them.
+    """
     _reject_line_breaks('tag value', value)
     return (value.replace('\\', '\\\\').replace(',', '\\,')
                  .replace(' ', '\\ ').replace('=', '\\='))

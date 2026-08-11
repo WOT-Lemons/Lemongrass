@@ -4,7 +4,9 @@ A leaf module: it imports nothing else from lemongrass, so both ``_db`` and
 Alembic's ``env.py`` can import it without an import cycle.
 
 Only the non-time-series data lives here. Laps, standings, and telemetry stay in
-InfluxDB — see the sub-project 1a design doc for why races and sessions do not.
+InfluxDB. Races and sessions do not: they are mutable metadata that is corrected
+and re-tagged after the fact, and joined against, which a time-series store with
+no updates and no joins serves badly.
 """
 from sqlalchemy import (
     BigInteger,
@@ -123,7 +125,8 @@ teams = Table(
 team_aliases = Table(
     'team_aliases', metadata,
     Column('team_id', Text,
-           ForeignKey('teams.team_id', ondelete='CASCADE'), nullable=False),
+           ForeignKey('teams.team_id', ondelete='CASCADE'), nullable=False,
+           index=True),
     Column('alias', Text, primary_key=True),
 )
 

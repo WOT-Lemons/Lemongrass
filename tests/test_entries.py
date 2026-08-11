@@ -1,6 +1,8 @@
 import sys
 from unittest.mock import patch
 
+import pytest
+
 
 def _race(db, race_id="r1"):
     from datetime import UTC, datetime
@@ -102,6 +104,77 @@ def test_cli_set_rejects_an_unknown_team(db, capsys):
     assert _db.list_entries() == []
 
 
+def test_set_entry_rejects_a_race_with_no_stored_row(db):
+    # race_id is a foreign key, and `entries propose` sources race ids from
+    # Influx lap data, which carries races captured before the cutover. A
+    # ValueError is reportable; a raw IntegrityError is a traceback.
+    from lemongrass import _db
+    _db.upsert_team("wot-lemons", "WOT Lemons")
+    with pytest.raises(ValueError, match="no race row"):
+        _db.set_entry("never-imported", "252", "wot-lemons")
+
+
+def test_cli_set_reports_a_race_with_no_stored_row(db, capsys):
+    from lemongrass import _db
+    _db.upsert_team("wot-lemons", "WOT Lemons")
+    assert _run(["lemongrass-entries", "set", "never-imported", "252",
+                "--team", "wot-lemons"]) == 1
+    assert "no race row" in capsys.readouterr().err
+    assert _db.list_entries() == []
+
+
+def test_confirm_keeps_going_when_a_race_has_no_stored_row(capsys):
+    # Aborting here would strand every proposal after this one, after the
+    # operator has already answered for them.
+    from lemongrass import entries
+    proposals = [
+        {"race_id": "101", "car_number": "252", "competitor_name": "WOT Lemons",
+         "existing_team_id": None},
+        {"race_id": "102", "car_number": "7", "competitor_name": "WOT Lemons",
+         "existing_team_id": None},
+    ]
+
+    def write(race_id, car_number, team_id):
+        if race_id == "101":
+            raise ValueError("no race row for '101'")
+
+    # y to both entries; only the second gets an alias offer, answered n.
+    with patch("builtins.input", side_effect=["y", "y", "n"]), \
+         patch("lemongrass._db.set_entry", side_effect=write):
+        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 1)
+    assert "no race row for '101'" in capsys.readouterr().err
+
+
+def test_cli_propose_exits_nonzero_when_every_accepted_write_failed(capsys):
+    # "recorded 0 entries" and exit 0 would read as "nothing to do" to a
+    # script, when in fact the operator answered y and every write failed.
+    from lemongrass import _db, entries
+    proposals = [{"race_id": "101", "car_number": "252",
+                  "competitor_name": "WOT Lemons", "existing_team_id": None}]
+    with patch("lemongrass._db.get_team",
+               return_value=_db.TeamRow("wot-lemons", "WOT Lemons")), \
+         patch("lemongrass._influx.connect"), \
+         patch.object(entries, "propose_entries", return_value=proposals), \
+         patch("builtins.input", side_effect=["y"]), \
+         patch("lemongrass._db.set_entry",
+               side_effect=ValueError("no race row for '101'")):
+        assert _run(["lemongrass-entries", "propose", "--team", "wot-lemons",
+                    "--term", "wot"]) == 1
+    assert "could not be recorded" in capsys.readouterr().err
+
+
+def test_cli_list_can_be_filtered_by_race(db, capsys):
+    from lemongrass import _db
+    _race(db, "r1")
+    _race(db, "r2")
+    _db.upsert_team("us", "Us")
+    _db.set_entry("r1", "252", "us")
+    _db.set_entry("r2", "253", "us")
+    assert _run(["lemongrass-entries", "list", "--race", "r2"]) == 0
+    out = capsys.readouterr().out
+    assert "253" in out and "252" not in out
+
+
 def test_cli_propose_rejects_an_unknown_team(capsys):
     # Without this check, propose scans Influx, prints proposals, prompts the
     # operator, and then dies on an unhandled FK IntegrityError inside
@@ -151,7 +224,7 @@ def test_propose_matches_any_of_several_terms():
         ("102", "253", "Wide Open Throttle"),
         ("103", "7", "Somebody Else"),
     ])
-    with patch("lemongrass._db.get_entry", return_value=None), \
+    with patch("lemongrass._db.list_entries", return_value=[]), \
          patch("lemongrass._db.list_team_aliases", return_value=[]):
         got = entries.propose_entries(api, ["wot lemons", "wide open"],
                                       "wot-lemons")
@@ -162,7 +235,7 @@ def test_propose_matches_any_of_several_terms():
 def test_propose_normalizes_both_sides():
     from lemongrass import entries
     api = _query_api([("101", " 252 ", "WOT  LEMONS!")])
-    with patch("lemongrass._db.get_entry", return_value=None), \
+    with patch("lemongrass._db.list_entries", return_value=[]), \
          patch("lemongrass._db.list_team_aliases", return_value=[]):
         got = entries.propose_entries(api, ["WOT   Lemons!"], "wot-lemons")
     # Case, punctuation, and runs of whitespace collapse on BOTH sides: the
@@ -178,8 +251,8 @@ def test_propose_normalizes_both_sides():
 def test_propose_flags_an_entry_that_already_exists():
     from lemongrass import _db, entries
     api = _query_api([("101", "252", "WOT Lemons")])
-    with patch("lemongrass._db.get_entry",
-               return_value=_db.EntryRow("101", "252", "someone-else")), \
+    with patch("lemongrass._db.list_entries",
+               return_value=[_db.EntryRow("101", "252", "someone-else")]), \
          patch("lemongrass._db.list_team_aliases", return_value=[]):
         got = entries.propose_entries(api, ["wot lemons"], "wot-lemons")
     assert got[0]["existing_team_id"] == "someone-else"
@@ -188,8 +261,8 @@ def test_propose_flags_an_entry_that_already_exists():
 def test_propose_skips_entries_already_pointing_at_this_team():
     from lemongrass import _db, entries
     api = _query_api([("101", "252", "WOT Lemons")])
-    with patch("lemongrass._db.get_entry",
-               return_value=_db.EntryRow("101", "252", "wot-lemons")), \
+    with patch("lemongrass._db.list_entries",
+               return_value=[_db.EntryRow("101", "252", "wot-lemons")]), \
          patch("lemongrass._db.list_team_aliases", return_value=[]):
         assert entries.propose_entries(api, ["wot lemons"], "wot-lemons") == []
 
@@ -199,7 +272,7 @@ def test_propose_also_searches_the_teams_recorded_aliases():
     # finds that season's races without the term having to be retyped.
     from lemongrass import entries
     api = _query_api([("101", "252", "Wide Open Throttle")])
-    with patch("lemongrass._db.get_entry", return_value=None), \
+    with patch("lemongrass._db.list_entries", return_value=[]), \
          patch("lemongrass._db.list_team_aliases",
                return_value=[("wot-lemons", "wide open throttle")]):
         got = entries.propose_entries(api, ["nothing matches this"],
@@ -219,7 +292,7 @@ def test_confirm_writes_only_what_was_accepted(capsys):
     with patch("builtins.input", side_effect=["y", "n", "n"]), \
          patch("lemongrass._db.set_entry") as write, \
          patch("lemongrass._db.add_team_alias") as alias:
-        assert entries.confirm_proposals(proposals, "wot-lemons") == 1
+        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 0)
     write.assert_called_once_with("101", "252", "wot-lemons")
     assert not alias.called
 
@@ -251,7 +324,9 @@ def test_confirm_reports_an_alias_conflict_without_aborting(capsys):
          patch("lemongrass._db.set_entry") as write, \
          patch("lemongrass._db.add_team_alias",
                side_effect=ValueError("already recorded for team someone-else")):
-        written = entries.confirm_proposals(proposals, "wot-lemons")
+        written, failed = entries.confirm_proposals(proposals, "wot-lemons")
+    # An alias conflict is not an entry failure: both entries were stored.
+    assert failed == 0
     assert written == 2
     assert write.call_count == 2
     assert "someone-else" in capsys.readouterr().err

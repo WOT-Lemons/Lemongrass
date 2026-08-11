@@ -192,10 +192,12 @@ def upsert_race(row, conn=None):
     ``race_time`` keeps blanket EXCLUDED — it is NOT NULL and always
     genuinely supplied.
 
-    The three identity columns COALESCE for the same reason as the identity
-    text: a failed details fetch resolves to all-None and must not erase a
-    good tag. Clearing or correcting a tag downward is `races identify`'s job,
-    which issues an explicit UPDATE.
+    venue_id and event_id COALESCE for the same reason as the text columns
+    above: a failed details fetch resolves to all-None and must not erase a
+    good tag. layout_id does NOT — it is a CASE keyed to the incoming
+    venue_id, for the reason spelled out where it is built below. Clearing or
+    correcting a tag downward is `races identify`'s job, which issues an
+    explicit UPDATE.
     """
     from sqlalchemy import case, func
     from sqlalchemy.dialects.postgresql import insert
@@ -436,7 +438,8 @@ def sync_tracks(data, dry_run=False, conn=None):
     referenced by stored races, and silently breaking that is worse than a
     stale row. Rows with no file counterpart are reported instead, for manual
     handling. (Consequently layouts' ON DELETE CASCADE never fires in practice
-    — races_layout_fk is NO ACTION and would block the delete anyway.)
+    — fk_races_venue_id_layout_id_layouts is NO ACTION and would block the
+    delete anyway.)
 
     ``data`` is a ``_tracks.TrackData``; it is read structurally so this module
     keeps its SQL-only role and takes no import on the curated-data layer.
@@ -540,8 +543,18 @@ def upsert_team(team_id, name, conn=None):
 
     `teams add` on an existing id is a rename rather than an error: the team
     name has changed before and will again, and the id is what entries point at.
+
+    The name must normalize to something, for the same reason add_team_alias
+    requires it: merge_teams records the source team's name as an alias of the
+    target, and a name that normalizes to nothing would make that guarantee
+    silently not happen — no alias written and no warning either, since there
+    is no conflicting owner to report.
     """
     from sqlalchemy.dialects.postgresql import insert
+
+    from lemongrass import _tracks
+    if not _tracks.normalize(name):
+        raise ValueError(f"team name {name!r} normalizes to nothing")
     stmt = insert(_schema.teams).values(team_id=team_id, name=name)
     with connection(conn) as c:
         c.execute(stmt.on_conflict_do_update(
@@ -571,10 +584,11 @@ def list_teams(conn=None):
 def add_team_alias(team_id, alias, conn=None):
     """Record a historical spelling for a team, stored normalized.
 
-    Normalizing here rather than at the call site is what makes "aliases are
-    stored normalized" an invariant instead of a convention: every writer goes
-    through this function, and every reader compares against already-normalized
-    stored values.
+    Normalizing here rather than at the call site is what keeps "aliases are
+    stored normalized" true: every caller passes raw text and every reader
+    compares against already-normalized stored values. merge_teams is the one
+    other writer of this table and normalizes for itself, deliberately — it
+    needs the owner lookup this function's ValueError would abort on.
 
     Re-recording an alias the team already owns is a silent no-op — the
     `entries propose` -> `confirm_proposals` loop offers to record the alias
@@ -588,6 +602,10 @@ def add_team_alias(team_id, alias, conn=None):
 
     from lemongrass import _tracks
     normalized = _tracks.normalize(alias)
+    if not normalized:
+        # alias is the primary key, so an alias of nothing but punctuation
+        # would take the '' row and lock every other team out of it.
+        raise ValueError(f"alias {alias!r} normalizes to nothing")
     with connection(conn) as c:
         if c.execute(select(_schema.teams.c.team_id).where(
                 _schema.teams.c.team_id == team_id)).scalar() is None:
@@ -615,17 +633,32 @@ def list_team_aliases(team_id=None, conn=None):
     return [(r.team_id, r.alias) for r in rows]
 
 
+@dataclass
+class MergeResult:
+    """What a merge did: entries moved, and who else already owns the name.
+
+    name_alias_owner is set only when the source team's name could not be
+    recorded as an alias of the target because a third team already holds that
+    spelling. The merge itself still happened; the caller reports the gap.
+    """
+
+    entries_moved: int
+    name_alias_owner: str | None = None
+
+
 def merge_teams(from_id, into_id, conn=None):
-    """Fold one team into another in a single transaction. Returns entries moved.
+    """Fold one team into another in a single transaction. Returns a MergeResult.
 
     The repair path for history recorded under two identities before anyone
-    noticed. It is three statements and not a data migration precisely because
-    entries reference a team_id rather than a name. The source team's own name
-    is kept as an alias of the target — it is the spelling that made the merge
-    necessary, and `entries propose` searches aliases.
+    noticed. It is a handful of statements and not a data migration precisely
+    because entries reference a team_id rather than a name. The source team's
+    own name is kept as an alias of the target — it is the spelling that made
+    the merge necessary, and `entries propose` searches aliases.
+
+    Raises ValueError, which callers must catch, when from_id and into_id are
+    the same team or when either does not exist.
     """
-    from sqlalchemy import delete, select, update
-    from sqlalchemy.dialects.postgresql import insert  # for on_conflict_do_nothing
+    from sqlalchemy import delete, insert, select, update
 
     from lemongrass import _tracks
     if from_id == into_id:
@@ -650,13 +683,23 @@ def merge_teams(from_id, into_id, conn=None):
         c.execute(update(_schema.team_aliases)
                   .where(_schema.team_aliases.c.team_id == from_id)
                   .values(team_id=into_id))
-        stmt = insert(_schema.team_aliases).values(
-            team_id=into_id, alias=_tracks.normalize(source.name))
-        c.execute(stmt.on_conflict_do_nothing(
-            index_elements=[_schema.team_aliases.c.alias]))
+        # ON CONFLICT DO NOTHING would cover "the target already has it" and
+        # "a third team has it" identically, and the second case means the
+        # documented guarantee silently did not happen: `entries propose` for
+        # the target would keep missing that spelling with nothing to explain
+        # why. Look the owner up so the caller can say so.
+        name_alias = _tracks.normalize(source.name)
+        owner = None
+        if name_alias:
+            owner = c.execute(select(_schema.team_aliases.c.team_id).where(
+                _schema.team_aliases.c.alias == name_alias)).scalar()
+            if owner is None:
+                c.execute(insert(_schema.team_aliases).values(
+                    team_id=into_id, alias=name_alias))
         c.execute(delete(_schema.teams).where(
             _schema.teams.c.team_id == from_id))
-    return moved
+    return MergeResult(entries_moved=moved,
+                       name_alias_owner=owner if owner != into_id else None)
 
 
 @dataclass
@@ -673,11 +716,26 @@ def set_entry(race_id, car_number, team_id, conn=None):
 
     car_number is trimmed on write; a stray leading space has reached the tag
     layer before and blanked a whole dashboard.
+
+    An absent race raises ValueError rather than a raw IntegrityError from the
+    race_id foreign key: `entries propose` sources race ids from Influx lap
+    data, which legitimately carries races with no Postgres row (anything
+    captured before the cutover), so this is a normal answer and callers need
+    to be able to report it and carry on rather than crash mid-loop.
+
+    team_id is checked here: the caller must ensure the team exists, and an
+    unknown one raises a raw IntegrityError. Every caller today pre-checks
+    with get_team (entries._handle_set, entries._handle_propose,
+    laps.store_entry) because each wants to report it differently.
     """
+    from sqlalchemy import select
     from sqlalchemy.dialects.postgresql import insert
     stmt = insert(_schema.entries).values(
         race_id=race_id, car_number=str(car_number).strip(), team_id=team_id)
     with connection(conn) as c:
+        if c.execute(select(_schema.races.c.race_id).where(
+                _schema.races.c.race_id == race_id)).scalar() is None:
+            raise ValueError(f"no race row for {race_id!r}")
         c.execute(stmt.on_conflict_do_update(
             index_elements=[_schema.entries.c.race_id,
                             _schema.entries.c.car_number],

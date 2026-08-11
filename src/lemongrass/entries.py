@@ -57,7 +57,13 @@ def _handle_set():
         print(f"Error: no team {team_id!r}; run `lemongrass teams add "
               f"{team_id} <name>` first", file=sys.stderr)
         return 1
-    _db.set_entry(args.race_id, args.car_number, team_id)
+    try:
+        _db.set_entry(args.race_id, args.car_number, team_id)
+    except ValueError as e:
+        # race_id is a foreign key; a race captured before the cutover has no
+        # row until `lemongrass db import-legacy` brings it over.
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     print(f"{args.race_id}  {args.car_number.strip()}  {team_id}")
     return 0
 
@@ -67,10 +73,11 @@ def _handle_list():
     parser = argparse.ArgumentParser(prog='lemongrass-entries-list',
                                      description='List stored entries')
     parser.add_argument('--team', default=None, help='only this team id')
+    parser.add_argument('--race', default=None, help='only this race id')
     args = parser.parse_args()
     print(f"{'RACE ID':<10} {'CAR':<6} TEAM")
     print('-' * 40)
-    for entry in _db.list_entries(team_id=args.team):
+    for entry in _db.list_entries(team_id=args.team, race_id=args.race):
         print(f"{entry.race_id:<10} {entry.car_number:<6} {entry.team_id}")
     return 0
 
@@ -113,6 +120,12 @@ def propose_entries(query_api, terms, team_id):
     aliases = [alias for _, alias in _db.list_team_aliases(team_id)]
     wanted = [_tracks.normalize(t) for t in [*terms, *aliases]
               if _tracks.normalize(t)]
+    # One read of the whole table rather than a get_entry per candidate: each
+    # of those checks out its own pooled connection (and pool_pre_ping costs a
+    # round trip per checkout), and the same car gets re-queried once per
+    # distinct spelling of its name.
+    existing_teams = {(e.race_id, e.car_number): e.team_id
+                      for e in _db.list_entries()}
     proposals, seen = [], set()
     for race_id, car_number, name in _competitor_names(query_api):
         if not race_id or not car_number or not name:
@@ -123,25 +136,30 @@ def propose_entries(query_api, terms, team_id):
         key = (race_id, car_number)
         if key in seen:
             continue
-        existing = _db.get_entry(race_id, car_number)
-        if existing is not None and existing.team_id == team_id:
-            continue
         seen.add(key)
+        existing = existing_teams.get(key)
+        if existing == team_id:
+            continue
         proposals.append({
             'race_id': race_id, 'car_number': car_number,
             'competitor_name': name,
-            'existing_team_id': existing.team_id if existing else None,
+            'existing_team_id': existing,
         })
     return proposals
 
 
 def confirm_proposals(proposals, team_id):
-    """Prompt for each proposal and write the accepted ones. Returns the count.
+    """Prompt for each proposal and write the accepted ones.
+
+    Returns (written, failed): counts of accepted proposals that were stored
+    and that could not be. failed is reported rather than raised so one
+    unstorable race does not cost the operator every answer after it, but the
+    caller needs it — "every write failed" must not exit 0.
 
     Confirming also offers to record the matched spelling as an alias, so the
     term list improves with use instead of having to be remembered.
     """
-    written = 0
+    written = failed = 0
     for proposal in proposals:
         note = ''
         if proposal['existing_team_id']:
@@ -151,7 +169,15 @@ def confirm_proposals(proposals, team_id):
             f"{proposal['competitor_name']}{note} -> {team_id}? [y/N] ")
         if answer.strip().lower() != 'y':
             continue
-        _db.set_entry(proposal['race_id'], proposal['car_number'], team_id)
+        try:
+            _db.set_entry(proposal['race_id'], proposal['car_number'], team_id)
+        except ValueError as e:
+            # Proposals come from Influx, which carries races with no Postgres
+            # row. Aborting here would strand every proposal after this one
+            # after the operator has already answered for them.
+            print(f"  {e}", file=sys.stderr)
+            failed += 1
+            continue
         written += 1
         alias = input(f"  record {proposal['competitor_name']!r} as an alias "
                       f"of {team_id}? [y/N] ")
@@ -163,7 +189,7 @@ def confirm_proposals(proposals, team_id):
                 # abort the loop: the entries already confirmed are good, and
                 # remaining proposals still deserve a prompt.
                 print(f"  {e}", file=sys.stderr)
-    return written
+    return written, failed
 
 
 def _handle_propose():
@@ -198,6 +224,10 @@ def _handle_propose():
         return 0
     print(f"{len(proposals)} proposed entr"
           f"{'y' if len(proposals) == 1 else 'ies'}:")
-    written = confirm_proposals(proposals, team_id)
+    written, failed = confirm_proposals(proposals, team_id)
     print(f"recorded {written} entr{'y' if written == 1 else 'ies'}")
+    if failed:
+        print(f"{failed} accepted entr{'y' if failed == 1 else 'ies'} could "
+              f"not be recorded (see above)", file=sys.stderr)
+        return 1
     return 0

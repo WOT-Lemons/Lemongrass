@@ -264,11 +264,41 @@ class TestEnumerateSeries:
 
 
 class TestRunBackfill:
+    @pytest.fixture(autouse=True)
+    def _db_password(self, monkeypatch):
+        """run_backfill refuses to start without one; these test the loop."""
+        monkeypatch.setenv('LEMONGRASS_DB_PASSWORD', 'test-password')
+
     def _races(self):
         return [
             _make_race(101, 'Real Hoopties 2022', EPOC_2022),
             _make_race(202, 'Halloween Hoop 2022', EPOC_2022),
         ]
+
+    def test_missing_db_password_fails_before_any_racemonitor_fetch(
+            self, monkeypatch, caplog):
+        # With --force the per-race Influx skip check never runs, so nothing
+        # else touches the database until store_race — after every race has
+        # already spent its rate-limited fetch and rewritten its laps, with
+        # _backfill_one_race catching the SystemExit and continuing. Hours of
+        # work, no race stamped.
+        monkeypatch.delenv('LEMONGRASS_DB_PASSWORD', raising=False)
+        with patch.object(_mod, 'RaceMonitorClient') as mk_client, \
+             patch('lemongrass.laps.backfill_race') as mk_backfill, \
+             pytest.raises(SystemExit) as exc:
+            _mod.run_backfill(self._races(), force=True)
+        assert exc.value.code == 1
+        mk_client.assert_not_called()
+        mk_backfill.assert_not_called()
+        assert any('LEMONGRASS_DB_PASSWORD' in r.message for r in caplog.records)
+
+    def test_dry_run_needs_no_db_password(self, monkeypatch):
+        # A dry run writes nothing, so requiring the password would be a
+        # pointless barrier to "show me what this would do".
+        monkeypatch.delenv('LEMONGRASS_DB_PASSWORD', raising=False)
+        with patch('lemongrass.laps.backfill_race') as mk_backfill:
+            assert _mod.run_backfill(self._races(), dry_run=True) == []
+        mk_backfill.assert_not_called()
 
     def test_calls_laps_for_each_race(self):
         with patch.object(_mod, 'RaceMonitorClient', return_value=MagicMock()), \

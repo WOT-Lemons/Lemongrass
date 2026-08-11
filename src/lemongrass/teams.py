@@ -34,7 +34,11 @@ def _handle_add():
     parser.add_argument('team_id')
     parser.add_argument('name')
     args = parser.parse_args()
-    _db.upsert_team(args.team_id, args.name)
+    try:
+        _db.upsert_team(args.team_id, args.name)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     print(f"{args.team_id}  {args.name}")
     return 0
 
@@ -80,10 +84,15 @@ def _handle_merge():
     parser.add_argument('into_id')
     args = parser.parse_args()
     try:
-        moved = _db.merge_teams(args.from_id, args.into_id)
+        result = _db.merge_teams(args.from_id, args.into_id)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+    moved = result.entries_moved
     print(f"merged {args.from_id} into {args.into_id}: "
           f"{moved} entr{'y' if moved == 1 else 'ies'} moved")
+    if result.name_alias_owner:
+        print(f"Warning: {args.from_id}'s name is already an alias of team "
+              f"{result.name_alias_owner}, so it was not recorded for "
+              f"{args.into_id}", file=sys.stderr)
     return 0

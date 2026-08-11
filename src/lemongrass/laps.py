@@ -76,10 +76,10 @@ _SETTLED_BUFFER_S = 4 * 86400  # 4 days
 class StoredRace:
     """Race-completeness fields read back from the stored race row (Postgres).
 
-    Any field is None when absent from the row (schema_version and
-    expected_lap_count predate the fields they name; end_time_epoc is missing
-    only from a malformed row) — callers must guard against None before
-    comparing them.
+    schema_version and expected_lap_count are None on rows that predate the
+    fields they name, so callers must guard before comparing them.
+    end_time_epoc is 0, not None, when the row's end_time is NULL: its only
+    constructor converts, and stored_end_settled reads 0 as "unknown".
     """
     schema_version: int | None
     expected_lap_count: int | None
@@ -793,7 +793,13 @@ def live_race(ctx, opts, observer=None, _stop_event=None):
             store_entry(ctx)
         if live_session_id is not None:
             if race_meta_written:
-                store_session(ctx, live_session_id, live_session_name, None)
+                # Same reason as the mid-poll call in monitor_routine: it is
+                # entered with session_id already set to this session, so the
+                # change detector never fires for it again. A dropped failure
+                # here means the row is missing for the whole session.
+                if not store_session(ctx, live_session_id, live_session_name,
+                                     None):
+                    pending_sessions.append((live_session_id, live_session_name))
             else:
                 # The race row isn't stored yet; monitor_routine flushes this
                 # once it is, same as any session change discovered mid-poll.
@@ -1620,6 +1626,7 @@ def _epoch_to_dt(epoch_s):
 
 
 _tracks_synced = False
+_tracks_sync_failed = False
 
 
 def _sync_tracks_once():
@@ -1644,14 +1651,23 @@ def _sync_tracks_once():
     it, since ``_db.upsert_race`` runs one statement later through that same
     path and would end the run at the write itself regardless.
     """
-    global _tracks_synced
+    global _tracks_synced, _tracks_sync_failed
     if _tracks_synced:
         return
     try:
         _db.sync_tracks(_tracks.data())
         _tracks_synced = True
-    except Exception:
-        logging.exception("Syncing curated track data failed")
+        _tracks_sync_failed = False
+    except Exception as e:
+        # Retrying (correctly) means every poll re-attempts this, so while the
+        # database is down a full traceback would land every 30s in a 200-line
+        # log pane and bury the lap output the operator is watching on race
+        # day. The traceback is worth exactly one occurrence.
+        if _tracks_sync_failed:
+            logging.warning("Syncing curated track data still failing: %s", e)
+        else:
+            logging.exception("Syncing curated track data failed")
+            _tracks_sync_failed = True
 
 
 def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
@@ -1691,7 +1707,7 @@ def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
         ))
         return True
     except Exception as e:
-        logging.error("Writing race failed: %s", e)
+        logging.error("Writing race failed for race %s: %s", ctx.race_id, e)
         return False
 
 

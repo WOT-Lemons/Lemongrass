@@ -2592,6 +2592,40 @@ class TestLiveClassWiring:
         assert mock_monitor.call_args.kwargs['pending_sessions'] == [(7, 'Day 1')]
         assert mock_monitor.call_args.kwargs['race_meta_written'] is False
 
+    def test_live_race_queues_the_initial_session_when_its_write_fails(self):
+        # The race row landed, so this session is written directly rather than
+        # deferred — but monitor_routine is entered with session_id already
+        # set to it, so its change detector never fires for this session
+        # again. Dropping store_session's False leaves the row missing for the
+        # whole session with nothing to retry it.
+        ctx = self._make_ctx()
+        ctx.delete_api = MagicMock()
+        ctx.client.live.get_session.return_value = self._session_response_with_id(7, 'Day 1')
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'store_race', return_value=True):
+                    with patch.object(_mod, 'store_entry'):
+                        with patch.object(_mod, 'store_session', return_value=False):
+                            with patch.object(_mod, 'monitor_routine') as mock_monitor:
+                                _mod.live_race(ctx, opts)
+        assert mock_monitor.call_args.kwargs['pending_sessions'] == [(7, 'Day 1')]
+        assert mock_monitor.call_args.kwargs['race_meta_written'] is True
+
+    def test_live_race_does_not_queue_the_initial_session_when_it_is_written(self):
+        ctx = self._make_ctx()
+        ctx.delete_api = MagicMock()
+        ctx.client.live.get_session.return_value = self._session_response_with_id(7, 'Day 1')
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'store_race', return_value=True):
+                    with patch.object(_mod, 'store_entry'):
+                        with patch.object(_mod, 'store_session', return_value=True):
+                            with patch.object(_mod, 'monitor_routine') as mock_monitor:
+                                _mod.live_race(ctx, opts)
+        assert mock_monitor.call_args.kwargs['pending_sessions'] == []
+
     def test_monitor_routine_passes_session_id_to_push_influx(self):
         ctx = self._make_ctx()
         opts = _mod.RaceOptions(network_mode=True, interval=30)
@@ -5763,6 +5797,31 @@ def test_sync_tracks_once_runs_only_once_per_process(monkeypatch):
     monkeypatch.setattr(laps, '_tracks_synced', False)
     with patch('lemongrass._db.sync_tracks') as sync:
         laps._sync_tracks_once()
+        laps._sync_tracks_once()
+    assert sync.call_count == 1
+
+
+def test_sync_tracks_once_logs_the_traceback_only_on_the_first_failure(
+        monkeypatch, caplog):
+    # It retries every poll by design, so while Postgres is down an unguarded
+    # logging.exception would put a full traceback into the 200-line TUI log
+    # pane every 30s and bury the lap output.
+    import logging as _logging
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    monkeypatch.setattr(laps, '_tracks_synced', False)
+    monkeypatch.setattr(laps, '_tracks_sync_failed', False)
+    with patch('lemongrass._db.sync_tracks', side_effect=RuntimeError('down')), \
+         caplog.at_level(_logging.WARNING):
+        laps._sync_tracks_once()
+        laps._sync_tracks_once()
+        laps._sync_tracks_once()
+    tracebacks = [r for r in caplog.records if r.exc_info]
+    assert len(tracebacks) == 1
+    assert sum('still failing' in r.getMessage() for r in caplog.records) == 2
+    # Still not latched: the next successful poll syncs.
+    with patch('lemongrass._db.sync_tracks') as sync:
         laps._sync_tracks_once()
     assert sync.call_count == 1
 

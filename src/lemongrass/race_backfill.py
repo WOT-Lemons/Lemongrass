@@ -302,6 +302,17 @@ def run_backfill(races, dry_run=False, force=False):
     """
     from lemongrass.laps import RaceOptions, _influx_only_skip
 
+    # Fail before the first rate-limited fetch, not after the last. Without
+    # force, _influx_only_skip reaches _db.database_url on race one and exits.
+    # With force it never runs, so every race would fetch (6 req/min), rewrite
+    # its laps, and only then hit the missing password inside store_race —
+    # where _backfill_one_race catches the SystemExit and carries on to the
+    # next. Hours of work across the field, no race ever stamped.
+    if not dry_run and not _db.db_password_present():
+        logging.error("%s environment variable not set",
+                      _config.load_config().postgres.password_env)
+        sys.exit(1)
+
     failures = []
     opts = RaceOptions(network_mode=True, skip_if_complete=not force)
     client = None
