@@ -215,3 +215,17 @@ def test_the_pair_predicate_strips_embedded_double_quotes_from_car_number(db):
             'pairs', team="'wot'", venue="'thompson'", event="'all'"))).scalar()
     assert '(r.race_id == "1" and r.car_number == "252")' in predicate
     assert "'" not in predicate
+
+
+def test_the_best_lap_tile_links_into_the_per_race_dashboard():
+    # The link is the only drill-down from an aggregate back to a single race.
+    # laps.json's uid and its race variable name are what make it resolve; a
+    # typo here degrades silently into a link that opens an unfiltered board.
+    for panel in _panels(json.loads(YEAR_OVER_YEAR.read_text())):
+        if panel.get('title') == 'Best lap ever':
+            links = panel['fieldConfig']['defaults']['links']
+            assert len(links) == 1
+            assert 'SI7eTlIMk' in links[0]['url']
+            assert 'var-raceid=${__data.fields.race_id}' in links[0]['url']
+            return
+    raise AssertionError('no "Best lap ever" panel found in the dashboard')
