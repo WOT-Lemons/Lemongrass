@@ -475,3 +475,115 @@ def set_race_identity(race_id, venue_id, layout_id, event_id, conn=None):
             .values(venue_id=venue_id, layout_id=layout_id, event_id=event_id,
                     updated_at=func.now()))
     return result.rowcount > 0
+
+
+@dataclass
+class TeamRow:
+    """One row of the teams table."""
+
+    team_id: str
+    name: str
+
+
+def upsert_team(team_id, name, conn=None):
+    """Insert a team, or rename an existing one.
+
+    `teams add` on an existing id is a rename rather than an error: the team
+    name has changed before and will again, and the id is what entries point at.
+    """
+    from sqlalchemy.dialects.postgresql import insert
+    stmt = insert(_schema.teams).values(team_id=team_id, name=name)
+    with connection(conn) as c:
+        c.execute(stmt.on_conflict_do_update(
+            index_elements=[_schema.teams.c.team_id],
+            set_={'name': stmt.excluded.name}))
+
+
+def get_team(team_id, conn=None):
+    """Return the TeamRow for team_id, or None."""
+    from sqlalchemy import select
+    with connection(conn) as c:
+        row = c.execute(
+            select(_schema.teams).where(_schema.teams.c.team_id == team_id)
+        ).first()
+    return TeamRow(team_id=row.team_id, name=row.name) if row is not None else None
+
+
+def list_teams(conn=None):
+    """Return every team, ordered by id so output is stable."""
+    from sqlalchemy import select
+    with connection(conn) as c:
+        rows = c.execute(
+            select(_schema.teams).order_by(_schema.teams.c.team_id)).all()
+    return [TeamRow(team_id=r.team_id, name=r.name) for r in rows]
+
+
+def add_team_alias(team_id, alias, conn=None):
+    """Record a historical spelling for a team, stored normalized.
+
+    Normalizing here rather than at the call site is what makes "aliases are
+    stored normalized" an invariant instead of a convention: every writer goes
+    through this function, and every reader compares against already-normalized
+    stored values.
+    """
+    from sqlalchemy import insert
+
+    from lemongrass import _tracks
+    with connection(conn) as c:
+        c.execute(insert(_schema.team_aliases).values(
+            team_id=team_id, alias=_tracks.normalize(alias)))
+
+
+def list_team_aliases(team_id=None, conn=None):
+    """Return (team_id, alias) pairs for one team or for every team."""
+    from sqlalchemy import select
+    stmt = select(_schema.team_aliases)
+    if team_id is not None:
+        stmt = stmt.where(_schema.team_aliases.c.team_id == team_id)
+    with connection(conn) as c:
+        rows = c.execute(stmt.order_by(_schema.team_aliases.c.alias)).all()
+    return [(r.team_id, r.alias) for r in rows]
+
+
+def merge_teams(from_id, into_id, conn=None):
+    """Fold one team into another in a single transaction. Returns entries moved.
+
+    The repair path for history recorded under two identities before anyone
+    noticed. It is three statements and not a data migration precisely because
+    entries reference a team_id rather than a name. The source team's own name
+    is kept as an alias of the target — it is the spelling that made the merge
+    necessary, and `entries propose` searches aliases.
+    """
+    from sqlalchemy import delete, select, update
+    from sqlalchemy.dialects.postgresql import insert  # for on_conflict_do_nothing
+
+    from lemongrass import _tracks
+    if from_id == into_id:
+        # Without this guard the final DELETE removes the (only) team row
+        # entries were just re-pointed at, either cascading away its aliases
+        # (no entries referenced it) or failing on the entries FK — neither
+        # is "merged into itself", so reject it up front instead.
+        raise ValueError(f"cannot merge team {from_id!r} into itself")
+    with connection(conn) as c:
+        source = c.execute(select(_schema.teams).where(
+            _schema.teams.c.team_id == from_id)).first()
+        if source is None:
+            raise ValueError(f"no team {from_id!r}")
+        if c.execute(select(_schema.teams.c.team_id).where(
+                _schema.teams.c.team_id == into_id)).scalar() is None:
+            raise ValueError(f"no team {into_id!r}")
+        moved = c.execute(
+            update(_schema.entries)
+            .where(_schema.entries.c.team_id == from_id)
+            .values(team_id=into_id)).rowcount
+        # alias is the primary key, so re-pointing rows cannot collide.
+        c.execute(update(_schema.team_aliases)
+                  .where(_schema.team_aliases.c.team_id == from_id)
+                  .values(team_id=into_id))
+        stmt = insert(_schema.team_aliases).values(
+            team_id=into_id, alias=_tracks.normalize(source.name))
+        c.execute(stmt.on_conflict_do_nothing(
+            index_elements=[_schema.team_aliases.c.alias]))
+        c.execute(delete(_schema.teams).where(
+            _schema.teams.c.team_id == from_id))
+    return moved
