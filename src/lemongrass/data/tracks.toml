@@ -1,0 +1,75 @@
+# Canonical venues, layouts, and events for track identity.
+#
+# This file is curated by hand and reviewed in a pull request — it states facts
+# about the world, identical for every deployment. `lemongrass tracks sync`
+# copies it into the venues/layouts/events tables; `lemongrass races identify`
+# re-tags stored races from it and reports every track name it could not match.
+#
+# Rules the loader enforces, and the two the curator has to remember:
+#   * A venue whose only course is unnamed declares NO [[venue.layout]] at all.
+#   * Matching is one-directional prefix matching, so an input LONGER than the
+#     canonical name needs nothing ("Road Atlanta, Braselton GA"), but any form
+#     SHORTER than it must be listed as an alias ("Gingerman", "Nola").
+
+[[venue]]
+id = "thompson"
+name = "Thompson Speedway Motorsports Park"
+aliases = ["thompson motor speedway", "thompson raceway motorsports park"]
+
+[[venue]]
+id = "gingerman"
+name = "Gingerman Raceway"
+aliases = ["gingerman"]
+
+[[venue]]
+id = "the-ridge"
+name = "The Ridge Motorsports Park"
+aliases = ["the ridge"]
+
+[[venue]]
+id = "nola"
+name = "NOLA Motorsports Park"
+aliases = ["nola"]
+
+[[venue]]
+id = "road-atlanta"
+name = "Road Atlanta"
+aliases = []
+
+[[venue]]
+id = "sonoma"
+name = "Sonoma Raceway"
+aliases = []
+
+[[venue]]
+id = "high-plains"
+name = "High Plains Raceway"
+aliases = []
+
+[[venue]]
+id = "autobahn"
+name = "Autobahn Country Club"
+aliases = []
+
+[[venue]]
+id = "njmp"
+name = "New Jersey Motorsports Park"
+aliases = []
+
+  [[venue.layout]]
+  id = "thunderbolt"
+  name = "Thunderbolt Course"
+  aliases = []
+
+  [[venue.layout]]
+  id = "lightning"
+  name = "Lightning Course"
+  aliases = []
+
+[[series]]
+id = 145   # 24 Hours of Lemons
+
+  [[series.event]]
+  id = "gp-du-lac"
+  name = "GP du Lac Chargoggagoggmanchauggagoggchaubunagungamaugg"
+  keywords = ["gp du lac", "chargoggagogg"]
