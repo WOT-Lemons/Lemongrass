@@ -1,0 +1,270 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "trend",
+      "title": "Lap time by year",
+      "description": "Median and best lap for the selected team at the selected venue. Grouped by the race's year from Postgres, never by the lap timestamp -- lap timestamps are synthetic and some legacy laps are anchored to 1970.\n\nDrawn as a line on an auto-scaled axis rather than as bars. Lap time has no meaningful zero, and a zero-baseline bar renders a fifteen-percent improvement as two near-identical heights. The `trend` panel rather than `timeseries` because the x axis is a year from Postgres, not a timestamp.\n\nKnown cosmetic limitation: the x axis is continuous, so over a short span the tick algorithm picks half-year steps and rounds them to duplicate year labels (2022, 2023, 2023, 2024...). The panel exposes no tick-interval setting. The tooltip and the summary table both give the exact year; a bar chart would fix the ticks only by reintroducing the zero baseline, which costs more than it buys.",
+      "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 8,
+            "showPoints": "always",
+            "fillOpacity": 0,
+            "spanNulls": false,
+            "axisPlacement": "auto"
+          },
+          "mappings": [],
+          "unit": "clockms"
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "year"},
+            "properties": [{"id": "unit", "value": "none"}, {"id": "decimals", "value": 0}]
+          }
+        ]
+      },
+      "options": {
+        "xField": "year",
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {"conversions": [{"targetField": "year", "destinationType": "number"}]}
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\n\ndata =\n  from(bucket: \"laps\")\n    |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"lap\")\n    |> filter(fn: (r) => ${pairs:raw})\n    |> filter(fn: (r) => r._field == \"lap_time\")\n    |> map(fn: (r) => ({r with year: dict.get(dict: years, key: r.race_id, default: \"unknown\")}))\n    |> toFloat()\n\nmed =\n  data\n    |> group(columns: [\"year\"])\n    |> median()\n    |> map(fn: (r) => ({year: r.year, stat: \"median\", _value: r._value}))\n\nbest =\n  data\n    |> filter(fn: (r) => r._value > 0)\n    |> group(columns: [\"year\"])\n    |> min()\n    |> map(fn: (r) => ({year: r.year, stat: \"best\", _value: r._value}))\n\nunion(tables: [med, best])\n  |> pivot(rowKey: [\"year\"], columnKey: [\"stat\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"year\"])"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "barchart",
+      "title": "Total laps by year",
+      "description": "Raw lap-point count. Filtering to a single field is required: the laps bucket also holds standings points, and each lap point carries five to eight fields, so an unfiltered count overcounts roughly sixfold.\n\nThe query also computes a race count -- it is byte-identical to the summary table's -- but the chart hides it. One race against six hundred laps shares no usable axis with them; the summary table below carries the race count instead.",
+      "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisPlacement": "auto", "fillOpacity": 80, "lineWidth": 1},
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "year"},
+            "properties": [{"id": "unit", "value": "none"}, {"id": "decimals", "value": 0}]
+          }
+        ]
+      },
+      "options": {
+        "xField": "year",
+        "orientation": "auto",
+        "showValue": "auto",
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": false},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {"excludeByName": {"races": true}, "indexByName": {}, "renameByName": {}}
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\n\nlaps =\n  from(bucket: \"laps\")\n    |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"lap\")\n    |> filter(fn: (r) => ${pairs:raw})\n    |> filter(fn: (r) => r._field == \"lap_no\")\n    |> map(fn: (r) => ({r with year: dict.get(dict: years, key: r.race_id, default: \"unknown\")}))\n\nlapCount =\n  laps\n    |> group(columns: [\"year\"])\n    |> count()\n    |> map(fn: (r) => ({year: r.year, stat: \"laps\", _value: r._value}))\n\nraceCount =\n  laps\n    |> group(columns: [\"year\"])\n    |> unique(column: \"race_id\")\n    |> count(column: \"race_id\")\n    |> map(fn: (r) => ({year: r.year, stat: \"races\", _value: r.race_id}))\n\nunion(tables: [lapCount, raceCount])\n  |> pivot(rowKey: [\"year\"], columnKey: [\"stat\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"year\"])"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Summary by year",
+      "description": "Race count and lap count per year -- the numeric backup to the charts above.",
+      "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 10},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "thresholds"}, "custom": {"align": "auto"}, "mappings": []},
+        "overrides": []
+      },
+      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false}},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\n\nlaps =\n  from(bucket: \"laps\")\n    |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"lap\")\n    |> filter(fn: (r) => ${pairs:raw})\n    |> filter(fn: (r) => r._field == \"lap_no\")\n    |> map(fn: (r) => ({r with year: dict.get(dict: years, key: r.race_id, default: \"unknown\")}))\n\nlapCount =\n  laps\n    |> group(columns: [\"year\"])\n    |> count()\n    |> map(fn: (r) => ({year: r.year, stat: \"laps\", _value: r._value}))\n\nraceCount =\n  laps\n    |> group(columns: [\"year\"])\n    |> unique(column: \"race_id\")\n    |> count(column: \"race_id\")\n    |> map(fn: (r) => ({year: r.year, stat: \"races\", _value: r.race_id}))\n\nunion(tables: [lapCount, raceCount])\n  |> pivot(rowKey: [\"year\"], columnKey: [\"stat\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"year\"])"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Best lap ever",
+      "description": "Fastest lap across the whole selection, and the race and car it happened in. A table rather than a stat tile because it names the race and carries the drill-down link.\n\nThe link passes the car as well as the race: laps.json defaults its competitor picker to the lowest-numbered car in the race, so a race-only link lands on someone else's car and shows a lap that has nothing to do with the number clicked.",
+      "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 10},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "custom": {"align": "auto"},
+          "mappings": [],
+          "links": [
+            {
+              "title": "Open this race",
+              "url": "/d/SI7eTlIMk/laps?var-raceid=${__data.fields.race_id}&var-carno=${__data.fields.car_number}&from=0&to=now"
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "best_lap"},
+            "properties": [{"id": "unit", "value": "clockms"}]
+          }
+        ]
+      },
+      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false}},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\nraces = dict.fromList(pairs: ${racemap:raw})\n\nfrom(bucket: \"laps\")\n  |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n  |> filter(fn: (r) => r._measurement == \"lap\")\n  |> filter(fn: (r) => ${pairs:raw})\n  |> filter(fn: (r) => r._field == \"lap_time\")\n  |> filter(fn: (r) => r._value > 0)\n  |> group()\n  |> min()\n  |> map(fn: (r) => ({\n      best_lap: r._value,\n      race_id: r.race_id,\n      car_number: r.car_number,\n      race: dict.get(dict: races, key: r.race_id, default: \"unknown\"),\n      year: dict.get(dict: years, key: r.race_id, default: \"unknown\"),\n    }))"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "text",
+      "title": "Data quality",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 19},
+      "options": {
+        "mode": "markdown",
+        "content": "**Lap counts are raw lap points**, not distinct lap numbers. Lap numbers restart at 1 in every session, so counting distinct ones undercounts multi-session races.\n\n**Lap counts are a floor, not an exact figure.** When two of a car's laps share a total time they collapse onto one timestamp, so the second is never stored. The shortfall is well under 0.1% of a race, but it is silent -- nothing in the stored data reveals it, only a comparison against the race's expected lap count -- and it is reproducible on every backfill. Fixing it needs `lap_no` as a tag, which is a schema version bump.\n\n**Races missing from this view are unresolved, not missing data.** A race with no `venue_id` belongs to no venue here, and a race with no `entries` row belongs to no team. Those are the worklists `races identify --dry-run` and `entries propose` report -- curate the data rather than loosening the dashboard.\n\n**A resolved race can still be absent.** Panels 2 and 3 count races from the Influx lap stream, not Postgres: a race with entries but no captured laps, or an `entries.car_number` that does not match the tag Influx stores, contributes zero laps and vanishes from those panels even though it is fully resolved."
+      }
+    }
+  ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "tags": ["lemongrass"],
+  "templating": {
+    "list": [
+      {
+        "name": "venue",
+        "label": "Venue",
+        "type": "query",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
+        "definition": "SELECT v.venue_id AS \"__value\", v.name AS \"__text\" FROM venues v JOIN races r ON r.venue_id = v.venue_id GROUP BY v.venue_id, v.name ORDER BY v.name",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT v.venue_id AS \"__value\", v.name AS \"__text\" FROM venues v JOIN races r ON r.venue_id = v.venue_id GROUP BY v.venue_id, v.name ORDER BY v.name"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "event",
+        "label": "Event",
+        "type": "query",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
+        "definition": "SELECT * FROM (SELECT 'all' AS \"__value\", 'All events' AS \"__text\" UNION ALL SELECT e.event_id, e.name FROM events e JOIN races r ON r.event_id = e.event_id WHERE r.venue_id = ${venue:sqlstring} GROUP BY e.event_id, e.name) x ORDER BY (\"__value\" = 'all') DESC, \"__text\"",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT * FROM (SELECT 'all' AS \"__value\", 'All events' AS \"__text\" UNION ALL SELECT e.event_id, e.name FROM events e JOIN races r ON r.event_id = e.event_id WHERE r.venue_id = ${venue:sqlstring} GROUP BY e.event_id, e.name) x ORDER BY (\"__value\" = 'all') DESC, \"__text\""
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "team",
+        "label": "Team",
+        "type": "query",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
+        "definition": "SELECT t.team_id AS \"__value\", t.name AS \"__text\" FROM teams t JOIN entries e ON e.team_id = t.team_id JOIN races r ON r.race_id = e.race_id WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring}) GROUP BY t.team_id, t.name ORDER BY t.name",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT t.team_id AS \"__value\", t.name AS \"__text\" FROM teams t JOIN entries e ON e.team_id = t.team_id JOIN races r ON r.race_id = e.race_id WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring}) GROUP BY t.team_id, t.name ORDER BY t.name"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "pairs",
+        "type": "query",
+        "hide": 2,
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
+        "definition": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', replace(replace(e.race_id, '\\', '\\\\'), '\"', '\\\"'), replace(replace(btrim(e.car_number), '\\', '\\\\'), '\"', '\\\"')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', replace(replace(e.race_id, '\\', '\\\\'), '\"', '\\\"'), replace(replace(btrim(e.car_number), '\\', '\\\\'), '\"', '\\\"')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "yearmap",
+        "type": "query",
+        "hide": 2,
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
+        "definition": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', replace(replace(r.race_id, '\\', '\\\\'), '\"', '\\\"'), extract(year FROM r.race_time AT TIME ZONE 'UTC')::int::text), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', replace(replace(r.race_id, '\\', '\\\\'), '\"', '\\\"'), extract(year FROM r.race_time AT TIME ZONE 'UTC')::int::text), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "racemap",
+        "type": "query",
+        "hide": 2,
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
+        "definition": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', replace(replace(r.race_id, '\\', '\\\\'), '\"', '\\\"'), replace(replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\\', '\\\\'), '\"', '\\\"')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', replace(replace(r.race_id, '\\', '\\\\'), '\"', '\\\"'), replace(replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\\', '\\\\'), '\"', '\\\"')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      }
+    ]
+  },
+  "time": {"from": "now-10y", "to": "now"},
+  "timepicker": {"hidden": true},
+  "timezone": "browser",
+  "title": "Year over Year",
+  "uid": "wotl-yoy",
+  "version": 1,
+  "weekStart": ""
+}
