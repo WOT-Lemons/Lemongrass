@@ -267,6 +267,33 @@ class TestHandlePrune:
                     _mod._handle_prune()
         assert 'Deleted laps' in capsys.readouterr().out
 
+    def test_prune_shows_the_newest_name_for_an_influx_only_race(self, capsys):
+        # race_name is a tag, so a race whose name changed has two series and
+        # comes back as two Flux tables. last() runs per table, which left the
+        # displayed name decided by table order -- the confirmation prompt
+        # could name the race something it has not been called for years.
+        def _timed(name, when):
+            rec = _rec({'race_id': '64202', 'race_name': name})
+            rec.get_time.return_value = when
+            return rec
+
+        newer = MagicMock()
+        newer.records = [_timed('Current Name', datetime(2026, 2, 1, tzinfo=UTC))]
+        older = MagicMock()
+        older.records = [_timed('Stale Name', datetime(2026, 1, 1, tzinfo=UTC))]
+
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', '64202']):
+            fake_client = self._make_influx_client(races={})
+            fake_client.query_api.return_value.query.return_value = [newer, older]
+            with patch('lemongrass._influx.connect', return_value=fake_client):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    with patch('builtins.input', return_value='n'):
+                        with pytest.raises(SystemExit):
+                            _mod._handle_prune()
+        out = capsys.readouterr().out
+        assert 'Current Name' in out
+        assert 'Stale Name' not in out
+
     def test_prune_still_rejects_a_race_in_neither_store(self, capsys):
         # The guard exists to catch a typo before anything is deleted.
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '64202', '--yes']):

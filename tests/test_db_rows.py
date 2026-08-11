@@ -193,6 +193,28 @@ def test_replace_sessions_leaves_other_races_alone(db):
     assert [s.session_id for s in _db.list_sessions("202")] == [99]
 
 
+def test_upsert_session_refuses_to_steal_another_races_session(db):
+    # The live monitor's single-session write goes through here, not through
+    # replace_sessions, so guarding only the backfill path left the same
+    # silent reassignment reachable from a race in progress.
+    from lemongrass import _db
+    _db.upsert_race(_race("101"))
+    _db.upsert_race(_race("202"))
+    _db.upsert_session(_session(99, race_id="202"))
+    with pytest.raises(ValueError, match="99"):
+        _db.upsert_session(_session(99, race_id="101"))
+    assert [s.session_id for s in _db.list_sessions("202")] == [99]
+    assert _db.list_sessions("101") == []
+
+
+def test_upsert_session_still_updates_a_session_of_the_same_race(db):
+    from lemongrass import _db
+    _db.upsert_race(_race("101"))
+    _db.upsert_session(_session(99, name="Practice"))
+    _db.upsert_session(_session(99, name="Qualifying"))
+    assert [s.name for s in _db.list_sessions("101")] == ["Qualifying"]
+
+
 def test_replace_sessions_refuses_to_steal_another_races_session(db):
     # session_id is the primary key on the assumption that RaceMonitor mints
     # ids globally, but nothing enforces that and the legacy import writes

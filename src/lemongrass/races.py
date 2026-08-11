@@ -195,23 +195,35 @@ def _influx_race_names(query_api, race_ids):
     and prune is the only thing that would ever clean that data up — so its
     not-found guard has to see both stores, not just the new one.
 
+    A race that was renamed has two points carrying different race_name tags.
+    Tags are part of the series key, so those land in different Flux tables
+    and a bare ``last()`` — which runs per table — would leave the answer to
+    table order. The query regroups on race_id and sorts before taking the
+    last, and the newest ``_time`` wins again on the Python side, so the name
+    shown is the current one however the records arrive.
+
     Callers pass ids already through ``_influx.invalid_flux_ids``, which is
     what makes the interpolation below safe.
     """
     from lemongrass._legacy_migration import FAR_FUTURE
     predicate = ' or '.join(f'r.race_id == "{rid}"' for rid in race_ids)
-    names = {}
+    best = {}
     for table in query_api.query(
             f'from(bucket: "{_influx.BUCKET_RACES}")\n'
             f'  |> range(start: {EPOCH_START}, stop: {FAR_FUTURE})\n'
             f'  |> filter(fn: (r) => r._measurement == "race")\n'
             f'  |> filter(fn: (r) => {predicate})\n'
+            f'  |> group(columns: ["race_id"])\n'
+            f'  |> sort(columns: ["_time"])\n'
             f'  |> last()'):
         for record in table.records:
             rid = record.values.get('race_id')
-            if rid:
-                names[rid] = record.values.get('race_name') or 'unknown'
-    return names
+            if not rid:
+                continue
+            when = record.get_time() or datetime.min.replace(tzinfo=UTC)
+            if rid not in best or when >= best[rid][0]:
+                best[rid] = (when, record.values.get('race_name') or 'unknown')
+    return {rid: name for rid, (_, name) in best.items()}
 
 
 def _handle_prune():

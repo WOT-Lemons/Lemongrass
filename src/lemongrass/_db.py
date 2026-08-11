@@ -294,7 +294,18 @@ def _session_row(row):
 
 
 def _session_upsert(row):
-    """Build the insert-or-update statement for one session."""
+    """Build the insert-or-update statement for one session.
+
+    The conflict update is conditional on the stored race_id. session_id is
+    the primary key on the assumption that RaceMonitor mints ids globally, but
+    nothing enforces that and the legacy import writes whatever Influx held.
+    A row another race already owns satisfies neither the insert nor the
+    update, so the statement touches no rows and ``_write_session`` raises —
+    rather than moving the session off that race's picker with no error.
+
+    The condition lives in the statement instead of a preflight SELECT so a
+    concurrent writer cannot slip in between the check and the write.
+    """
     from sqlalchemy import func
     from sqlalchemy.dialects.postgresql import insert
     stmt = insert(_schema.sessions).values(
@@ -311,7 +322,27 @@ def _session_upsert(row):
             'start_time': stmt.excluded.start_time,
             'updated_at': func.now(),
         },
-    )
+        where=_schema.sessions.c.race_id == row.race_id,
+    ).returning(_schema.sessions.c.session_id)
+
+
+def _write_session(c, row):
+    """Run one guarded session upsert, raising if another race owns the id.
+
+    A filtered-out conflict update writes nothing and returns nothing, which
+    is why the statement carries a RETURNING clause: rowcount is -1 for this
+    insert, so an empty result is the only reliable signal. The owning race is
+    looked up afterwards — on the error path only — to name it in the message.
+    """
+    if c.execute(_session_upsert(row)).first() is not None:
+        return
+    from sqlalchemy import select
+    owner = c.execute(
+        select(_schema.sessions.c.race_id)
+        .where(_schema.sessions.c.session_id == row.session_id)).scalar()
+    raise ValueError(
+        f"session {row.session_id} belongs to race {owner!r}; refusing to "
+        f"reassign it to {row.race_id!r}")
 
 
 def upsert_session(row, conn=None):
@@ -320,7 +351,7 @@ def upsert_session(row, conn=None):
     The live monitor's per-session write. Backfill uses replace_sessions.
     """
     with connection(conn) as c:
-        c.execute(_session_upsert(row))
+        _write_session(c, row)
 
 
 def replace_sessions(race_id, rows, conn=None):
@@ -333,28 +364,14 @@ def replace_sessions(race_id, rows, conn=None):
     races are untouched. One transaction means a failed row leaves the
     previous set intact for the next backfill to redo.
 
-    A session id already owned by a different race raises ValueError rather
-    than being reassigned. session_id is the primary key on the assumption
-    that RaceMonitor mints ids globally; nothing enforces that, and the legacy
-    import writes whatever Influx held. Silently rewriting race_id would take
-    the session off the other race's picker with no error and nothing to
-    notice it by until someone re-backfilled that race.
+    A session id already owned by a different race raises ValueError from
+    _write_session rather than being reassigned, and the transaction rolls the
+    whole rewrite back.
     """
-    from sqlalchemy import delete, select
+    from sqlalchemy import delete
     with connection(conn) as c:
-        ids = [r.session_id for r in rows]
-        if ids:
-            stolen = c.execute(
-                select(_schema.sessions.c.session_id)
-                .where(_schema.sessions.c.session_id.in_(ids),
-                       _schema.sessions.c.race_id != race_id)
-            ).scalars().all()
-            if stolen:
-                raise ValueError(
-                    f"session id(s) {sorted(stolen)} already belong to another "
-                    f"race; refusing to reassign them to {race_id!r}")
         for row in rows:
-            c.execute(_session_upsert(row))
+            _write_session(c, row)
         stmt = delete(_schema.sessions).where(
             _schema.sessions.c.race_id == race_id)
         keep = [r.session_id for r in rows]
