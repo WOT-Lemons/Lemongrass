@@ -141,9 +141,26 @@ def _candidates(name, aliases):
     return tuple(sorted(seen, key=lambda c: (-len(c), c)))
 
 
+def _list_of_tables(value, where):
+    """Return ``value`` as a list, raising TrackDataError if it is not one.
+
+    tomllib parses ``key = 1`` and ``key = [[array]]`` into the same Python
+    key with entirely different types; without this check a scalar leaks a
+    raw TypeError out of the ``for`` loop below instead of the documented
+    TrackDataError.
+    """
+    if not isinstance(value, list):
+        raise TrackDataError(f"{where} must be an array of tables, not "
+                              f"{type(value).__name__}")
+    return value
+
+
 def _load_venues(raw_venues):
     """Build the validated venue tuple."""
     venues, venue_ids = [], set()
+    # Maps a normalized candidate to (venue_id, original text) so a collision
+    # names both colliding entries and the shared candidate, not just one.
+    venue_candidate_owners = {}
     for raw in raw_venues:
         _reject_unknown(raw, {"id", "name", "aliases", "layout"}, "[[venue]]")
         venue_id = _text(raw, "id", "[[venue]]")
@@ -153,8 +170,17 @@ def _load_venues(raw_venues):
         where = f"[[venue]] {venue_id}"
         name = _text(raw, "name", where)
         aliases = _string_list(raw, "aliases", where)
+        venue_candidates = _candidates(name, aliases)
+        for candidate in venue_candidates:
+            owner = venue_candidate_owners.get(candidate)
+            if owner is not None:
+                raise TrackDataError(
+                    f"venue {owner!r} and venue {venue_id!r} both normalize "
+                    f"to {candidate!r}; venue candidates must be unique")
+            venue_candidate_owners[candidate] = venue_id
         layouts, layout_ids = [], set()
-        for raw_layout in raw.get("layout", []):
+        layout_candidate_owners = {}
+        for raw_layout in _list_of_tables(raw.get("layout", []), f"{where} layout"):
             _reject_unknown(raw_layout, {"id", "name", "aliases"},
                              f"{where} [[venue.layout]]")
             layout_id = _text(raw_layout, "id", f"{where} [[venue.layout]]")
@@ -164,12 +190,20 @@ def _load_venues(raw_venues):
             layout_ids.add(layout_id)
             lwhere = f"{where} layout {layout_id}"
             layout_name = _text(raw_layout, "name", lwhere)
+            layout_candidates = _candidates(
+                layout_name, _string_list(raw_layout, "aliases", lwhere))
+            for candidate in layout_candidates:
+                owner = layout_candidate_owners.get(candidate)
+                if owner is not None:
+                    raise TrackDataError(
+                        f"layout {owner!r} and layout {layout_id!r} in venue "
+                        f"{venue_id!r} both normalize to {candidate!r}; layout "
+                        f"candidates must be unique within a venue")
+                layout_candidate_owners[candidate] = layout_id
             layouts.append(Layout(
-                layout_id=layout_id, name=layout_name,
-                candidates=_candidates(
-                    layout_name, _string_list(raw_layout, "aliases", lwhere))))
+                layout_id=layout_id, name=layout_name, candidates=layout_candidates))
         venues.append(Venue(venue_id=venue_id, name=name,
-                             candidates=_candidates(name, aliases),
+                             candidates=venue_candidates,
                              layouts=tuple(layouts)))
     return tuple(venues)
 
@@ -186,7 +220,8 @@ def _load_series(raw_series):
             raise TrackDataError(f"duplicate series id: {series_id}")
         series_ids.add(series_id)
         events = []
-        for raw_event in raw.get("event", []):
+        for raw_event in _list_of_tables(raw.get("event", []),
+                                          f"[[series]] {series_id} event"):
             where = f"[[series.event]] in series {series_id}"
             _reject_unknown(raw_event, {"id", "name", "keywords"}, where)
             event_id = _text(raw_event, "id", where)
@@ -217,8 +252,9 @@ def load(path=None):
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
         raise TrackDataError(f"tracks.toml is not valid TOML: {e}") from e
     _reject_unknown(doc, {"venue", "series"}, "top level")
-    return TrackData(venues=_load_venues(doc.get("venue", [])),
-                      series=_load_series(doc.get("series", [])))
+    return TrackData(
+        venues=_load_venues(_list_of_tables(doc.get("venue", []), "[[venue]]")),
+        series=_load_series(_list_of_tables(doc.get("series", []), "[[series]]")))
 
 
 _DATA = None

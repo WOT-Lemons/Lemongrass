@@ -5721,7 +5721,7 @@ def test_store_race_passes_identity_through():
         'thompson', None, 'gp-du-lac')
 
 
-def test_store_race_syncs_curated_tracks_before_writing():
+def test_store_race_syncs_curated_tracks_before_writing(monkeypatch):
     # resolve() reads the shipped file; the foreign keys are satisfied only by
     # rows. Syncing inside store_race — rather than in one caller — is what
     # stops a curated-data edit causing a race-day outage on ANY write path,
@@ -5729,7 +5729,7 @@ def test_store_race_syncs_curated_tracks_before_writing():
     from unittest.mock import patch
 
     from lemongrass import laps
-    laps._tracks_synced = False
+    monkeypatch.setattr(laps, '_tracks_synced', False)
     ctx = laps.RaceContext('101', '252', None, None, 0, metadata=laps.RaceMetadata(
         race_name='GP du Lac', track_name='Thompson', series_name='Lemons',
         end_time_epoc=0, venue_id='thompson'))
@@ -5740,13 +5740,13 @@ def test_store_race_syncs_curated_tracks_before_writing():
     assert upsert.called
 
 
-def test_store_race_still_writes_when_the_sync_fails():
+def test_store_race_still_writes_when_the_sync_fails(monkeypatch):
     # A sync that cannot run leaves the pre-existing risk as it was; failing
     # the race outright would be worse than attempting the write.
     from unittest.mock import patch
 
     from lemongrass import laps
-    laps._tracks_synced = False
+    monkeypatch.setattr(laps, '_tracks_synced', False)
     ctx = laps.RaceContext('101', '252', None, None, 0, metadata=laps.RaceMetadata(
         race_name='GP du Lac', track_name='Thompson', series_name='Lemons',
         end_time_epoc=0))
@@ -5756,11 +5756,11 @@ def test_store_race_still_writes_when_the_sync_fails():
     assert upsert.called
 
 
-def test_sync_tracks_once_runs_only_once_per_process():
+def test_sync_tracks_once_runs_only_once_per_process(monkeypatch):
     from unittest.mock import patch
 
     from lemongrass import laps
-    laps._tracks_synced = False
+    monkeypatch.setattr(laps, '_tracks_synced', False)
     with patch('lemongrass._db.sync_tracks') as sync:
         laps._sync_tracks_once()
         laps._sync_tracks_once()

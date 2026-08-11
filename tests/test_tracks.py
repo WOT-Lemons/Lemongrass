@@ -187,6 +187,39 @@ id = "a"
         _tracks.load(path)
 
 
+def test_scalar_venue_section_is_rejected(tmp_path):
+    path = _write(tmp_path, "venue = 1\n")
+    with pytest.raises(_tracks.TrackDataError, match="venue"):
+        _tracks.load(path)
+
+
+def test_scalar_venue_layout_section_is_rejected(tmp_path):
+    path = _write(tmp_path, """
+[[venue]]
+id = "a"
+name = "A"
+layout = 1
+""")
+    with pytest.raises(_tracks.TrackDataError, match="layout"):
+        _tracks.load(path)
+
+
+def test_scalar_series_section_is_rejected(tmp_path):
+    path = _write(tmp_path, "series = 1\n")
+    with pytest.raises(_tracks.TrackDataError, match="series"):
+        _tracks.load(path)
+
+
+def test_scalar_series_event_section_is_rejected(tmp_path):
+    path = _write(tmp_path, """
+[[series]]
+id = 145
+event = 1
+""")
+    with pytest.raises(_tracks.TrackDataError, match="event"):
+        _tracks.load(path)
+
+
 def test_data_is_cached(tmp_path):
     first = _tracks.data()
     assert _tracks.data() is first
@@ -245,6 +278,66 @@ name = "Summit Point Raceway"
     _tracks._DATA = _tracks.load(path)
     assert _tracks.resolve("Summit Point Raceway", "", None).venue_id == "long"
     assert _tracks.resolve("Summit Point", "", None).venue_id == "short"
+
+
+def test_colliding_venue_aliases_are_rejected(tmp_path):
+    # Two venues whose normalized candidates tie in length: _match_venue's
+    # strict "longer than best" comparison would silently let file order pick
+    # a winner, and every race at either venue gets tagged with one venue_id
+    # forever, with no error to notice it. This must be rejected at load time.
+    path = _write(tmp_path, """
+[[venue]]
+id = "a"
+name = "Park Raceway"
+
+[[venue]]
+id = "b"
+name = "Park"
+aliases = ["Park Raceway"]
+""")
+    with pytest.raises(_tracks.TrackDataError, match="park raceway"):
+        _tracks.load(path)
+
+
+def test_colliding_layout_candidates_within_one_venue_are_rejected(tmp_path):
+    path = _write(tmp_path, """
+[[venue]]
+id = "a"
+name = "A"
+
+  [[venue.layout]]
+  id = "full"
+  name = "Full Course"
+
+  [[venue.layout]]
+  id = "long"
+  name = "Long"
+  aliases = ["Full Course"]
+""")
+    with pytest.raises(_tracks.TrackDataError, match="full course"):
+        _tracks.load(path)
+
+
+def test_same_layout_candidate_under_two_different_venues_is_accepted(tmp_path):
+    path = _write(tmp_path, """
+[[venue]]
+id = "a"
+name = "A"
+
+  [[venue.layout]]
+  id = "full"
+  name = "Full Course"
+
+[[venue]]
+id = "b"
+name = "B"
+
+  [[venue.layout]]
+  id = "full"
+  name = "Full Course"
+""")
+    data = _tracks.load(path)
+    assert {v.venue_id for v in data.venues} == {"a", "b"}
 
 
 def test_layout_does_not_cross_match_between_venues(tmp_path):

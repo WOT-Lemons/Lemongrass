@@ -24,11 +24,6 @@ def _tables(mapping):
     return [t]
 
 
-def _row(race_id, name, when):
-    from lemongrass import _db
-    return _db.RaceListRow(race_id=race_id, race_time=when, name=name)
-
-
 def _list_row(race_id, name, when, venue_name=None, event_name=None):
     from lemongrass import _db
     return _db.RaceListRow(race_id=race_id, name=name, race_time=when,
@@ -36,8 +31,8 @@ def _list_row(race_id, name, when, venue_name=None, event_name=None):
 
 
 def test_fetch_race_rows_joins_sql_attributes_with_flux_counts():
-    rows = [_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC)),
-            _row('102', 'Fall', datetime(2026, 9, 1, tzinfo=UTC))]
+    rows = [_list_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC)),
+            _list_row('102', 'Fall', datetime(2026, 9, 1, tzinfo=UTC))]
     query_api = MagicMock()
     query_api.query.side_effect = [
         _tables({'101': 40, '102': 10}),   # total lap counts
@@ -56,7 +51,7 @@ def test_fetch_race_rows_reports_the_current_schema_version():
     # Deliberate: races list renders "stale (N/M at vX)" where X is the
     # version laps should be at, not the version stored on the race.
     from lemongrass.laps import SCHEMA_VERSION
-    rows = [_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC))]
+    rows = [_list_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC))]
     query_api = MagicMock()
     query_api.query.side_effect = [_tables({}), _tables({})]
     with patch('lemongrass.races._db.list_races_with_venue', return_value=rows):

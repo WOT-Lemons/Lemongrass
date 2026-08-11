@@ -102,6 +102,19 @@ def test_cli_set_rejects_an_unknown_team(db, capsys):
     assert _db.list_entries() == []
 
 
+def test_cli_propose_rejects_an_unknown_team(capsys):
+    # Without this check, propose scans Influx, prints proposals, prompts the
+    # operator, and then dies on an unhandled FK IntegrityError inside
+    # confirm_proposals at the first accepted proposal. Validate before
+    # opening the Influx connection at all.
+    with patch("lemongrass._db.get_team", return_value=None), \
+         patch("lemongrass._influx.connect") as connect:
+        assert _run(["lemongrass-entries", "propose", "--team", "nosuch",
+                    "--term", "wot"]) == 1
+    assert "nosuch" in capsys.readouterr().err
+    connect.assert_not_called()
+
+
 def test_entries_is_a_registered_command():
     from lemongrass import cli
     assert cli._COMMANDS["entries"] == "lemongrass.entries"
@@ -245,9 +258,12 @@ def test_confirm_reports_an_alias_conflict_without_aborting(capsys):
 
 
 def test_propose_command_writes_nothing_when_every_answer_is_no(capsys):
+    from lemongrass import _db
     proposals = [{"race_id": "101", "car_number": "252",
                   "competitor_name": "WOT Lemons", "existing_team_id": None}]
-    with patch("lemongrass._influx.connect"), \
+    with patch("lemongrass._db.get_team",
+               return_value=_db.TeamRow("wot-lemons", "WOT Lemons")), \
+         patch("lemongrass._influx.connect"), \
          patch("lemongrass.entries.propose_entries", return_value=proposals), \
          patch("builtins.input", return_value="n"), \
          patch("lemongrass._db.set_entry") as write, \

@@ -182,6 +182,14 @@ def _handle_propose():
         print("Error: no team given and [team] id is not set in the config file",
               file=sys.stderr)
         return 1
+    # Mirror _handle_set's guard: without it, an unknown team scans Influx,
+    # prints proposals, prompts the operator, and only then dies on an
+    # unhandled FK IntegrityError inside confirm_proposals at the first
+    # accepted proposal, abandoning the rest.
+    if _db.get_team(team_id) is None:
+        print(f"Error: no team {team_id!r}; run `lemongrass teams add "
+              f"{team_id} <name>` first", file=sys.stderr)
+        return 1
 
     with _influx.connect() as client:
         proposals = propose_entries(client.query_api(), args.terms, team_id)
