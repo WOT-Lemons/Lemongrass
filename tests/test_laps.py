@@ -5881,3 +5881,33 @@ def test_store_entry_warns_and_skips_when_the_team_row_is_missing(tmp_path,
         assert laps.store_entry(_entry_ctx()) is False
     assert not write.called
     assert "typo" in caplog.text
+
+
+def test_store_entry_swallows_a_db_unreachable_error_from_get_team(tmp_path,
+                                                                    monkeypatch):
+    # get_team hits Postgres too; a connectivity blip there must not propagate
+    # out of store_entry and kill a live capture whose race row already landed.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.get_team', side_effect=RuntimeError("db down")), \
+         patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx()) is False
+    assert not write.called
+
+
+def test_store_entry_does_nothing_for_a_blank_car_number(monkeypatch, tmp_path):
+    # ' 2' whitespace has reached the tag layer before and blanked a dashboard;
+    # a whitespace-only car_number must not write a real entries row.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx("   ")) is False
+    assert not write.called

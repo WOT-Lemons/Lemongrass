@@ -1703,25 +1703,28 @@ def store_entry(ctx):
     including the year the number changed because another entrant took ours.
     Fieldwide backfill runs with car_number=None and writes nothing.
 
-    Never fails a race: a missing or misspelled team id is logged and skipped
-    rather than raising a foreign key violation into the write path.
+    Never fails a race: a missing or misspelled team id, or any other failure
+    (including the database being unreachable), is logged and skipped rather
+    than raising into the write path — the race row is already committed by
+    the time this runs, and losing an optional entry row is far cheaper than
+    losing the rest of the capture.
     """
-    if ctx.car_number is None:
-        return False
-    team_id = _config.load_config().team.id
-    if not team_id:
-        return False
-    if _db.get_team(team_id) is None:
-        logging.warning(
-            "team.id %r has no team row; run `lemongrass teams add %s <name>` "
-            "to record entries", team_id, team_id)
+    if ctx.car_number is None or not str(ctx.car_number).strip():
         return False
     try:
+        team_id = _config.load_config().team.id
+        if not team_id:
+            return False
+        if _db.get_team(team_id) is None:
+            logging.warning(
+                "team.id %r has no team row; run `lemongrass teams add %s <name>` "
+                "to record entries", team_id, team_id)
+            return False
         _db.set_entry(ctx.race_id, str(ctx.car_number).strip(), team_id)
         return True
-    except Exception as e:
-        logging.error("Writing entry failed for race %s car %s: %s",
-                      ctx.race_id, ctx.car_number, e)
+    except Exception:
+        logging.exception("Writing entry failed for race %s car %s",
+                          ctx.race_id, ctx.car_number)
         return False
 
 
