@@ -1,9 +1,15 @@
-# Canonical venues, layouts, and events for track identity.
+# Canonical venues and layouts for track identity.
 #
 # This file is curated by hand and reviewed in a pull request — it states facts
 # about the world, identical for every deployment. `lemongrass tracks sync`
-# copies it into the venues/layouts/events tables; `lemongrass races identify`
+# copies it into the venues/layouts tables; `lemongrass races identify`
 # re-tags stored races from it and reports every track name it could not match.
+#
+# Events are deliberately NOT curated here: an event is a naming convention
+# rather than a place, so `race.event_id` stays NULL until there is a better
+# home for it. The loader and schema still support a `[[series]]` /
+# `[[series.event]]` table, and remain fully exercised by tests — this file
+# simply carries none.
 #
 # Rules the loader enforces, and the two the curator has to remember:
 #   * A venue declares NO [[venue.layout]] when no surveyed track name carries
@@ -84,31 +90,3 @@ aliases = ["njmp", "thunderbolt"]
 id = "pittrace"
 name = "Pittsburgh International Race Complex"
 aliases = ["pittsburgh int l race complex", "pittsburgh international raceway"]
-
-[[series]]
-id = 145   # 24 Hours of Lemons
-
-  [[series.event]]
-  id = "gp-du-lac"
-  name = "GP du Lac Chargoggagogg(etc)"
-  keywords = ["gp du lac", "chargoggagogg"]
-
-  [[series.event]]
-  id = "halloween-hooptiefest"
-  name = "Halloween Hooptiefest"
-  keywords = ["halloween"]
-
-  [[series.event]]
-  id = "real-hoopties-nj"
-  name = "Real Hoopties of New Jersey"
-  keywords = ["hoopties of new jersey", "hoopties of nj"]
-
-  [[series.event]]
-  id = "bracket-grand-prix"
-  name = "Bracket Grand Prix"
-  keywords = ["bracket grand prix", "bracket grad prix"]
-
-  [[series.event]]
-  id = "pitt-maneuver"
-  name = "The Pitt Maneuver"
-  keywords = ["pitt maneuver", "lemons pitt"]

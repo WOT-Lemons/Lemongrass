@@ -705,10 +705,14 @@ def _stored(race_id, name, track_name, series_id=None, **ids):
 def test_identify_resolves_a_stored_race():
     from unittest.mock import patch
 
+    from lemongrass import _tracks
     from lemongrass import races as races_mod
     rows = [_stored("101", "GP du Lac 2023", "Thompson Motor Speedway", 145)]
+    identity = _tracks.TrackIdentity(
+        venue_id="thompson", layout_id=None, event_id="gp-du-lac")
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._tracks.resolve", return_value=identity), \
          patch("lemongrass._db.set_race_identity") as write:
         changes, unresolved, _ = races_mod.identify_races()
     assert changes == [("101", (None, None, None),
@@ -735,11 +739,15 @@ def test_identify_leaves_unresolved_races_null_and_counts_them():
 def test_identify_is_idempotent():
     from unittest.mock import patch
 
+    from lemongrass import _tracks
     from lemongrass import races as races_mod
     rows = [_stored("101", "GP du Lac 2023", "Thompson Motor Speedway", 145,
                     venue_id="thompson", event_id="gp-du-lac")]
+    identity = _tracks.TrackIdentity(
+        venue_id="thompson", layout_id=None, event_id="gp-du-lac")
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._tracks.resolve", return_value=identity), \
          patch("lemongrass._db.set_race_identity") as write:
         changes, _, _ = races_mod.identify_races()
     assert changes == []
@@ -763,10 +771,14 @@ def test_identify_dry_run_writes_nothing():
 def test_identify_resolves_the_event_of_a_legacy_race_with_no_series_id():
     from unittest.mock import patch
 
+    from lemongrass import _tracks
     from lemongrass import races as races_mod
     rows = [_stored("101", "GP du Lac 2019", "Thompson Motor Speedway", None)]
+    identity = _tracks.TrackIdentity(
+        venue_id="thompson", layout_id=None, event_id="gp-du-lac")
     with patch("lemongrass._db.list_races", return_value=rows), \
          patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._tracks.resolve", return_value=identity), \
          patch("lemongrass._db.set_race_identity"):
         changes, _, _ = races_mod.identify_races()
     assert changes[0][2] == ("thompson", None, "gp-du-lac")
