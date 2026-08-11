@@ -4,7 +4,7 @@
 Race/session attributes live in Postgres; laps, standings, and lap counts
 stay in InfluxDB, so several reads and the prune below are hybrid.
 
-Subcommands: list, prune, backfill, diagnose.
+Subcommands: list, prune, backfill, diagnose, identify.
 Run `lemongrass races <subcommand> --help` for per-subcommand options.
 """
 
@@ -16,7 +16,7 @@ from lemongrass import _db, _influx
 
 EPOCH_START = '1970-01-01T00:00:00Z'
 
-_SUBCOMMANDS = ('list', 'prune', 'backfill', 'diagnose')
+_SUBCOMMANDS = ('list', 'prune', 'backfill', 'diagnose', 'identify')
 
 
 def main():
@@ -35,7 +35,8 @@ def main():
     subcmd = sys.argv.pop(1)
     sys.argv[0] = f'lemongrass-races-{subcmd}'
     {'list': _handle_list, 'prune': _handle_prune,
-     'backfill': _handle_backfill, 'diagnose': _handle_diagnose}[subcmd]()
+     'backfill': _handle_backfill, 'diagnose': _handle_diagnose,
+     'identify': _handle_identify}[subcmd]()
 
 
 def run_races_tui(client):
@@ -244,3 +245,67 @@ def _handle_diagnose():
     """Delegate to lemongrass race-diagnose (race_diagnose.main)."""
     from lemongrass import race_diagnose
     race_diagnose.main()
+
+
+def identify_races(race_ids=None, dry_run=False):
+    """Re-resolve stored races' identity columns from their stored text.
+
+    Reads track_name, name, and series_id straight out of Postgres and runs
+    them back through the curated resolver, so this makes no RaceMonitor calls
+    at all: it is free of the 6 req/min limit and works offline. Only rows
+    whose ids actually changed are written.
+
+    Returns (changes, unresolved): changes is a list of
+    (race_id, before_ids, after_ids) triples; unresolved maps each track name
+    that matched no venue to how many races carry it — the worklist for the
+    next tracks.toml edit.
+    """
+    from lemongrass import _tracks
+    if not dry_run:
+        # The identity columns are foreign keys; a file edit that added a venue
+        # would otherwise fail every UPDATE that used it.
+        _db.sync_tracks(_tracks.data())
+    rows = _db.list_races()
+    if race_ids:
+        wanted = set(race_ids)
+        rows = [row for row in rows if row.race_id in wanted]
+    changes, unresolved = [], {}
+    for row in rows:
+        identity = _tracks.resolve(row.track_name, row.name, row.series_id)
+        before = (row.venue_id, row.layout_id, row.event_id)
+        after = (identity.venue_id, identity.layout_id, identity.event_id)
+        if identity.venue_id is None:
+            unresolved[row.track_name] = unresolved.get(row.track_name, 0) + 1
+        if before != after:
+            changes.append((row.race_id, before, after))
+            if not dry_run:
+                _db.set_race_identity(row.race_id, *after)
+    return changes, unresolved
+
+
+def _format_ids(ids):
+    """Render an identity triple for the before/after report."""
+    return '/'.join(part or '-' for part in ids)
+
+
+def _handle_identify():
+    """Parse args and re-tag stored races from the curated track data."""
+    parser = argparse.ArgumentParser(
+        prog='lemongrass-races-identify',
+        description='Re-resolve stored races against the curated track data')
+    parser.add_argument('race_id', nargs='*')
+    parser.add_argument('--dry-run', action='store_true', default=False,
+                        help='Report what would change without writing')
+    args = parser.parse_args()
+
+    changes, unresolved = identify_races(race_ids=args.race_id or None,
+                                         dry_run=args.dry_run)
+    for race_id, before, after in changes:
+        print(f"{race_id:<10} {_format_ids(before)} -> {_format_ids(after)}")
+    verb = 'would change' if args.dry_run else 'changed'
+    print(f"{len(changes)} race(s) {verb}")
+    if unresolved:
+        print("unresolved track names (add to tracks.toml):")
+        for name, count in sorted(unresolved.items(),
+                                  key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {count:4d}  {name or '(blank)'}")

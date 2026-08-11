@@ -371,3 +371,18 @@ def test_upsert_race_rejects_a_layout_without_its_venue(db):
         _db.upsert_race(_db.RaceRow(
             race_id="r1", race_time=datetime(2024, 5, 1, tzinfo=UTC),
             layout_id="thunderbolt"))
+
+
+def test_set_race_identity_updates_and_can_clear(db):
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    _db.upsert_race(_db.RaceRow(race_id="r1",
+                                race_time=datetime(2024, 5, 1, tzinfo=UTC)))
+    assert _db.set_race_identity("r1", "thompson", None, "gp-du-lac") is True
+    assert _db.get_race("r1").venue_id == "thompson"
+    # An explicit UPDATE, unlike the upsert, can clear a tag back to NULL.
+    assert _db.set_race_identity("r1", None, None, None) is True
+    assert _db.get_race("r1").venue_id is None
+    assert _db.set_race_identity("nope", None, None, None) is False

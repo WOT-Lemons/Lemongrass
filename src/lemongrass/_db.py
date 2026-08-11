@@ -458,3 +458,20 @@ def sync_tracks(data, dry_run=False, conn=None):
     summary['orphan_layouts'] = sorted(set(stored_layouts) - file_layouts)
     summary['orphan_events'] = sorted(set(stored_events) - file_events)
     return summary
+
+
+def set_race_identity(race_id, venue_id, layout_id, event_id, conn=None):
+    """Set one race's three identity columns. True if the race exists.
+
+    An explicit UPDATE rather than an upsert, so `races identify` can also
+    clear a tag back to NULL after a tracks.toml correction — which the
+    COALESCE in upsert_race deliberately cannot do.
+    """
+    from sqlalchemy import func, update
+    with connection(conn) as c:
+        result = c.execute(
+            update(_schema.races)
+            .where(_schema.races.c.race_id == race_id)
+            .values(venue_id=venue_id, layout_id=layout_id, event_id=event_id,
+                    updated_at=func.now()))
+    return result.rowcount > 0

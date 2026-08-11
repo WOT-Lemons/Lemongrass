@@ -386,6 +386,25 @@ The `backfill` subcommand delegates to `lemongrass race-backfill` and supports t
 
 All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata itself is stored in PostgreSQL (see [Database Schema](#database-schema)); the legacy `race_sessions` Influx bucket is no longer written to and is kept only as migration/rollback material.
 
+### Track identity
+
+Venue, layout, and event ids come from `src/lemongrass/data/tracks.toml`, a curated file
+that ships with the package — RaceMonitor's `Track` field is free text and its spelling
+drifts between years, which is what stops races grouping across seasons. Editing that
+file is a normal pull request.
+
+```bash
+lemongrass races identify --dry-run   # what would change, plus every unmatched name
+# edit src/lemongrass/data/tracks.toml to cover what the report listed
+lemongrass races identify             # write the new ids
+```
+
+`races identify` reads only what is already stored, so it makes no RaceMonitor calls and
+is not subject to the API rate limit. A race whose track name matches nothing is left
+with NULL ids and keeps showing its raw `track_name`; there is no fallback tag to clean
+up later. `lemongrass tracks sync` copies the file into the database on its own, and
+`lemongrass db upgrade` runs it as its final step.
+
 ## Configuration
 
 lemongrass is configured by an optional TOML file named by the `LEMONGRASS_CONFIG` environment

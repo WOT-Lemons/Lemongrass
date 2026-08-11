@@ -575,3 +575,94 @@ class TestRacesTuiEntry:
         monkeypatch.setattr(_mod.sys.stdout, 'isatty', lambda: True)
         with pytest.raises(SystemExit):
             _mod.main()
+
+
+def _stored(race_id, name, track_name, series_id=None, **ids):
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    return _db.RaceRow(race_id=race_id, race_time=datetime(2024, 5, 1, tzinfo=UTC),
+                       name=name, track_name=track_name, series_id=series_id, **ids)
+
+
+def test_identify_resolves_a_stored_race():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac 2023", "Thompson Motor Speedway", 145)]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity") as write:
+        changes, unresolved = races_mod.identify_races()
+    assert changes == [("101", (None, None, None),
+                        ("thompson", None, "gp-du-lac"))]
+    assert unresolved == {}
+    write.assert_called_once_with("101", "thompson", None, "gp-du-lac")
+
+
+def test_identify_leaves_unresolved_races_null_and_counts_them():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "Race A", "Mystery Park"),
+            _stored("102", "Race B", "Mystery Park")]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity") as write:
+        changes, unresolved = races_mod.identify_races()
+    assert changes == []
+    assert unresolved == {"Mystery Park": 2}
+    assert not write.called
+
+
+def test_identify_is_idempotent():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac 2023", "Thompson Motor Speedway", 145,
+                    venue_id="thompson", event_id="gp-du-lac")]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity") as write:
+        changes, _ = races_mod.identify_races()
+    assert changes == []
+    assert not write.called
+
+
+def test_identify_dry_run_writes_nothing():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac 2023", "Thompson Motor Speedway", 145)]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks") as sync, \
+         patch("lemongrass._db.set_race_identity") as write:
+        changes, _ = races_mod.identify_races(dry_run=True)
+    assert len(changes) == 1
+    assert not write.called
+    assert not sync.called
+
+
+def test_identify_resolves_the_event_of_a_legacy_race_with_no_series_id():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac 2019", "Thompson Motor Speedway", None)]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity"):
+        changes, _ = races_mod.identify_races()
+    assert changes[0][2] == ("thompson", None, "gp-du-lac")
+
+
+def test_identify_can_be_limited_to_named_races():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac", "Thompson Motor Speedway", 145),
+            _stored("102", "Other", "Gingerman")]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity"):
+        changes, _ = races_mod.identify_races(race_ids=["102"])
+    assert [c[0] for c in changes] == ["102"]
