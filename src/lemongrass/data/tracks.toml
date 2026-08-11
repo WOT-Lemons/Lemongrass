@@ -14,7 +14,8 @@
 [[venue]]
 id = "thompson"
 name = "Thompson Speedway Motorsports Park"
-aliases = ["thompson motor speedway", "thompson raceway motorsports park"]
+aliases = ["thompson motor speedway", "thompson raceway motorsports park",
+           "thompson speedway"]
 
 [[venue]]
 id = "gingerman"
@@ -49,6 +50,11 @@ aliases = []
 [[venue]]
 id = "autobahn"
 name = "Autobahn Country Club"
+aliases = []
+
+[[venue]]
+id = "nhms"
+name = "New Hampshire Motor Speedway"
 aliases = []
 
 [[venue]]

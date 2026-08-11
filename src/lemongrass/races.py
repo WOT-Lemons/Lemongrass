@@ -284,7 +284,10 @@ def _handle_prune():
             print(f"About to delete data for {len(race_ids)} race(s):")
             for rid in race_ids:
                 print(f"  {rid}  {race_names[rid]}")
-            answer = input("Proceed? [y/N] ")
+            try:
+                answer = input("Proceed? [y/N] ")
+            except EOFError:  # stdin closed mid-run is not consent to delete
+                answer = 'n'
             if answer.strip().lower() != 'y':
                 print("Aborted.")
                 sys.exit(0)

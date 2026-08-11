@@ -268,6 +268,19 @@ class TestHandlePrune:
         assert exc.value.code == 0
         assert 'Aborted' in capsys.readouterr().out
 
+    def test_prune_aborts_on_eof(self, capsys):
+        # Ctrl-D, or a redirected stdin that runs out, is not consent to
+        # delete: it aborts like 'n' rather than tracebacking.
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345']):
+            with patch('lemongrass._influx.connect',
+                       return_value=self._make_influx_client()):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    with patch('builtins.input', side_effect=EOFError):
+                        with pytest.raises(SystemExit) as exc:
+                            _mod._handle_prune()
+        assert exc.value.code == 0
+        assert 'Aborted' in capsys.readouterr().out
+
     def test_prune_deletes_from_all_three_buckets(self):
         with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345', '--yes']):
             fake_client = self._make_influx_client()

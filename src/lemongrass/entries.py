@@ -169,6 +169,20 @@ def propose_entries(query_api, terms, team_id):
     return proposals
 
 
+def _prompt(text):
+    """input(), returning None instead of raising on end of input.
+
+    Ctrl-D, or a redirected stdin that runs out, means "no more answers" — the
+    caller stops asking and reports what it already wrote, rather than dying
+    part-way through a loop whose earlier answers are already stored.
+    """
+    try:
+        return input(text)
+    except EOFError:
+        print()
+        return None
+
+
 def confirm_proposals(proposals, team_id):
     """Prompt for each proposal and write the accepted ones.
 
@@ -185,9 +199,11 @@ def confirm_proposals(proposals, team_id):
         note = ''
         if proposal['existing_team_id']:
             note = f" (currently {proposal['existing_team_id']})"
-        answer = input(
+        answer = _prompt(
             f"race {proposal['race_id']} car {proposal['car_number']}: "
             f"{proposal['competitor_name']}{note} -> {team_id}? [y/N] ")
+        if answer is None:
+            break
         if answer.strip().lower() != 'y':
             continue
         try:
@@ -200,8 +216,10 @@ def confirm_proposals(proposals, team_id):
             failed += 1
             continue
         written += 1
-        alias = input(f"  record {proposal['competitor_name']!r} as an alias "
-                      f"of {team_id}? [y/N] ")
+        alias = _prompt(f"  record {proposal['competitor_name']!r} as an alias "
+                        f"of {team_id}? [y/N] ")
+        if alias is None:
+            break
         if alias.strip().lower() == 'y':
             try:
                 _db.add_team_alias(team_id, proposal['competitor_name'])

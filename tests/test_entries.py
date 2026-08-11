@@ -145,6 +145,34 @@ def test_confirm_keeps_going_when_a_race_has_no_stored_row(capsys):
     assert "no race row for '101'" in capsys.readouterr().err
 
 
+def test_confirm_treats_eof_as_declining_the_rest():
+    # Ctrl-D (or a non-tty stdin) must end the run cleanly and keep the count
+    # of what was already written, not traceback out of a half-done loop.
+    from lemongrass import entries
+    proposals = [
+        {"race_id": "101", "car_number": "252", "competitor_name": "WOT Lemons",
+         "existing_team_id": None},
+        {"race_id": "102", "car_number": "7", "competitor_name": "WOT Lemons",
+         "existing_team_id": None},
+    ]
+    # y, n to the alias, then EOF on the second entry's prompt.
+    with patch("builtins.input", side_effect=["y", "n", EOFError]), \
+         patch("lemongrass._db.set_entry"):
+        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 0)
+
+
+def test_confirm_treats_eof_at_the_alias_prompt_as_no():
+    # The entry is already written by then; EOF must not undo or crash it.
+    from lemongrass import entries
+    proposals = [{"race_id": "101", "car_number": "252",
+                  "competitor_name": "WOT Lemons", "existing_team_id": None}]
+    with patch("builtins.input", side_effect=["y", EOFError]), \
+         patch("lemongrass._db.set_entry"), \
+         patch("lemongrass._db.add_team_alias") as add_alias:
+        assert entries.confirm_proposals(proposals, "wot-lemons") == (1, 0)
+    add_alias.assert_not_called()
+
+
 def test_cli_propose_exits_nonzero_when_every_accepted_write_failed(capsys):
     # "recorded 0 entries" and exit 0 would read as "nothing to do" to a
     # script, when in fact the operator answered y and every write failed.
