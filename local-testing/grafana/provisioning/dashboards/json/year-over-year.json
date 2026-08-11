@@ -7,15 +7,24 @@
   "panels": [
     {
       "id": 1,
-      "type": "barchart",
+      "type": "trend",
       "title": "Lap time by year",
-      "description": "Median and best lap for the selected team at the selected venue. Grouped by the race's year from Postgres, never by the lap timestamp -- lap timestamps are synthetic and some legacy laps are anchored to 1970.",
+      "description": "Median and best lap for the selected team at the selected venue. Grouped by the race's year from Postgres, never by the lap timestamp -- lap timestamps are synthetic and some legacy laps are anchored to 1970.\n\nDrawn as a line on an auto-scaled axis rather than as bars. Lap time has no meaningful zero, and a zero-baseline bar renders a fifteen-percent improvement as two near-identical heights. The `trend` panel rather than `timeseries` because the x axis is a year from Postgres, not a timestamp.",
       "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
       "gridPos": {"h": 10, "w": 12, "x": 0, "y": 0},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
-          "custom": {"axisPlacement": "auto", "fillOpacity": 80, "lineWidth": 1},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 8,
+            "showPoints": "always",
+            "fillOpacity": 0,
+            "spanNulls": false,
+            "axisPlacement": "auto"
+          },
           "mappings": [],
           "unit": "clockms"
         },
@@ -28,11 +37,15 @@
       },
       "options": {
         "xField": "year",
-        "orientation": "auto",
-        "showValue": "auto",
         "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
         "tooltip": {"mode": "multi", "sort": "none"}
       },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {"conversions": [{"targetField": "year", "destinationType": "number"}]}
+        }
+      ],
       "targets": [
         {
           "refId": "A",
@@ -45,7 +58,7 @@
       "id": 2,
       "type": "barchart",
       "title": "Total laps by year",
-      "description": "Raw lap-point count. Filtering to a single field is required: the laps bucket also holds standings points, and each lap point carries five to eight fields, so an unfiltered count overcounts roughly sixfold.",
+      "description": "Raw lap-point count. Filtering to a single field is required: the laps bucket also holds standings points, and each lap point carries five to eight fields, so an unfiltered count overcounts roughly sixfold.\n\nThe query also computes a race count -- it is byte-identical to the summary table's -- but the chart hides it. One race against six hundred laps shares no usable axis with them; the summary table below carries the race count instead.",
       "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
       "gridPos": {"h": 10, "w": 12, "x": 12, "y": 0},
       "fieldConfig": {
@@ -66,9 +79,15 @@
         "xField": "year",
         "orientation": "auto",
         "showValue": "auto",
-        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": false},
         "tooltip": {"mode": "multi", "sort": "none"}
       },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {"excludeByName": {"races": true}, "indexByName": {}, "renameByName": {}}
+        }
+      ],
       "targets": [
         {
           "refId": "A",

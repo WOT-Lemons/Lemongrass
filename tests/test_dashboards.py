@@ -363,8 +363,65 @@ def test_the_best_and_yoy_panels_floor_lap_time_before_taking_the_minimum():
         'the median series must not be floored -- it never had the zero-lap bug')
 
 
-def test_the_bar_charts_exempt_the_year_axis_from_their_value_unit():
-    # Both bar charts set a panel-wide unit for their measurements, and the
+def test_the_lap_time_panel_is_not_drawn_on_a_zero_baseline():
+    # Lap time has no meaningful zero: at Thompson a median of 108995 ms and a
+    # best of 92649 ms differ by 15%, but as bars anchored to zero they render
+    # as two near-identical heights, and a year-over-year gain of a few seconds
+    # is invisible. A line on an auto-scaled axis is the honest form. Bars stay
+    # correct for the lap *count*, which is a magnitude from zero.
+    panels = {p['id']: p for p in _panels(json.loads(YEAR_OVER_YEAR.read_text()))}
+    lap_time, lap_count = panels[1], panels[2]
+
+    assert lap_time['type'] == 'trend'
+    assert lap_count['type'] == 'barchart'
+
+    custom = lap_time['fieldConfig']['defaults']['custom']
+    assert custom['drawStyle'] == 'line'
+    assert custom['showPoints'] == 'always'
+    # An explicit min (or a soft min) would reintroduce exactly the baseline
+    # the panel type was changed to escape.
+    for key in ('min', 'axisSoftMin'):
+        assert key not in lap_time['fieldConfig']['defaults'], key
+        assert key not in custom, key
+
+
+def test_the_lap_time_panel_converts_year_to_a_number():
+    # The trend panel plots against a numeric x field and renders "No numeric
+    # fields found" if year arrives as the string Flux emits from $yearmap.
+    # timeseries is not an option either -- year is not a timestamp.
+    panels = {p['id']: p for p in _panels(json.loads(YEAR_OVER_YEAR.read_text()))}
+    panel = panels[1]
+    assert panel['options']['xField'] == 'year'
+    conversions = [
+        conversion
+        for transformation in panel.get('transformations', [])
+        if transformation['id'] == 'convertFieldType'
+        for conversion in transformation['options']['conversions']
+    ]
+    assert conversions == [{'targetField': 'year', 'destinationType': 'number'}]
+
+
+def test_the_lap_count_chart_hides_the_race_count_it_still_queries():
+    # laps and races are counts of different magnitude -- 673 against 1 -- and
+    # on one axis the race series is a flat line pinned to zero, carrying no
+    # information. It is dropped from the chart rather than from the query, so
+    # the query stays byte-identical to the summary table's, which is where a
+    # reader actually reads the race count.
+    panels = {p['id']: p for p in _panels(json.loads(YEAR_OVER_YEAR.read_text()))}
+    panel = panels[2]
+    assert 'stat: "races"' in _panel_query(panel)
+    excluded = [
+        transformation['options']['excludeByName']
+        for transformation in panel.get('transformations', [])
+        if transformation['id'] == 'organize'
+    ]
+    assert excluded == [{'races': True}]
+    # One series left, and the panel title names it.
+    assert panel['options']['legend']['showLegend'] is False
+
+
+def test_the_year_axis_is_exempt_from_the_panel_value_unit():
+    # Both charts set a panel-wide unit for their measurements, and the
     # x-axis field is a value like any other -- so year 2022 renders through
     # clockms as "02s:022ms" and through short as "2.02 K". Only a render
     # catches that; the queries are perfectly correct either way.
