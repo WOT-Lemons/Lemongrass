@@ -1,5 +1,30 @@
 # Changelog
 
+## [7.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v6.0.0...v7.0.0) (2026-08-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **db:** races and sessions are stored in PostgreSQL. An existing install must provision PostgreSQL, run `lemongrass db upgrade`, and run `lemongrass db import-legacy` before deploying; without it, stored races are invisible and the field will be re-backfilled.
+* **db:** deployments must provision a PostgreSQL instance and set LEMONGRASS_DB_PASSWORD before upgrading.
+
+### Features
+
+* **db:** add postgresql for race and session metadata ([#261](https://github.com/WOT-Lemons/Lemongrass/issues/261)) ([3fa646a](https://github.com/WOT-Lemons/Lemongrass/commit/3fa646a030b33041cde5ecc9e597521a9e001e12))
+* **db:** move race and session metadata to postgresql ([0f0f7f8](https://github.com/WOT-Lemons/Lemongrass/commit/0f0f7f8bd5edeb64b084a477745bfb5eb1088b84))
+* **grafana:** add a year-over-year dashboard for one team at one venue ([c50b888](https://github.com/WOT-Lemons/Lemongrass/commit/c50b8886891d8804dca25255cd1df1abffc9195a))
+* **tracks:** resolve races to canonical venues, layouts, events, and teams ([#265](https://github.com/WOT-Lemons/Lemongrass/issues/265)) ([da70ab4](https://github.com/WOT-Lemons/Lemongrass/commit/da70ab4c527b46ee017b48e26ec3101c20a0b3d6))
+
+
+### Bug Fixes
+
+* **db,races,grafana:** correct six defects in the PostgreSQL cutover ([#266](https://github.com/WOT-Lemons/Lemongrass/issues/266)) ([c2adacf](https://github.com/WOT-Lemons/Lemongrass/commit/c2adacfd3aec37124c92c496d11415486dede92b))
+
+
+### Dependencies
+
+* lock file maintenance ([#263](https://github.com/WOT-Lemons/Lemongrass/issues/263)) ([5287cc3](https://github.com/WOT-Lemons/Lemongrass/commit/5287cc3a02e00ea3d36d22a99276abab928b1bbf))
+
 ## [6.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v5.4.2...v6.0.0) (2026-08-08)
 
 
