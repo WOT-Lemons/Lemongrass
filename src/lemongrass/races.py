@@ -101,7 +101,12 @@ def fetch_race_rows(query_api):
         row.race_id: {
             'race_id': row.race_id,
             'name': row.name or 'unknown',
-            'date': row.race_time.strftime('%Y-%m-%d') if row.race_time else '?',
+            # psycopg hands back TIMESTAMPTZ in the connection's timezone, not
+            # necessarily UTC, so normalize before formatting — otherwise a
+            # host behind UTC renders a late-evening race on the day before.
+            # race_backfill.validate_backfill normalizes for the same reason.
+            'date': (row.race_time.astimezone(UTC).strftime('%Y-%m-%d')
+                     if row.race_time else '?'),
             'venue_name': row.venue_name or '',
             'event_name': row.event_name or '',
             'total': 0,

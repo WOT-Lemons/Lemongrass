@@ -47,6 +47,23 @@ def test_fetch_race_rows_joins_sql_attributes_with_flux_counts():
     assert query_api.query.call_count == 2   # the race query is gone
 
 
+def test_fetch_race_rows_renders_the_date_in_utc():
+    # psycopg returns TIMESTAMPTZ in the connection's timezone, not UTC. A
+    # race stored at 02:00Z comes back as the previous day on any host behind
+    # UTC, so `races list` would show a date one day earlier than the race ran
+    # -- and one day earlier than the same race showed before the cutover.
+    # race_backfill.validate_backfill already normalizes for this reason.
+    from datetime import timedelta, timezone
+    pacific = timezone(timedelta(hours=-7))
+    rows = [_list_row('101', 'Spring',
+                      datetime(2026, 8, 10, 19, 0, tzinfo=pacific))]
+    query_api = MagicMock()
+    query_api.query.side_effect = [_tables({}), _tables({})]
+    with patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
+        got = races_mod.fetch_race_rows(query_api)
+    assert got[0]['date'] == '2026-08-11'
+
+
 def test_fetch_race_rows_reports_the_current_schema_version():
     # Deliberate: races list renders "stale (N/M at vX)" where X is the
     # version laps should be at, not the version stored on the race.

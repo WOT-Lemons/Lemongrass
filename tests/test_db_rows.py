@@ -136,6 +136,41 @@ def test_delete_race_reports_whether_it_deleted(db):
     assert _db.get_race("101") is None
 
 
+def test_an_estimated_race_time_does_not_overwrite_a_stored_one(db):
+    # The live monitor has no StartDateEpoc until RaceMonitor posts one and
+    # falls back to wall-clock now(). Restarting the monitor mid-race would
+    # otherwise move race_time forward to the restart, and Grafana's race_from
+    # is derived from it -- every lap before the restart vanishes from the
+    # dashboard and validate_backfill reports the race as empty.
+    from lemongrass import _db
+    real = datetime(2026, 5, 1, 10, 0, tzinfo=UTC)
+    _db.upsert_race(_race("101", race_time=real))
+    _db.upsert_race(_race("101", race_time=datetime(2026, 5, 1, 13, 0, tzinfo=UTC),
+                           race_time_estimated=True))
+    assert _db.get_race("101").race_time == real
+
+
+def test_an_estimated_race_time_still_inserts_a_brand_new_race(db):
+    # race_time is NOT NULL, so a guess is better than no row at all -- the
+    # live monitor must be able to store a race it is seeing for the first
+    # time before the epoch is posted.
+    from lemongrass import _db
+    guess = datetime(2026, 5, 1, 13, 0, tzinfo=UTC)
+    _db.upsert_race(_race("101", race_time=guess, race_time_estimated=True))
+    assert _db.get_race("101").race_time == guess
+
+
+def test_a_known_race_time_still_corrects_a_stored_one(db):
+    # The backfill learns the real start epoch and must be able to fix a row
+    # the live path guessed at.
+    from lemongrass import _db
+    _db.upsert_race(_race("101", race_time=datetime(2026, 5, 1, 13, 0, tzinfo=UTC),
+                           race_time_estimated=True))
+    real = datetime(2026, 5, 1, 10, 0, tzinfo=UTC)
+    _db.upsert_race(_race("101", race_time=real))
+    assert _db.get_race("101").race_time == real
+
+
 def test_statements_join_a_caller_transaction(db):
     # Passing conn lets several statements share one transaction — and one
     # rollback. replace_sessions depends on this.

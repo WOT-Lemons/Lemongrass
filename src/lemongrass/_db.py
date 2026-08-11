@@ -123,6 +123,11 @@ class RaceRow:
     race_time is required and timezone-aware; the column is NOT NULL. Every
     other attribute defaults, because the live-monitor write path knows only
     identity and timing — completeness fields arrive from a backfill.
+
+    race_time_estimated marks a race_time the caller guessed rather than knew
+    — the live monitor's wall-clock fallback for a race whose StartDateEpoc
+    RaceMonitor has not posted yet. It is not a column; it only tells
+    upsert_race that this value may insert but must not overwrite.
     """
 
     race_id: str
@@ -140,6 +145,7 @@ class RaceRow:
     venue_id: str | None = None
     layout_id: str | None = None
     event_id: str | None = None
+    race_time_estimated: bool = False
 
 
 @contextmanager
@@ -194,8 +200,15 @@ def upsert_race(row, conn=None):
     A blank/None EXCLUDED value falls back to the stored value via NULLIF/
     COALESCE, so a genuinely new race with a failed details fetch still gets
     a row, and a later successful fetch's non-blank values still win.
-    ``race_time`` keeps blanket EXCLUDED — it is NOT NULL and always
-    genuinely supplied.
+    ``race_time`` takes EXCLUDED unless the caller flagged it as an estimate.
+    The live monitor falls back to wall-clock now() for a race whose
+    StartDateEpoc RaceMonitor has not posted yet, so a monitor restarted
+    mid-race would otherwise drag race_time forward to the restart. Grafana's
+    ``race_from`` is ``extract(epoch from race_time)`` and every laps panel
+    filters on it, so that silently hides every lap before the restart and
+    makes validate_backfill's window report the race as empty. An estimate
+    still inserts — the column is NOT NULL and a guess beats no row — it just
+    never overwrites.
 
     venue_id and event_id COALESCE for the same reason as the text columns
     above: a failed details fetch resolves to all-None and must not erase a
@@ -232,7 +245,8 @@ def upsert_race(row, conn=None):
                 stmt.excluded.series_id, _schema.races.c.series_id),
             'series_name': func.coalesce(
                 stmt.excluded.series_name, _schema.races.c.series_name),
-            'race_time': stmt.excluded.race_time,
+            'race_time': (_schema.races.c.race_time if row.race_time_estimated
+                          else stmt.excluded.race_time),
             'end_time': func.coalesce(
                 stmt.excluded.end_time, _schema.races.c.end_time),
             'expected_lap_count': func.coalesce(

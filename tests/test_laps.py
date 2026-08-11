@@ -2922,6 +2922,24 @@ def test_store_race_omits_completeness_on_the_live_path():
     assert row.lap_schema_version is None
 
 
+def test_store_race_flags_a_wall_clock_race_time_as_an_estimate():
+    # start_epoc 0 means RaceMonitor has not posted StartDateEpoc, so every
+    # caller passes wall-clock now(). Marking it lets upsert_race insert the
+    # guess without ever overwriting a start time that is already known.
+    ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
+    with patch.object(_mod._db, 'upsert_race') as up:
+        _mod.store_race(ctx, 1_700_000_000_000)
+    assert up.call_args.args[0].race_time_estimated is True
+
+
+def test_store_race_does_not_flag_a_known_start_epoch():
+    ctx = _mod.RaceContext('101', None, None, None, 1_700_000_000,
+                           metadata=_meta())
+    with patch.object(_mod._db, 'upsert_race') as up:
+        _mod.store_race(ctx, 1_700_000_000_000)
+    assert up.call_args.args[0].race_time_estimated is False
+
+
 def test_store_race_zero_end_epoch_becomes_none():
     ctx = _mod.RaceContext('101', None, None, None, 0,
                            metadata=_meta(end_time_epoc=0))
@@ -5435,6 +5453,42 @@ def test_influx_only_skip_opens_influx_only_for_a_settled_skip_candidate():
         assert _mod._influx_only_skip('999') is True
     conn.assert_called_once()
     rci.assert_called_once()
+
+
+def test_influx_only_skip_falls_through_when_sessions_are_missing():
+    # The skip decision looks at laps and standings only. A backfill whose
+    # session write failed after those were already complete would otherwise
+    # skip forever on every rerun -- main() returns before old_race, so the
+    # skip path's own session rewrite is unreachable -- and nothing short of
+    # `race-backfill --upgrade-stored --force` would repair it.
+    complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000, session_count=3)
+    with patch.object(_mod._influx, 'connect') as conn, \
+         patch.object(_mod, 'stored_race_completeness', return_value=complete), \
+         patch.object(_mod, 'stored_end_settled', return_value=True), \
+         patch.object(_mod._db, 'list_sessions', return_value=[1, 2]):
+        assert _mod._influx_only_skip('999') is False
+    # Cheap: answered from Postgres, with no Influx round trip at all.
+    conn.assert_not_called()
+
+
+def test_influx_only_skip_still_skips_when_every_session_is_stored():
+    complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000, session_count=2)
+    with patch.object(_mod._influx, 'connect') as conn, \
+         patch.object(_mod, 'stored_race_completeness', return_value=complete), \
+         patch.object(_mod, 'stored_end_settled', return_value=True), \
+         patch.object(_mod, 'race_complete_in_influx', return_value=True), \
+         patch.object(_mod._db, 'list_sessions', return_value=[1, 2]):
+        conn.return_value.__enter__.return_value.query_api.return_value = MagicMock()
+        assert _mod._influx_only_skip('999') is True
+
+
+def test_stored_race_completeness_carries_the_session_count():
+    from lemongrass import _db
+    ctx = _mod.RaceContext('999', None, None, None, 0)
+    row = _db.RaceRow(race_id='999', race_time=datetime(2026, 5, 1, tzinfo=UTC),
+                      session_count=4)
+    with patch.object(_mod._db, 'get_race', return_value=row):
+        assert _mod.stored_race_completeness(ctx).session_count == 4
 
 
 class TestStoredEndSettled:

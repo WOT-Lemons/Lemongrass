@@ -80,10 +80,15 @@ class StoredRace:
     fields they name, so callers must guard before comparing them.
     end_time_epoc is 0, not None, when the row's end_time is NULL: its only
     constructor converts, and stored_end_settled reads 0 as "unknown".
+
+    session_count is how many sessions the last backfill said this race has,
+    which _influx_only_skip compares against the sessions actually stored. It
+    is None for a legacy row that predates the field.
     """
     schema_version: int | None
     expected_lap_count: int | None
     end_time_epoc: int | None
+    session_count: int | None = None
 
 
 def _describe_bad_value(value: object, field: str) -> str:
@@ -1674,7 +1679,9 @@ def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
 
     timestamp_ms is kept in milliseconds at the boundary because both callers
     compute it that way (start epoch, or wall clock when the epoch has not
-    been posted yet).
+    been posted yet). A zero ctx.start_epoc is exactly the second case — every
+    caller writes the same fallback — so the row is flagged as carrying an
+    estimated race_time, which upsert_race will insert but not overwrite with.
     """
     if ctx.metadata is None:
         logging.warning("store_race called with no metadata for race %s", ctx.race_id)
@@ -1685,6 +1692,7 @@ def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
         _db.upsert_race(_db.RaceRow(
             race_id=ctx.race_id,
             race_time=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+            race_time_estimated=ctx.start_epoc == 0,
             name=meta.race_name or '',
             track_name=meta.track_name or '',
             series_id=meta.series_id,
@@ -1938,6 +1946,7 @@ def stored_race_completeness(ctx):
         schema_version=row.lap_schema_version,
         expected_lap_count=row.expected_lap_count,
         end_time_epoc=int(row.end_time.timestamp()) if row.end_time else 0,
+        session_count=row.session_count,
     )
 
 
@@ -1984,11 +1993,25 @@ def _influx_only_skip(race_id):
     row comes from Postgres, the lap and standings counts from Influx. Any
     race that is not definitively ended (see stored_end_settled) returns False
     so it falls through to the normal flow's is_live check.
+
+    Sessions are checked here rather than left to old_race's skip path,
+    because main() returns on a True from this function and old_race never
+    runs — so a race whose session write failed after its laps and standings
+    were already complete would skip on every rerun and keep a stale set
+    forever. A legacy row with no stored session_count has nothing to compare
+    and is left alone.
     """
     ctx = RaceContext(race_id, None, None, None, 0)
     stored = stored_race_completeness(ctx)
     if stored is None or not stored_end_settled(stored):
         return False
+    if stored.session_count is not None:
+        have = len(_db.list_sessions(race_id))
+        if have != stored.session_count:
+            logging.info(
+                "Race %s has %d of %d sessions stored; not skipping so the "
+                "backfill can rewrite them", race_id, have, stored.session_count)
+            return False
     with _influx.connect() as influx_client:
         ctx.query_api = influx_client.query_api()
         return race_complete_in_influx(ctx, stored)
