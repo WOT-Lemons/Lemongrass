@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.1.0](https://github.com/WOT-Lemons/Lemongrass/compare/v7.0.0...v7.1.0) (2026-08-11)
+
+
+### Features
+
+* **tracks:** resolve every stored track name to a curated venue ([#268](https://github.com/WOT-Lemons/Lemongrass/issues/268)) ([8ab8d81](https://github.com/WOT-Lemons/Lemongrass/commit/8ab8d81a1e24bc580d6ba472dda74d4755dee9a3))
+
 ## [7.0.0](https://github.com/WOT-Lemons/Lemongrass/compare/v6.0.0...v7.0.0) (2026-08-11)
 
 
