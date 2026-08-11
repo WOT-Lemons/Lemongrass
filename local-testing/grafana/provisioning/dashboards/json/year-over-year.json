@@ -1,0 +1,68 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "tags": ["lemongrass"],
+  "templating": {
+    "list": [
+      {
+        "name": "venue",
+        "label": "Venue",
+        "type": "query",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
+        "definition": "SELECT v.venue_id AS \"__value\", v.name AS \"__text\" FROM venues v JOIN races r ON r.venue_id = v.venue_id GROUP BY v.venue_id, v.name ORDER BY v.name",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT v.venue_id AS \"__value\", v.name AS \"__text\" FROM venues v JOIN races r ON r.venue_id = v.venue_id GROUP BY v.venue_id, v.name ORDER BY v.name"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "event",
+        "label": "Event",
+        "type": "query",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
+        "definition": "SELECT * FROM (SELECT 'all' AS \"__value\", 'All events' AS \"__text\" UNION ALL SELECT e.event_id, e.name FROM events e JOIN races r ON r.event_id = e.event_id WHERE r.venue_id = ${venue:sqlstring} GROUP BY e.event_id, e.name) x ORDER BY (\"__value\" = 'all') DESC, \"__text\"",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT * FROM (SELECT 'all' AS \"__value\", 'All events' AS \"__text\" UNION ALL SELECT e.event_id, e.name FROM events e JOIN races r ON r.event_id = e.event_id WHERE r.venue_id = ${venue:sqlstring} GROUP BY e.event_id, e.name) x ORDER BY (\"__value\" = 'all') DESC, \"__text\""
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "team",
+        "label": "Team",
+        "type": "query",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
+        "definition": "SELECT team_id AS \"__value\", name AS \"__text\" FROM teams ORDER BY name",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT team_id AS \"__value\", name AS \"__text\" FROM teams ORDER BY name"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      }
+    ]
+  },
+  "time": {"from": "now-10y", "to": "now"},
+  "timepicker": {"hidden": true},
+  "timezone": "browser",
+  "title": "Year over Year",
+  "uid": "wotl-yoy",
+  "version": 1,
+  "weekStart": ""
+}

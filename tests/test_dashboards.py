@@ -57,3 +57,49 @@ def test_a_session_with_a_start_time_still_renders_its_date(db):
             "VALUES (7, '42', 'Race Session', '2026-05-03T14:00:00Z')"))
         label = conn.execute(text(_session_label_sql())).scalar()
     assert label == 'Race Session (5/3/26)'
+
+
+YEAR_OVER_YEAR = (pathlib.Path(__file__).resolve().parents[1]
+                  / 'local-testing/grafana/provisioning/dashboards/json'
+                  / 'year-over-year.json')
+
+
+def _variable_sql(name, **subs):
+    """The rawSql of a named template variable, with Grafana's macros filled in.
+
+    subs maps a variable name to the literal SQL text that Grafana's
+    ${name:sqlstring} interpolation would produce -- quotes included, since
+    that is what sqlstring supplies.
+    """
+    for var in json.loads(YEAR_OVER_YEAR.read_text())['templating']['list']:
+        if var['name'] == name:
+            sql = var['query']['rawSql']
+            for token, value in subs.items():
+                sql = sql.replace('${' + token + ':sqlstring}', value)
+            return sql
+    raise AssertionError(f'no template variable named {name!r} in the dashboard')
+
+
+def test_the_event_picker_query_executes(db):
+    # The obvious way to sort the 'all' sentinel first -- ORDER BY 1 = 'all'
+    # DESC, 2 -- does not work after a UNION ALL: the bare 1 is an integer
+    # literal inside a larger expression, not an ordinal, and Postgres rejects
+    # it with "invalid input syntax for type integer". The failure is total, so
+    # merely executing the query is the assertion that matters.
+    with db.begin() as conn:
+        rows = conn.execute(text(_variable_sql('event', venue="'thompson'"))).fetchall()
+    assert rows == [('all', 'All events')]
+
+
+def test_the_event_picker_sorts_the_all_sentinel_first(db):
+    with db.begin() as conn:
+        conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
+        conn.execute(text(
+            "INSERT INTO events (event_id, series_id, name) VALUES ('aaa', 1, 'AAA Event')"))
+        conn.execute(text(
+            "INSERT INTO races (race_id, race_time, venue_id, event_id) "
+            "VALUES ('1', now(), 'thompson', 'aaa')"))
+        rows = conn.execute(text(_variable_sql('event', venue="'thompson'"))).fetchall()
+    # 'AAA Event' sorts before 'All events' alphabetically, so a plain
+    # ORDER BY __text would bury the sentinel.
+    assert rows == [('all', 'All events'), ('aaa', 'AAA Event')]
