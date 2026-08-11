@@ -103,3 +103,78 @@ def test_the_event_picker_sorts_the_all_sentinel_first(db):
     # 'AAA Event' sorts before 'All events' alphabetically, so a plain
     # ORDER BY __text would bury the sentinel.
     assert rows == [('all', 'All events'), ('aaa', 'AAA Event')]
+
+
+def _venue_with_two_races(conn):
+    """One venue, two races a year apart, two teams, one shared car number.
+
+    The shared number is the point: our team ran 252 at the first race and 253
+    at the second, and the other team ran 253 at the first. A filter that
+    collects race ids and car numbers separately matches that other car.
+    """
+    conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
+    conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('wot', 'WOT Lemons')"))
+    conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('other', 'Other Team')"))
+    conn.execute(text(
+        "INSERT INTO races (race_id, race_time, venue_id) VALUES "
+        "('1', '2024-06-01T12:00:00Z', 'thompson'), "
+        "('2', '2025-06-01T12:00:00Z', 'thompson')"))
+    conn.execute(text(
+        "INSERT INTO entries (race_id, car_number, team_id) VALUES "
+        "('1', '252', 'wot'), ('2', '253', 'wot'), ('1', '253', 'other')"))
+
+
+def test_the_pair_predicate_keeps_pairs_paired(db):
+    with db.begin() as conn:
+        _venue_with_two_races(conn)
+        predicate = conn.execute(text(_variable_sql(
+            'pairs', team="'wot'", venue="'thompson'", event="'all'"))).scalar()
+    # Our two cars, each bound to its own race.
+    assert '(r.race_id == "1" and r.car_number == "252")' in predicate
+    assert '(r.race_id == "2" and r.car_number == "253")' in predicate
+    # And never the other team's car 253 at race 1.
+    assert '(r.race_id == "1" and r.car_number == "253")' not in predicate
+
+
+def test_the_pair_predicate_emits_flux_double_quotes(db):
+    # Flux has no single-quoted string literal, so %L (which quotes with single
+    # quotes) produces source that fails to compile. Nothing downstream would
+    # report this as anything but a broken panel.
+    with db.begin() as conn:
+        _venue_with_two_races(conn)
+        predicate = conn.execute(text(_variable_sql(
+            'pairs', team="'wot'", venue="'thompson'", event="'all'"))).scalar()
+    assert "'" not in predicate
+
+
+def test_an_empty_selection_matches_nothing_rather_than_everything(db):
+    # The failure mode this guards: an empty predicate, or an unanchored empty
+    # regex, matches every lap in the bucket -- so a venue with no resolved
+    # entries renders every venue's data under one venue's name.
+    with db.begin() as conn:
+        _venue_with_two_races(conn)
+        predicate = conn.execute(text(_variable_sql(
+            'pairs', team="'nobody'", venue="'thompson'", event="'all'"))).scalar()
+    assert predicate == 'false'
+
+
+def test_the_year_map_is_a_flux_list_of_utc_years(db):
+    with db.begin() as conn:
+        _venue_with_two_races(conn)
+        yearmap = conn.execute(text(_variable_sql(
+            'yearmap', venue="'thompson'", event="'all'"))).scalar()
+    assert '{key: "1", value: "2024"}' in yearmap
+    assert '{key: "2", value: "2025"}' in yearmap
+    assert yearmap.startswith('[') and yearmap.endswith(']')
+
+
+def test_the_maps_fall_back_to_a_typed_sentinel_row(db):
+    # dict.fromList(pairs: []) has no types to infer and fails the whole query
+    # with a 500 ("invalid key nature: invalid") -- not an empty panel. A typed
+    # sentinel row returns empty cleanly instead.
+    with db.begin() as conn:
+        _venue_with_two_races(conn)
+        for name in ('yearmap', 'racemap'):
+            emitted = conn.execute(text(_variable_sql(
+                name, venue="'no-such-venue'", event="'all'"))).scalar()
+            assert emitted == '[{key: "", value: ""}]', name
