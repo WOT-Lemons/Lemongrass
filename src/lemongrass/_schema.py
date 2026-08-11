@@ -8,9 +8,11 @@ InfluxDB — see the sub-project 1a design doc for why races and sessions do not
 """
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     MetaData,
@@ -54,6 +56,25 @@ races = Table(
     Column('lap_schema_version', Integer),
     Column('updated_at', DateTime(timezone=True), nullable=False,
            server_default=func.now()),
+    # Curated identity, resolved by _tracks.resolve and synced from
+    # tracks.toml. NULL means "no curated match", which dashboards group by
+    # track_name instead; there is deliberately no raw-string fallback.
+    Column('venue_id', Text),
+    Column('layout_id', Text),
+    Column('event_id', Text),
+    ForeignKeyConstraint(['venue_id'], ['venues.venue_id'],
+                         name='fk_races_venue_id_venues'),
+    ForeignKeyConstraint(['event_id'], ['events.event_id'],
+                         name='fk_races_event_id_events'),
+    ForeignKeyConstraint(['venue_id', 'layout_id'],
+                         ['layouts.venue_id', 'layouts.layout_id'],
+                         name='fk_races_venue_id_layout_id_layouts'),
+    # Load-bearing. PostgreSQL's default MATCH SIMPLE skips the composite
+    # foreign key check whenever any referencing column is NULL. That is what
+    # makes ('njmp', NULL) legal — but it equally permits (NULL,
+    # 'thunderbolt'), a layout orphaned from its venue, silently.
+    CheckConstraint('layout_id IS NULL OR venue_id IS NOT NULL',
+                    name='layout_needs_venue'),
 )
 
 sessions = Table(
@@ -68,3 +89,55 @@ sessions = Table(
 )
 
 Index('ix_sessions_race_id', sessions.c.race_id)
+
+venues = Table(
+    'venues', metadata,
+    Column('venue_id', Text, primary_key=True),
+    Column('name', Text, nullable=False),
+)
+
+layouts = Table(
+    'layouts', metadata,
+    Column('venue_id', Text,
+           ForeignKey('venues.venue_id', ondelete='CASCADE'), primary_key=True),
+    Column('layout_id', Text, primary_key=True),
+    Column('name', Text, nullable=False),
+)
+
+# event_id is globally unique, not scoped per series, matching its
+# single-column primary key; the loader enforces the same rule on the file.
+events = Table(
+    'events', metadata,
+    Column('event_id', Text, primary_key=True),
+    Column('series_id', Integer, nullable=False),
+    Column('name', Text, nullable=False),
+)
+
+teams = Table(
+    'teams', metadata,
+    Column('team_id', Text, primary_key=True),
+    Column('name', Text, nullable=False),
+)
+
+# alias is the primary key so one spelling cannot map to two teams.
+team_aliases = Table(
+    'team_aliases', metadata,
+    Column('team_id', Text,
+           ForeignKey('teams.team_id', ondelete='CASCADE'), nullable=False),
+    Column('alias', Text, primary_key=True),
+)
+
+# (race_id, car_number) encodes the real constraint: a number is unique within
+# a race. Two of our cars at one event is two rows with the same team_id.
+# team_id is NO ACTION: dropping a team goes through `teams merge`.
+entries = Table(
+    'entries', metadata,
+    Column('race_id', Text,
+           ForeignKey('races.race_id', ondelete='CASCADE'), primary_key=True),
+    Column('car_number', Text, primary_key=True),
+    Column('team_id', Text, ForeignKey('teams.team_id'), nullable=False),
+)
+
+Index('ix_races_venue_id', races.c.venue_id)
+Index('ix_races_event_id', races.c.event_id)
+Index('ix_entries_team_id', entries.c.team_id)
