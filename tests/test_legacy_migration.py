@@ -60,6 +60,50 @@ def test_missing_completeness_fields_stay_null():
     assert row.lap_schema_version is None
 
 
+def test_series_id_survives_the_export_and_import_round_trip():
+    # The export exists to make the cutover reversible. Every race written
+    # after the cutover carries a real series_id, and dropping it on the way
+    # out left those races permanently NULL on the way back in -- invisible,
+    # because upsert_race COALESCEs the column -- with no way to recover it
+    # short of re-fetching every race under the 6 req/min limit.
+    from lemongrass import _db
+    row = _db.RaceRow(race_id='101', race_time=datetime(2026, 5, 1, tzinfo=UTC),
+                      name='Spring', series_id=145, series_name='Lemons')
+    line = _mod.race_line(row)
+    assert 'series_id=145i' in line
+
+    rec = _Rec({'race_id': '101', 'series_id': 145},
+               datetime(2026, 5, 1, tzinfo=UTC))
+    query_api = MagicMock(query=MagicMock(return_value=_tables([rec])))
+    (back,) = _mod.read_legacy_races(query_api)
+    assert back.series_id == 145
+
+
+def test_a_genuine_legacy_race_still_has_no_series_id():
+    # Pre-cutover points never carried the field; absent must stay NULL rather
+    # than becoming 0.
+    rec = _Rec({'race_id': '101'}, datetime(2026, 5, 1, tzinfo=UTC))
+    query_api = MagicMock(query=MagicMock(return_value=_tables([rec])))
+    (row,) = _mod.read_legacy_races(query_api)
+    assert row.series_id is None
+
+
+def test_duplicate_race_points_collapse_to_one_row(caplog):
+    # push_influx_race deleted with stop=now() before rewriting, so a race
+    # point timestamped in the future -- a scheduled race whose start moved --
+    # survived the delete and left two points for one race_id. Importing both
+    # made the stored race_time depend on Flux table order, and the operator
+    # got no hint that a race had been imported twice.
+    stale = _Rec({'race_id': '101', 'race_name': 'Spring'},
+                 datetime(2027, 1, 1, tzinfo=UTC))
+    current = _Rec({'race_id': '101', 'race_name': 'Spring'},
+                   datetime(2026, 5, 1, tzinfo=UTC))
+    query_api = MagicMock(query=MagicMock(return_value=_tables([stale, current])))
+    (row,) = _mod.read_legacy_races(query_api)
+    assert row.race_time == datetime(2027, 1, 1, tzinfo=UTC)
+    assert '101' in caplog.text
+
+
 def test_race_query_has_an_explicit_far_future_stop():
     # range(start: 0) carries an implicit stop: now(), and a scheduled race is
     # timestamped in the future (race_ts_ms = start_epoc * 1000), so an
@@ -105,6 +149,26 @@ def test_import_writes_races_then_sessions(db):
     assert summary['races_written'] == 1
     assert summary['sessions_written'] == 1
     assert _db.get_race('101').name == 'Spring'
+
+
+def test_a_session_id_claimed_by_two_races_is_skipped_and_reported(db, caplog):
+    # sessions is keyed on session_id alone, so the second race's row would
+    # overwrite the first's race_id instead of inserting -- the first race
+    # would silently lose the session from its picker and the import summary
+    # would still report both as written.
+    from lemongrass import _db
+    query_api = MagicMock()
+    with patch.object(_mod, 'read_legacy_races', return_value=[
+            _db.RaceRow(race_id='101', race_time=datetime(2026, 5, 1, tzinfo=UTC)),
+            _db.RaceRow(race_id='202', race_time=datetime(2026, 6, 1, tzinfo=UTC))]), \
+         patch.object(_mod, 'read_legacy_sessions', return_value=[
+            _db.SessionRow(session_id=55, race_id='101', name='Q'),
+            _db.SessionRow(session_id=55, race_id='202', name='Q')]):
+        summary = _mod.import_legacy(query_api)
+    assert summary['sessions_written'] == 1
+    assert [s.session_id for s in _db.list_sessions('101')] == [55]
+    assert _db.list_sessions('202') == []
+    assert '55' in caplog.text
 
 
 def test_orphan_sessions_are_skipped_and_reported(db, caplog):

@@ -107,7 +107,12 @@ def alembic_config(url=None):
     # already rendered. Accept either so tests can pass a plain URL string.
     if hasattr(url, 'render_as_string'):
         url = url.render_as_string(hide_password=False)
-    cfg.set_main_option('sqlalchemy.url', str(url))
+    # set_main_option writes into a ConfigParser, which reads a bare '%' as
+    # interpolation syntax and raises. render_as_string percent-encodes every
+    # reserved character in the password, so any password containing '@', '%',
+    # '/' or ':' arrives here already full of them. '%%' is the escape and
+    # reads back as a single '%', so the URL round-trips unchanged.
+    cfg.set_main_option('sqlalchemy.url', str(url).replace('%', '%%'))
     return cfg
 
 
@@ -289,7 +294,18 @@ def _session_row(row):
 
 
 def _session_upsert(row):
-    """Build the insert-or-update statement for one session."""
+    """Build the insert-or-update statement for one session.
+
+    The conflict update is conditional on the stored race_id. session_id is
+    the primary key on the assumption that RaceMonitor mints ids globally, but
+    nothing enforces that and the legacy import writes whatever Influx held.
+    A row another race already owns satisfies neither the insert nor the
+    update, so the statement touches no rows and ``_write_session`` raises —
+    rather than moving the session off that race's picker with no error.
+
+    The condition lives in the statement instead of a preflight SELECT so a
+    concurrent writer cannot slip in between the check and the write.
+    """
     from sqlalchemy import func
     from sqlalchemy.dialects.postgresql import insert
     stmt = insert(_schema.sessions).values(
@@ -306,7 +322,27 @@ def _session_upsert(row):
             'start_time': stmt.excluded.start_time,
             'updated_at': func.now(),
         },
-    )
+        where=_schema.sessions.c.race_id == row.race_id,
+    ).returning(_schema.sessions.c.session_id)
+
+
+def _write_session(c, row):
+    """Run one guarded session upsert, raising if another race owns the id.
+
+    A filtered-out conflict update writes nothing and returns nothing, which
+    is why the statement carries a RETURNING clause: rowcount is -1 for this
+    insert, so an empty result is the only reliable signal. The owning race is
+    looked up afterwards — on the error path only — to name it in the message.
+    """
+    if c.execute(_session_upsert(row)).first() is not None:
+        return
+    from sqlalchemy import select
+    owner = c.execute(
+        select(_schema.sessions.c.race_id)
+        .where(_schema.sessions.c.session_id == row.session_id)).scalar()
+    raise ValueError(
+        f"session {row.session_id} belongs to race {owner!r}; refusing to "
+        f"reassign it to {row.race_id!r}")
 
 
 def upsert_session(row, conn=None):
@@ -315,7 +351,7 @@ def upsert_session(row, conn=None):
     The live monitor's per-session write. Backfill uses replace_sessions.
     """
     with connection(conn) as c:
-        c.execute(_session_upsert(row))
+        _write_session(c, row)
 
 
 def replace_sessions(race_id, rows, conn=None):
@@ -327,11 +363,15 @@ def replace_sessions(race_id, rows, conn=None):
     delete is scoped to this race, so the live monitor's sessions for other
     races are untouched. One transaction means a failed row leaves the
     previous set intact for the next backfill to redo.
+
+    A session id already owned by a different race raises ValueError from
+    _write_session rather than being reassigned, and the transaction rolls the
+    whole rewrite back.
     """
     from sqlalchemy import delete
     with connection(conn) as c:
         for row in rows:
-            c.execute(_session_upsert(row))
+            _write_session(c, row)
         stmt = delete(_schema.sessions).where(
             _schema.sessions.c.race_id == race_id)
         keep = [r.session_id for r in rows]

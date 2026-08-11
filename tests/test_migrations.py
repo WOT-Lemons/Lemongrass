@@ -35,6 +35,24 @@ def test_script_location_is_inside_the_installed_package():
     assert (loc / "script.py.mako").is_file()
 
 
+def test_a_password_needing_url_escaping_survives_the_alembic_config():
+    # render_as_string percent-encodes every reserved character in the
+    # password, and ConfigParser reads '%' as interpolation syntax -- so any
+    # production password containing '@', '%', '/' or ':' made `db upgrade`
+    # raise ValueError before it could even connect. CI never caught it
+    # because its password is plain ASCII.
+    from sqlalchemy import URL, engine_from_config
+
+    from lemongrass import _db
+    url = URL.create("postgresql+psycopg", username="u", password="p@ss%wd",
+                     host="h", port=5432, database="d")
+    cfg = _db.alembic_config(url)
+    # Read it back the way migrations/env.py's online path does.
+    engine = engine_from_config(
+        cfg.get_section(cfg.config_ini_section, {}), prefix="sqlalchemy.")
+    assert engine.url.password == "p@ss%wd"
+
+
 def test_upgrade_creates_the_expected_tables(clean_db, postgres_url):
     _upgrade(postgres_url)
     names = set(inspect(clean_db).get_table_names())
