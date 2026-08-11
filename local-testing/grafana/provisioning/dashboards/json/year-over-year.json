@@ -19,7 +19,12 @@
           "mappings": [],
           "unit": "clockms"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "year"},
+            "properties": [{"id": "unit", "value": "none"}, {"id": "decimals", "value": 0}]
+          }
+        ]
       },
       "options": {
         "xField": "year",
@@ -50,7 +55,12 @@
           "mappings": [],
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "year"},
+            "properties": [{"id": "unit", "value": "none"}, {"id": "decimals", "value": 0}]
+          }
+        ]
       },
       "options": {
         "xField": "year",
@@ -126,10 +136,10 @@
       "id": 5,
       "type": "text",
       "title": "Data quality",
-      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 19},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 19},
       "options": {
         "mode": "markdown",
-        "content": "**Lap counts are raw lap points**, not distinct lap numbers. Lap numbers restart at 1 in every session, so counting distinct ones undercounts multi-session races.\n\n**TotalTime collisions lose a few laps.** When two of a car's laps share a total time, they collapse onto one timestamp. Race 113450 stores 38,143 of the 38,155 laps written -- 12 short. Reproducible on every backfill; fixing it needs `lap_no` as a tag, which is a schema version bump.\n\n**Races missing from this view are unresolved, not missing data.** A race with no `venue_id` belongs to no venue here, and a race with no `entries` row belongs to no team. Those are the worklists `races identify --dry-run` and `entries propose` report -- curate the data rather than loosening the dashboard.\n\n**A resolved race can still be absent.** Panels 2 and 3 count races from the Influx lap stream, not Postgres: a race with entries but no captured laps, or an `entries.car_number` that does not match the tag Influx stores, contributes zero laps and vanishes from those panels even though it is fully resolved."
+        "content": "**Lap counts are raw lap points**, not distinct lap numbers. Lap numbers restart at 1 in every session, so counting distinct ones undercounts multi-session races.\n\n**Lap counts are a floor, not an exact figure.** When two of a car's laps share a total time they collapse onto one timestamp, so the second is never stored. The shortfall is well under 0.1% of a race, but it is silent -- nothing in the stored data reveals it, only a comparison against the race's expected lap count -- and it is reproducible on every backfill. Fixing it needs `lap_no` as a tag, which is a schema version bump.\n\n**Races missing from this view are unresolved, not missing data.** A race with no `venue_id` belongs to no venue here, and a race with no `entries` row belongs to no team. Those are the worklists `races identify --dry-run` and `entries propose` report -- curate the data rather than loosening the dashboard.\n\n**A resolved race can still be absent.** Panels 2 and 3 count races from the Influx lap stream, not Postgres: a race with entries but no captured laps, or an `entries.car_number` that does not match the tag Influx stores, contributes zero laps and vanishes from those panels even though it is fully resolved."
       }
     }
   ],

@@ -336,6 +336,24 @@ def test_the_best_and_yoy_panels_floor_lap_time_before_taking_the_minimum():
         'the median series must not be floored -- it never had the zero-lap bug')
 
 
+def test_the_bar_charts_exempt_the_year_axis_from_their_value_unit():
+    # Both bar charts set a panel-wide unit for their measurements, and the
+    # x-axis field is a value like any other -- so year 2022 renders through
+    # clockms as "02s:022ms" and through short as "2.02 K". Only a render
+    # catches that; the queries are perfectly correct either way.
+    panels = {p['id']: p for p in _panels(json.loads(YEAR_OVER_YEAR.read_text()))}
+    for panel_id in (1, 2):
+        panel = panels[panel_id]
+        assert panel['fieldConfig']['defaults'].get('unit'), panel_id
+        units = [
+            prop['value']
+            for override in panel['fieldConfig']['overrides']
+            if override['matcher'] == {'id': 'byName', 'options': panel['options']['xField']}
+            for prop in override['properties'] if prop['id'] == 'unit'
+        ]
+        assert units == ['none'], (panel_id, units)
+
+
 def test_the_best_lap_tile_links_into_the_per_race_dashboard():
     # The link is the only drill-down from an aggregate back to a single race.
     # laps.json's uid and its race variable name are what make it resolve; a
