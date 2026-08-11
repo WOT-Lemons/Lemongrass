@@ -10,6 +10,11 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - 'local-testing/**'
+      # Curated package data is edited by hand and reviewed in a PR, and
+      # test_tracks.py is what catches a duplicate id, a colliding alias, or a
+      # name that normalizes to nothing. Without this, a tracks.toml-only PR
+      # runs no CI at all and a bad edit reaches a live capture as a crash.
+      - 'src/lemongrass/data/**'
 
 jobs:
   test:
@@ -48,11 +53,11 @@ jobs:
           LEMONGRASS_TEST_DB_ALLOW_WIPE: "1"
         run: uv run --frozen --with pytest pytest tests/
 
-      # The migrations ship as package data, so `lemongrass db upgrade` works from
-      # a wheel with no checkout. Only a real build proves that: a stray
-      # build-backend exclude would drop these files and nothing else would notice
-      # until deployment.
-      - name: Verify migrations ship in the wheel
+      # The migrations and the curated track data ship as package data, so
+      # `lemongrass db upgrade` and track resolution work from a wheel with no
+      # checkout. Only a real build proves that: a stray build-backend exclude
+      # would drop these files and nothing else would notice until deployment.
+      - name: Verify package data ships in the wheel
         run: |
           uv build --wheel
           uv run python - <<'PY'
@@ -61,7 +66,9 @@ jobs:
           names = set(zipfile.ZipFile(wheel).namelist())
           need = ['lemongrass/migrations/env.py',
                   'lemongrass/migrations/script.py.mako',
-                  'lemongrass/migrations/versions/0001_initial.py']
+                  'lemongrass/migrations/versions/0001_initial.py',
+                  'lemongrass/migrations/versions/0002_identity.py',
+                  'lemongrass/data/tracks.toml']
           missing = [n for n in need if n not in names]
           if missing:
               sys.exit(f'missing from {wheel}: {missing}')

@@ -5,7 +5,7 @@ import sys
 
 from influxdb_client.rest import ApiException
 from race_monitor import RaceMonitorError, RaceMonitorHTTPError
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from urllib3.exceptions import HTTPError
 
 # _influx is imported lazily inside main(): importing it loads the config file,
@@ -18,6 +18,9 @@ _COMMANDS = {
     "laps": "lemongrass.laps",
     "race-backfill": "lemongrass.race_backfill",
     "races": "lemongrass.races",
+    "tracks": "lemongrass.tracks",
+    "teams": "lemongrass.teams",
+    "entries": "lemongrass.entries",
     "telem": "lemongrass.telem",
     "pisugar-monitor": "lemongrass.pisugar_monitor",
     "race-diagnose": "lemongrass.race_diagnose",
@@ -135,6 +138,18 @@ def main():
             print(f"Error: cannot reach PostgreSQL at {pg.host}:{pg.port}", file=sys.stderr)
         else:
             print(f"Error: PostgreSQL request failed at {pg.host}:{pg.port}", file=sys.stderr)
+        print(f"  {' '.join(str(exc.orig or exc).split())}", file=sys.stderr)
+        sys.exit(1)
+    except ProgrammingError as exc:
+        # 42P01 undefined_table is the first-run failure of a fresh deploy:
+        # the schema lives in migrations, and `db upgrade` is a separate
+        # operator step, so any command run before it hits this. It is a
+        # ProgrammingError, not an OperationalError, so the handler above does
+        # not see it and it would otherwise surface as a raw traceback.
+        if getattr(exc.orig, 'sqlstate', None) != '42P01':
+            raise
+        print("Error: the PostgreSQL schema is missing. Run `lemongrass db "
+              "upgrade` to create it.", file=sys.stderr)
         print(f"  {' '.join(str(exc.orig or exc).split())}", file=sys.stderr)
         sys.exit(1)
     except RaceMonitorError as exc:

@@ -4,7 +4,7 @@
 Race/session attributes live in Postgres; laps, standings, and lap counts
 stay in InfluxDB, so several reads and the prune below are hybrid.
 
-Subcommands: list, prune, backfill, diagnose.
+Subcommands: list, prune, backfill, diagnose, identify.
 Run `lemongrass races <subcommand> --help` for per-subcommand options.
 """
 
@@ -12,11 +12,11 @@ import argparse
 import sys
 from datetime import UTC, datetime
 
-from lemongrass import _db, _influx
+from lemongrass import _db, _influx, _prompt
 
 EPOCH_START = '1970-01-01T00:00:00Z'
 
-_SUBCOMMANDS = ('list', 'prune', 'backfill', 'diagnose')
+_SUBCOMMANDS = ('list', 'prune', 'backfill', 'diagnose', 'identify')
 
 
 def main():
@@ -34,8 +34,12 @@ def main():
         sys.exit(1)
     subcmd = sys.argv.pop(1)
     sys.argv[0] = f'lemongrass-races-{subcmd}'
-    {'list': _handle_list, 'prune': _handle_prune,
-     'backfill': _handle_backfill, 'diagnose': _handle_diagnose}[subcmd]()
+    # Returned, not discarded: cli.main exits with this, and `identify` uses a
+    # non-zero code to report a race id that has no stored row. The other
+    # handlers return None, which sys.exit already treats as 0.
+    return {'list': _handle_list, 'prune': _handle_prune,
+            'backfill': _handle_backfill, 'diagnose': _handle_diagnose,
+            'identify': _handle_identify}[subcmd]()
 
 
 def run_races_tui(client):
@@ -50,6 +54,28 @@ def run_races_tui(client):
     return 0
 
 
+def _count_laps_by_race(query_api, races, key, predicate):
+    """Count lap points per race and store each total under `races[rid][key]`.
+
+    `predicate` is the field-selecting half of the filter; the rest of the
+    query — bucket, range, measurement, grouping, count — is identical for both
+    counts fetch_race_rows needs, so it lives here once. Race ids with no entry
+    in `races` are dropped: the laps bucket outlives the race rows, so it
+    carries pre-cutover races that were never imported."""
+    for table in query_api.query(
+        f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
+        f'  |> range(start: {EPOCH_START})\n'
+        f'  |> filter(fn: (r) => r._measurement == "lap"\n'
+        f'      and {predicate})\n'
+        f'  |> group(columns: ["race_id"])\n'
+        f'  |> count()'
+    ):
+        for record in table.records:
+            rid = record.values.get('race_id')
+            if rid in races:
+                races[rid][key] = record.get_value()
+
+
 def fetch_race_rows(query_api):
     """Return per-race rows for the stored races: id, name, date, total laps,
     current-schema lap count, and the schema version. Date-sorted, newest first.
@@ -62,6 +88,11 @@ def fetch_race_rows(query_api):
     stored on the race — `races list` renders "stale (N/M at vX)" where X is
     the version the laps should be at.
 
+    venue_name/event_name are the joined curated names, blank when the race
+    resolved to nothing — which is itself the prompt to run `races identify`.
+    (The dict keys deliberately match the spec's names and the `RaceListRow`
+    attributes, because sub-project 3's dashboard work consumes this surface.)
+
     Shared by the CLI `races list` table and the interactive races browser so
     the two never drift."""
     from lemongrass.laps import SCHEMA_VERSION
@@ -70,38 +101,25 @@ def fetch_race_rows(query_api):
         row.race_id: {
             'race_id': row.race_id,
             'name': row.name or 'unknown',
-            'date': row.race_time.strftime('%Y-%m-%d') if row.race_time else '?',
+            # psycopg hands back TIMESTAMPTZ in the connection's timezone, not
+            # necessarily UTC, so normalize before formatting — otherwise a
+            # host behind UTC renders a late-evening race on the day before.
+            # race_backfill.validate_backfill normalizes for the same reason.
+            'date': (row.race_time.astimezone(UTC).strftime('%Y-%m-%d')
+                     if row.race_time else '?'),
+            'venue_name': row.venue_name or '',
+            'event_name': row.event_name or '',
             'total': 0,
             'current': 0,
             'schema_version': SCHEMA_VERSION,
         }
-        for row in _db.list_races()
+        for row in _db.list_races_with_venue()
     }
 
-    for table in query_api.query(
-        f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
-        f'  |> range(start: {EPOCH_START})\n'
-        f'  |> filter(fn: (r) => r._measurement == "lap" and r._field == "lap_no")\n'
-        f'  |> group(columns: ["race_id"])\n'
-        f'  |> count()'
-    ):
-        for record in table.records:
-            rid = record.values.get('race_id')
-            if rid in races:
-                races[rid]['total'] = record.get_value()
-
-    for table in query_api.query(
-        f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
-        f'  |> range(start: {EPOCH_START})\n'
-        f'  |> filter(fn: (r) => r._measurement == "lap"\n'
-        f'      and r._field == "schema_version" and r._value == {SCHEMA_VERSION})\n'
-        f'  |> group(columns: ["race_id"])\n'
-        f'  |> count()'
-    ):
-        for record in table.records:
-            rid = record.values.get('race_id')
-            if rid in races:
-                races[rid]['current'] = record.get_value()
+    _count_laps_by_race(query_api, races, 'total', 'r._field == "lap_no"')
+    _count_laps_by_race(
+        query_api, races, 'current',
+        f'r._field == "schema_version" and r._value == {SCHEMA_VERSION}')
 
     return sorted(races.values(), key=lambda r: r['date'], reverse=True)
 
@@ -111,8 +129,9 @@ def _handle_list():
     schema version status (current, stale, or no laps)."""
     with _influx.connect() as client:
         rows = fetch_race_rows(client.query_api())
-        print(f"{'RACE ID':<10} {'NAME':<35} {'DATE':<12} {'LAPS':<8} SCHEMA")
-        print('-' * 80)
+        print(f"{'RACE ID':<10} {'NAME':<24} {'VENUE':<18} {'DATE':<12} "
+              f"{'LAPS':<8} SCHEMA")
+        print('-' * 91)
         for info in rows:
             if info['total'] == 0:
                 schema_str = 'no laps'
@@ -121,7 +140,8 @@ def _handle_list():
             else:
                 schema_str = (f'stale   ({info["current"]}/{info["total"]} '
                               f'at v{info["schema_version"]})')
-            print(f"{info['race_id']:<10} {info['name'][:35]:<35} {info['date']:<12} "
+            print(f"{info['race_id']:<10} {info['name'][:24]:<24} "
+                  f"{info['venue_name'][:18]:<18} {info['date']:<12} "
                   f"{info['total']:<8} {schema_str}")
 
 
@@ -264,8 +284,7 @@ def _handle_prune():
             print(f"About to delete data for {len(race_ids)} race(s):")
             for rid in race_ids:
                 print(f"  {rid}  {race_names[rid]}")
-            answer = input("Proceed? [y/N] ")
-            if answer.strip().lower() != 'y':
+            if not _prompt.ask_yes("Proceed? [y/N] "):
                 print("Aborted.")
                 sys.exit(0)
 
@@ -287,3 +306,75 @@ def _handle_diagnose():
     """Delegate to lemongrass race-diagnose (race_diagnose.main)."""
     from lemongrass import race_diagnose
     race_diagnose.main()
+
+
+def identify_races(race_ids=None, dry_run=False):
+    """Re-resolve stored races' identity columns from their stored text.
+
+    Reads track_name, name, and series_id straight out of Postgres and runs
+    them back through the curated resolver, so this makes no RaceMonitor calls
+    at all: it is free of the 6 req/min limit and works offline. Only rows
+    whose ids actually changed are written.
+
+    Returns (changes, unresolved, missing): changes is a list of
+    (race_id, before_ids, after_ids) triples; unresolved maps each track name
+    that matched no venue to how many races carry it — the worklist for the
+    next tracks.toml edit; missing lists the requested race ids that have no
+    stored row, so a typo reads differently from "already correct".
+    """
+    from lemongrass import _tracks
+    if not dry_run:
+        # The identity columns are foreign keys; a file edit that added a venue
+        # would otherwise fail every UPDATE that used it.
+        _db.sync_tracks(_tracks.data())
+    rows = _db.list_races()
+    missing = []
+    if race_ids:
+        wanted = set(race_ids)
+        rows = [row for row in rows if row.race_id in wanted]
+        missing = sorted(wanted - {row.race_id for row in rows})
+    changes, unresolved = [], {}
+    for row in rows:
+        identity = _tracks.resolve(row.track_name, row.name, row.series_id)
+        before = (row.venue_id, row.layout_id, row.event_id)
+        after = (identity.venue_id, identity.layout_id, identity.event_id)
+        if identity.venue_id is None:
+            unresolved[row.track_name] = unresolved.get(row.track_name, 0) + 1
+        if before != after:
+            changes.append((row.race_id, before, after))
+            if not dry_run:
+                _db.set_race_identity(row.race_id, *after)
+    return changes, unresolved, missing
+
+
+def _format_ids(ids):
+    """Render an identity triple for the before/after report."""
+    return '/'.join(part or '-' for part in ids)
+
+
+def _handle_identify():
+    """Parse args and re-tag stored races from the curated track data."""
+    parser = argparse.ArgumentParser(
+        prog='lemongrass-races-identify',
+        description='Re-resolve stored races against the curated track data')
+    parser.add_argument('race_id', nargs='*')
+    parser.add_argument('--dry-run', action='store_true', default=False,
+                        help='Report what would change without writing')
+    args = parser.parse_args()
+
+    changes, unresolved, missing = identify_races(
+        race_ids=args.race_id or None, dry_run=args.dry_run)
+    for race_id, before, after in changes:
+        print(f"{race_id:<10} {_format_ids(before)} -> {_format_ids(after)}")
+    verb = 'would change' if args.dry_run else 'changed'
+    print(f"{len(changes)} race(s) {verb}")
+    if unresolved:
+        print("unresolved track names (add to tracks.toml):")
+        for name, count in sorted(unresolved.items(),
+                                  key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {count:4d}  {name or '(blank)'}")
+    for race_id in missing:
+        # Without this a typo'd id is indistinguishable from a race that was
+        # already tagged correctly: both print "0 race(s) changed".
+        print(f"No race row stored for race {race_id}", file=sys.stderr)
+    return 1 if missing else 0

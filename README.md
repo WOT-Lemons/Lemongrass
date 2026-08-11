@@ -348,9 +348,10 @@ attached to a terminal); non-interactively, or when a subcommand is given,
 | Subcommand | Description |
 | ------------ | ------------- |
 | `list` | Show all stored races with lap counts and schema status |
-| `prune RACE_ID...` | Delete all data for one or more races from InfluxDB |
+| `prune RACE_ID...` | Delete all data for one or more races: laps and standings from InfluxDB, then the race row from PostgreSQL, cascading to its sessions and entries |
 | `backfill` | Run historical backfill for all tracked races (delegates to `lemongrass race-backfill`; use `--help` for all options) |
 | `diagnose RACE_ID CAR_NUMBER` | Compare RaceMonitor vs InfluxDB lap counts for a specific car |
+| `identify [RACE_ID...] [--dry-run]` | Re-tag stored races (every race, or only the ones named) with venue, layout, and event ids resolved from `tracks.toml` (see [Track identity](#track-identity)) |
 
 ### Examples
 
@@ -385,6 +386,66 @@ The `backfill` subcommand delegates to `lemongrass race-backfill` and supports t
 ### Session Tracking
 
 All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata itself is stored in PostgreSQL (see [Database Schema](#database-schema)); the legacy `race_sessions` Influx bucket is no longer written to and is kept only as migration/rollback material.
+
+### Track identity
+
+Venue, layout, and event ids come from `src/lemongrass/data/tracks.toml`, a curated file
+that ships with the package — RaceMonitor's `Track` field is free text and its spelling
+drifts between years, which is what stops races grouping across seasons. Editing that
+file is a normal pull request.
+
+```bash
+lemongrass races identify --dry-run   # what would change, plus every unmatched name
+# edit src/lemongrass/data/tracks.toml to cover what the report listed
+lemongrass races identify             # write the new ids
+```
+
+`races identify` reads only what is already stored, so it makes no RaceMonitor calls and
+is not subject to the API rate limit. A race whose track name matches nothing is left
+with NULL ids and keeps showing its raw `track_name`; there is no fallback tag to clean
+up later. Naming race ids re-tags only those races; an id with no stored row is
+reported on stderr and exits non-zero, so a typo does not read as "already correct".
+
+`lemongrass tracks sync [--dry-run]` copies the file into the database on its own, and
+`lemongrass db upgrade` runs it as its final step.
+
+### Teams
+
+Unlike track data, team facts are operational rather than curated — they grow by one row
+every time we race — so they live only in PostgreSQL, via `lemongrass teams`.
+
+```shell
+lemongrass teams <subcommand> [args]
+```
+
+| Subcommand | Description |
+| ------------ | ------------- |
+| `add TEAM_ID NAME` | Create a team, or rename an existing one |
+| `list` | Print every team with its recorded aliases |
+| `alias TEAM_ID ALIAS` | Record a historical spelling for a team |
+| `merge FROM_ID INTO_ID` | Fold one team into another, moving its entries and aliases |
+
+A team must exist (`lemongrass teams add`) before `[team] id` in the config file or
+`lemongrass entries set --team` can reference it — see [Configuration](#configuration).
+
+### Entries
+
+`lemongrass entries` records which team ran which car number in which race — car numbers
+are not stable across events, so "our laps" cannot be derived from the number or team name
+alone.
+
+```shell
+lemongrass entries <subcommand> [args]
+```
+
+| Subcommand | Description |
+| ------------ | ------------- |
+| `set RACE_ID CAR_NUMBER [--team TEAM_ID]` | Record one race/car/team entry (`--team` defaults to `[team] id` from the config file) |
+| `list [--team TEAM_ID] [--race RACE_ID]` | Print stored entries, optionally filtered to one team or one race |
+| `propose --term TERM [--term TERM ...] [--team TEAM_ID]` | Scan stored competitor names for a match and interactively confirm which entries to record (and optionally save the matched spelling as a new alias) |
+
+A live capture with `[team] id` set records its own entry automatically; `entries` is for
+filling in the rest of a team's history.
 
 ## Configuration
 

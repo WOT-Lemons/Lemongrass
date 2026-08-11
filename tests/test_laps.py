@@ -89,11 +89,13 @@ def _stub_db_writes(monkeypatch):
     patch `store_race`/`store_session`/`store_sessions` (or `_db.upsert_race` etc.)
     directly are unaffected — this only backstops the call sites nobody mocked,
     mirroring the always-succeeding `ctx.write_api`/`ctx.delete_api` MagicMocks the
-    Influx-era tests relied on.
+    Influx-era tests relied on. `sync_tracks` is stubbed too: `store_race` calls it
+    via `_sync_tracks_once` before every write, so it needs the same backstop.
     """
     monkeypatch.setattr(_mod._db, 'upsert_race', MagicMock())
     monkeypatch.setattr(_mod._db, 'upsert_session', MagicMock())
     monkeypatch.setattr(_mod._db, 'replace_sessions', MagicMock())
+    monkeypatch.setattr(_mod._db, 'sync_tracks', MagicMock())
 
 
 class TestResolveTokens:
@@ -1974,7 +1976,9 @@ class TestLiveRaceMetadataFailure:
                                          race_meta_written=False)
 
         assert mock_race.call_count == 1
-        assert mock_race.call_args[0][1] > 1_000_000_000_000  # wall-clock ms, not 0
+        # start_epoc is still 0 here — store_race turns that into the
+        # wall-clock fallback, flagged as an estimate, rather than a 1970 row.
+        assert mock_race.call_args[0][0].start_epoc == 0
 
 
 class TestOldRaceClassWiring:
@@ -2130,21 +2134,9 @@ class TestOldRaceClassWiring:
                 with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         _mod.old_race(ctx, opts)
-        assert mock_race.call_args.args[1] == 5000 * 1000
-
-    def test_old_race_store_race_uses_wall_clock_when_start_epoc_zero(self):
-        ctx = _mod.RaceContext('999', '42', MagicMock(), MagicMock(), 0)
-        ctx.delete_api = MagicMock()
-        opts = _mod.RaceOptions(network_mode=True)
-        ctx.client.results.sessions_for_race.return_value = {'Sessions': [{'ID': 1}]}
-        ctx.client.results.session_details.return_value = self._session_details()
-        with patch.object(_mod, '_resolve_class_historical', return_value=('A', {1: 1})):
-            with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'store_race') as mock_race:
-                    with patch.object(_mod, 'print_rankings'):
-                        with patch.object(_mod.time, 'time', return_value=12345.0):
-                            _mod.old_race(ctx, opts)
-        assert mock_race.call_args.args[1] == 12345000
+        # store_race derives the race time from the ctx it is handed, so what
+        # this path owes it is a ctx carrying the fetched start epoch.
+        assert mock_race.call_args.args[0].start_epoc == 5000
 
     def test_old_race_store_race_not_called_when_not_network_mode(self):
         ctx = _mod.RaceContext('999', '42', MagicMock(), None, 0)
@@ -2406,19 +2398,9 @@ class TestLiveClassWiring:
                 with patch.object(_mod, 'store_race') as mock_race:
                     with patch.object(_mod, 'print_rankings'):
                         _mod.live_race(ctx, opts)
-        assert mock_race.call_args.args[1] == 1000 * 1000
-
-    def test_live_race_store_race_timestamp_uses_wall_clock_when_start_epoc_zero(self):
-        ctx = self._make_ctx()
-        ctx.start_epoc = 0
-        opts = _mod.RaceOptions(network_mode=True)
-        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
-            with patch.object(_mod, 'push_influx'):
-                with patch.object(_mod, 'store_race') as mock_race:
-                    with patch.object(_mod, 'print_rankings'):
-                        _mod.live_race(ctx, opts)
-        assert mock_race.called
-        assert mock_race.call_args.args[1] > 0
+        # store_race derives the race time from the ctx it is handed, so what
+        # this path owes it is a ctx carrying the current start epoch.
+        assert mock_race.call_args.args[0].start_epoc == 1000
 
     def test_live_race_store_race_called_even_when_no_laps(self):
         ctx = self._make_ctx()
@@ -2590,6 +2572,40 @@ class TestLiveClassWiring:
         assert mock_monitor.call_args.kwargs['pending_sessions'] == [(7, 'Day 1')]
         assert mock_monitor.call_args.kwargs['race_meta_written'] is False
 
+    def test_live_race_queues_the_initial_session_when_its_write_fails(self):
+        # The race row landed, so this session is written directly rather than
+        # deferred — but monitor_routine is entered with session_id already
+        # set to it, so its change detector never fires for this session
+        # again. Dropping store_session's False leaves the row missing for the
+        # whole session with nothing to retry it.
+        ctx = self._make_ctx()
+        ctx.delete_api = MagicMock()
+        ctx.client.live.get_session.return_value = self._session_response_with_id(7, 'Day 1')
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'store_race', return_value=True):
+                    with patch.object(_mod, 'store_entry'):
+                        with patch.object(_mod, 'store_session', return_value=False):
+                            with patch.object(_mod, 'monitor_routine') as mock_monitor:
+                                _mod.live_race(ctx, opts)
+        assert mock_monitor.call_args.kwargs['pending_sessions'] == [(7, 'Day 1')]
+        assert mock_monitor.call_args.kwargs['race_meta_written'] is True
+
+    def test_live_race_does_not_queue_the_initial_session_when_it_is_written(self):
+        ctx = self._make_ctx()
+        ctx.delete_api = MagicMock()
+        ctx.client.live.get_session.return_value = self._session_response_with_id(7, 'Day 1')
+        opts = _mod.RaceOptions(network_mode=True, monitor_mode=True)
+        with patch.object(_mod, '_resolve_class_live', return_value=('A', 1)):
+            with patch.object(_mod, 'push_influx'):
+                with patch.object(_mod, 'store_race', return_value=True):
+                    with patch.object(_mod, 'store_entry'):
+                        with patch.object(_mod, 'store_session', return_value=True):
+                            with patch.object(_mod, 'monitor_routine') as mock_monitor:
+                                _mod.live_race(ctx, opts)
+        assert mock_monitor.call_args.kwargs['pending_sessions'] == []
+
     def test_monitor_routine_passes_session_id_to_push_influx(self):
         ctx = self._make_ctx()
         opts = _mod.RaceOptions(network_mode=True, interval=30)
@@ -2706,7 +2722,7 @@ class TestMonitorRoutineEpocRecheck:
                                      _stop_event=self._stop_after(1))
         assert ctx.start_epoc == 5000
 
-    def test_calls_store_race_with_updated_timestamp(self):
+    def test_calls_store_race_once_the_epoch_is_known(self):
         ctx = self._make_ctx(start_epoc=0)
         opts = _mod.RaceOptions(network_mode=True, interval=30)
         ctx.client.race.details.return_value = {
@@ -2717,7 +2733,10 @@ class TestMonitorRoutineEpocRecheck:
             with patch.object(_mod, 'store_race') as mock_race:
                 _mod.monitor_routine(ctx, [self._existing_lap], opts,
                                      _stop_event=self._stop_after(1))
-        mock_race.assert_called_once_with(ctx, 5000 * 1000)
+        # The recheck stamped the epoch onto the ctx before the retry, which
+        # is the whole point: store_race reads its race time from there.
+        mock_race.assert_called_once_with(ctx)
+        assert ctx.start_epoc == 5000
 
     def test_updates_metadata_end_time_epoc_when_api_returns_epoc(self):
         ctx = self._make_ctx(start_epoc=0)
@@ -2863,9 +2882,10 @@ def _meta(**kw):
 
 
 def test_store_race_converts_epochs_to_timestamps():
-    ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
+    ctx = _mod.RaceContext('101', None, None, None, 1_700_000_000,
+                           metadata=_meta())
     with patch.object(_mod._db, 'upsert_race') as up:
-        assert _mod.store_race(ctx, 1_700_000_000_000, 120, 2) is True
+        assert _mod.store_race(ctx, 120, 2) is True
     row = up.call_args.args[0]
     assert row.race_id == '101'
     assert row.race_time == datetime.fromtimestamp(1_700_000_000, tz=UTC)
@@ -2879,32 +2899,58 @@ def test_store_race_converts_epochs_to_timestamps():
 def test_store_race_omits_completeness_on_the_live_path():
     ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
     with patch.object(_mod._db, 'upsert_race') as up:
-        assert _mod.store_race(ctx, 1_700_000_000_000) is True
+        assert _mod.store_race(ctx) is True
     row = up.call_args.args[0]
     assert row.expected_lap_count is None
     assert row.session_count is None
     assert row.lap_schema_version is None
 
 
+def test_store_race_flags_a_wall_clock_race_time_as_an_estimate():
+    # start_epoc 0 means RaceMonitor has not posted StartDateEpoc, so the row
+    # carries wall-clock now(). Deriving the timestamp and the flag together
+    # is what keeps them from ever disagreeing. Marking it lets upsert_race
+    # insert the guess without overwriting a start time that is already known.
+    ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
+    with patch.object(_mod._db, 'upsert_race') as up, \
+         patch.object(_mod.time, 'time', return_value=12345.0):
+        _mod.store_race(ctx)
+    row = up.call_args.args[0]
+    assert row.race_time_estimated is True
+    assert row.race_time == datetime.fromtimestamp(12345, tz=UTC)
+
+
+def test_store_race_does_not_flag_a_known_start_epoch():
+    ctx = _mod.RaceContext('101', None, None, None, 1_700_000_000,
+                           metadata=_meta())
+    with patch.object(_mod._db, 'upsert_race') as up, \
+         patch.object(_mod.time, 'time', return_value=12345.0):
+        _mod.store_race(ctx)
+    row = up.call_args.args[0]
+    assert row.race_time_estimated is False
+    # The start epoch wins over the wall clock, not the other way round.
+    assert row.race_time == datetime.fromtimestamp(1_700_000_000, tz=UTC)
+
+
 def test_store_race_zero_end_epoch_becomes_none():
     ctx = _mod.RaceContext('101', None, None, None, 0,
                            metadata=_meta(end_time_epoc=0))
     with patch.object(_mod._db, 'upsert_race') as up:
-        _mod.store_race(ctx, 1_700_000_000_000)
+        _mod.store_race(ctx)
     assert up.call_args.args[0].end_time is None
 
 
 def test_store_race_without_metadata_returns_false():
     ctx = _mod.RaceContext('101', None, None, None, 0)
     with patch.object(_mod._db, 'upsert_race') as up:
-        assert _mod.store_race(ctx, 1_700_000_000_000) is False
+        assert _mod.store_race(ctx) is False
     up.assert_not_called()
 
 
 def test_store_race_returns_false_on_error(caplog):
     ctx = _mod.RaceContext('101', None, None, None, 0, metadata=_meta())
     with patch.object(_mod._db, 'upsert_race', side_effect=Exception('boom')):
-        assert _mod.store_race(ctx, 1_700_000_000_000) is False
+        assert _mod.store_race(ctx) is False
     assert 'boom' in caplog.text
 
 
@@ -3826,8 +3872,8 @@ class TestOldRaceFullField:
                     with patch.object(_mod, 'delete_existing_laps'):
                         with patch.object(_mod, 'print_rankings'):
                             _mod.old_race(ctx, opts)
-        expected_arg = mock_stamp.call_args[0][2]
-        session_count_arg = mock_stamp.call_args[0][3]
+        expected_arg = mock_stamp.call_args[0][1]
+        session_count_arg = mock_stamp.call_args[0][2]
         assert expected_arg == len(captured)
         assert session_count_arg == 1
 
@@ -5401,6 +5447,57 @@ def test_influx_only_skip_opens_influx_only_for_a_settled_skip_candidate():
     rci.assert_called_once()
 
 
+def test_influx_only_skip_falls_through_when_sessions_are_missing():
+    # The skip decision looks at laps and standings only. A backfill whose
+    # session write failed after those were already complete would otherwise
+    # skip forever on every rerun -- main() returns before old_race, so the
+    # skip path's own session rewrite is unreachable -- and nothing short of
+    # `race-backfill --upgrade-stored --force` would repair it.
+    complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000, session_count=3)
+    with patch.object(_mod._influx, 'connect') as conn, \
+         patch.object(_mod, 'stored_race_completeness', return_value=complete), \
+         patch.object(_mod, 'stored_end_settled', return_value=True), \
+         patch.object(_mod._db, 'list_sessions', return_value=[1, 2]):
+        assert _mod._influx_only_skip('999') is False
+    # Cheap: answered from Postgres, with no Influx round trip at all.
+    conn.assert_not_called()
+
+
+def test_influx_only_skip_still_skips_when_every_session_is_stored():
+    complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000, session_count=2)
+    with patch.object(_mod._influx, 'connect') as conn, \
+         patch.object(_mod, 'stored_race_completeness', return_value=complete), \
+         patch.object(_mod, 'stored_end_settled', return_value=True), \
+         patch.object(_mod, 'race_complete_in_influx', return_value=True), \
+         patch.object(_mod._db, 'list_sessions', return_value=[1, 2]):
+        conn.return_value.__enter__.return_value.query_api.return_value = MagicMock()
+        assert _mod._influx_only_skip('999') is True
+
+
+def test_influx_only_skip_tolerates_more_sessions_than_the_count():
+    # session_count is written by the backfill only, post-dedupe; the live
+    # monitor inserts session rows without bumping it. A surplus is that, not
+    # a lost write, and re-fetching the whole race under the rate limit on
+    # every later backfill would be the cure being worse than the disease.
+    complete = _mod.StoredRace(_mod.SCHEMA_VERSION, 10, 1000, session_count=2)
+    with patch.object(_mod._influx, 'connect') as conn, \
+         patch.object(_mod, 'stored_race_completeness', return_value=complete), \
+         patch.object(_mod, 'stored_end_settled', return_value=True), \
+         patch.object(_mod, 'race_complete_in_influx', return_value=True), \
+         patch.object(_mod._db, 'list_sessions', return_value=[1, 2, 3]):
+        conn.return_value.__enter__.return_value.query_api.return_value = MagicMock()
+        assert _mod._influx_only_skip('999') is True
+
+
+def test_stored_race_completeness_carries_the_session_count():
+    from lemongrass import _db
+    ctx = _mod.RaceContext('999', None, None, None, 0)
+    row = _db.RaceRow(race_id='999', race_time=datetime(2026, 5, 1, tzinfo=UTC),
+                      session_count=4)
+    with patch.object(_mod._db, 'get_race', return_value=row):
+        assert _mod.stored_race_completeness(ctx).session_count == 4
+
+
 class TestStoredEndSettled:
     _NOW: ClassVar[int] = 1_000_000_000
 
@@ -5679,3 +5776,258 @@ class TestMainTuiLaunch:
         monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
         with pytest.raises(SystemExit):
             _mod.main()  # argparse errors on the required race_id
+
+
+def test_resolve_race_metadata_carries_track_identity():
+    from unittest.mock import MagicMock
+
+    from lemongrass import laps
+    client = MagicMock()
+    client.common.current_races.return_value = {
+        'Races': [{'SeriesName': '24 Hours of Lemons'}]}
+    meta = laps._resolve_race_metadata({
+        'Successful': True,
+        'Race': {'Name': 'GP du Lac 2023',
+                 'Track': 'New Jersey Motorsports Park - Thunderbolt Course',
+                 'SeriesID': 145, 'EndDateEpoc': 0},
+    }, client)
+    assert (meta.venue_id, meta.layout_id, meta.event_id) == (
+        'njmp', 'thunderbolt', 'gp-du-lac')
+
+
+def test_resolve_race_metadata_on_a_failed_fetch_has_no_identity():
+    from lemongrass import laps
+    meta = laps._resolve_race_metadata({'Successful': False}, None)
+    assert (meta.venue_id, meta.layout_id, meta.event_id) == (None, None, None)
+
+
+def test_store_race_passes_identity_through():
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    ctx = laps.RaceContext('101', '252', None, None, 0, metadata=laps.RaceMetadata(
+        race_name='GP du Lac', track_name='Thompson', series_name='Lemons',
+        end_time_epoc=0, series_id=145, venue_id='thompson',
+        event_id='gp-du-lac'))
+    with patch('lemongrass._db.upsert_race') as upsert:
+        assert laps.store_race(ctx) is True
+    row = upsert.call_args.args[0]
+    assert (row.venue_id, row.layout_id, row.event_id) == (
+        'thompson', None, 'gp-du-lac')
+
+
+def test_store_race_syncs_curated_tracks_before_writing(monkeypatch):
+    # resolve() reads the shipped file; the foreign keys are satisfied only by
+    # rows. Syncing inside store_race — rather than in one caller — is what
+    # stops a curated-data edit causing a race-day outage on ANY write path,
+    # including the TUI live monitor, which never goes through backfill_race.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    monkeypatch.setattr(laps, '_tracks_synced', False)
+    ctx = laps.RaceContext('101', '252', None, None, 0, metadata=laps.RaceMetadata(
+        race_name='GP du Lac', track_name='Thompson', series_name='Lemons',
+        end_time_epoc=0, venue_id='thompson'))
+    with patch('lemongrass._db.sync_tracks') as sync, \
+         patch('lemongrass._db.upsert_race') as upsert:
+        assert laps.store_race(ctx) is True
+    assert sync.called
+    assert upsert.called
+
+
+def test_store_race_still_writes_when_the_sync_fails(monkeypatch):
+    # A sync that cannot run leaves the pre-existing risk as it was; failing
+    # the race outright would be worse than attempting the write.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    monkeypatch.setattr(laps, '_tracks_synced', False)
+    ctx = laps.RaceContext('101', '252', None, None, 0, metadata=laps.RaceMetadata(
+        race_name='GP du Lac', track_name='Thompson', series_name='Lemons',
+        end_time_epoc=0))
+    with patch('lemongrass._db.sync_tracks', side_effect=RuntimeError('down')), \
+         patch('lemongrass._db.upsert_race') as upsert:
+        assert laps.store_race(ctx) is True
+    assert upsert.called
+
+
+def test_sync_tracks_once_runs_only_once_per_process(monkeypatch):
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    monkeypatch.setattr(laps, '_tracks_synced', False)
+    with patch('lemongrass._db.sync_tracks') as sync:
+        laps._sync_tracks_once()
+        laps._sync_tracks_once()
+    assert sync.call_count == 1
+
+
+def test_sync_tracks_once_logs_the_traceback_only_on_the_first_failure(
+        monkeypatch, caplog):
+    # It retries every poll by design, so while Postgres is down an unguarded
+    # logging.exception would put a full traceback into the 200-line TUI log
+    # pane every 30s and bury the lap output.
+    import logging as _logging
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    monkeypatch.setattr(laps, '_tracks_synced', False)
+    monkeypatch.setattr(laps, '_tracks_sync_failed', False)
+    with patch('lemongrass._db.sync_tracks', side_effect=RuntimeError('down')), \
+         caplog.at_level(_logging.WARNING):
+        laps._sync_tracks_once()
+        laps._sync_tracks_once()
+        laps._sync_tracks_once()
+    tracebacks = [r for r in caplog.records if r.exc_info]
+    assert len(tracebacks) == 1
+    assert sum('still failing' in r.getMessage() for r in caplog.records) == 2
+    # Still not latched: the next successful poll syncs.
+    with patch('lemongrass._db.sync_tracks') as sync:
+        laps._sync_tracks_once()
+    assert sync.call_count == 1
+
+
+class TestCaptureRecordsTheEntry:
+    def test_live_race_records_the_entry_after_storing_the_race(self):
+        ctx = TestLiveRace()._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'print_rankings'), \
+             patch.object(_mod, 'push_influx'), \
+             patch.object(_mod, 'push_influx_standings_live', return_value={}), \
+             patch.object(_mod, 'store_race', return_value=True), \
+             patch.object(_mod, 'store_session'), \
+             patch.object(_mod, 'store_entry') as entry:
+            _mod.live_race(ctx, opts)
+        entry.assert_called_once_with(ctx)
+
+    def test_live_race_skips_the_entry_when_the_race_write_failed(self):
+        # entries.race_id is a foreign key; there is no race row to point at.
+        ctx = TestLiveRace()._ctx()
+        opts = _mod.RaceOptions(network_mode=True)
+        with patch.object(_mod, 'print_rankings'), \
+             patch.object(_mod, 'push_influx'), \
+             patch.object(_mod, 'push_influx_standings_live', return_value={}), \
+             patch.object(_mod, 'store_race', return_value=False), \
+             patch.object(_mod, 'store_session'), \
+             patch.object(_mod, 'store_entry') as entry:
+            _mod.live_race(ctx, opts)
+        assert not entry.called
+
+    def test_monitor_routine_records_the_entry_on_the_retry_path(self):
+        # Built from the existing deferred-session test: poll 1 leaves the race
+        # row unwritten, poll 2's retry stores it — and must record the entry.
+        stop = threading.Event()
+        ctx = _monitor_ctx()
+        ctx.write_api = MagicMock()
+        opts = _mod.RaceOptions(network_mode=True, interval=0)
+
+        poll_count = 0
+
+        def fake_refresh(c):
+            nonlocal poll_count
+            poll_count += 1
+            if poll_count >= 2:
+                stop.set()
+            return []
+
+        with patch.object(_mod, 'refresh_competitor', side_effect=fake_refresh), \
+             patch.object(_mod, 'store_race', side_effect=[False, True]), \
+             patch.object(_mod, 'store_session'), \
+             patch.object(_mod, 'store_entry') as entry, \
+             patch.object(_mod, 'push_influx_standings_live', return_value={}):
+            _mod.monitor_routine(ctx, [], opts, race_meta_written=False,
+                                 _stop_event=stop)
+        entry.assert_called_once_with(ctx)
+
+
+def _entry_ctx(car_number="252"):
+    from lemongrass import laps
+    return laps.RaceContext('101', car_number, None, None, 0,
+                            metadata=laps.RaceMetadata(
+                                race_name='GP du Lac', track_name='Thompson',
+                                series_name='Lemons', end_time_epoc=0))
+
+
+def test_store_entry_records_the_tracked_car_for_the_configured_team(tmp_path,
+                                                                     monkeypatch):
+    from unittest.mock import patch
+
+    from lemongrass import _db, laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.get_team',
+               return_value=_db.TeamRow('wot-lemons', 'WOT Lemons')), \
+         patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx(' 252 ')) is True
+    write.assert_called_once_with('101', '252', 'wot-lemons')
+
+
+def test_store_entry_does_nothing_without_a_configured_team(monkeypatch):
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
+    with patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx()) is False
+    assert not write.called
+
+
+def test_store_entry_does_nothing_fieldwide(monkeypatch, tmp_path):
+    # race-backfill runs with car_number=None and must create nothing.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx(None)) is False
+    assert not write.called
+
+
+def test_store_entry_warns_and_skips_when_the_team_row_is_missing(tmp_path,
+                                                                  monkeypatch,
+                                                                  caplog):
+    # entries.team_id is a foreign key; a typo'd config id must not fail a race.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "typo"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.get_team', return_value=None), \
+         patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx()) is False
+    assert not write.called
+    assert "typo" in caplog.text
+
+
+def test_store_entry_swallows_a_db_unreachable_error_from_get_team(tmp_path,
+                                                                    monkeypatch):
+    # get_team hits Postgres too; a connectivity blip there must not propagate
+    # out of store_entry and kill a live capture whose race row already landed.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.get_team', side_effect=RuntimeError("db down")), \
+         patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx()) is False
+    assert not write.called
+
+
+def test_store_entry_does_nothing_for_a_blank_car_number(monkeypatch, tmp_path):
+    # ' 2' whitespace has reached the tag layer before and blanked a dashboard;
+    # a whitespace-only car_number must not write a real entries row.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
+    monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
+    with patch('lemongrass._db.set_entry') as write:
+        assert laps.store_entry(_entry_ctx("   ")) is False
+    assert not write.called

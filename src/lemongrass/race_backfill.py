@@ -61,7 +61,7 @@ from datetime import UTC, date, datetime, timedelta
 import tomlkit
 from race_monitor import RaceMonitorClient, RaceMonitorError
 
-from lemongrass import _config, _db, _env, _influx
+from lemongrass import _config, _db, _env, _influx, _prompt
 from lemongrass._env import resolve_tokens
 
 _backfill_cfg = _config.load_config().races.backfill
@@ -302,6 +302,17 @@ def run_backfill(races, dry_run=False, force=False):
     """
     from lemongrass.laps import RaceOptions, _influx_only_skip
 
+    # Fail before the first rate-limited fetch, not after the last. Without
+    # force, _influx_only_skip reaches _db.database_url on race one and exits.
+    # With force it never runs, so every race would fetch (6 req/min), rewrite
+    # its laps, and only then hit the missing password inside store_race —
+    # where _backfill_one_race catches the SystemExit and carries on to the
+    # next. Hours of work across the field, no race ever stamped.
+    if not dry_run and not _db.db_password_present():
+        logging.error("%s environment variable not set",
+                      _config.load_config().postgres.password_env)
+        sys.exit(1)
+
     failures = []
     opts = RaceOptions(network_mode=True, skip_if_complete=not force)
     client = None
@@ -495,14 +506,6 @@ def _print_config_snippet(result, *, series, terms):
           "LEMONGRASS_CONFIG:\n\n" + '\n'.join(lines) + '\n')
 
 
-def _ask_yes(prompt):
-    """One y/N prompt; EOF (stdin closed mid-run) counts as no."""
-    try:
-        return input(prompt).strip().lower() in ('y', 'yes')
-    except EOFError:
-        return False
-
-
 def _maybe_save_config(result):
     """Offer to persist changed search terms / pinned series after the TUI.
 
@@ -524,11 +527,11 @@ def _maybe_save_config(result):
     # re-advertise (and duplicate) it.
     series_unsaved = result.series_changed
     terms_unsaved = result.terms_changed
-    if result.series_changed and _ask_yes(
+    if result.series_changed and _prompt.ask_yes(
             f"Save series_id={result.series_id} to {path}? [y/N] "):
         series_unsaved = not _save_backfill_value(path, 'series_id',
                                                   result.series_id)
-    if result.terms_changed and _ask_yes(
+    if result.terms_changed and _prompt.ask_yes(
             f"Save updated search terms to {path}? [y/N] "):
         terms_unsaved = not _save_search_terms(path, result.terms)
     if series_unsaved or terms_unsaved:

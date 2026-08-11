@@ -1,4 +1,5 @@
 import re
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -169,6 +170,81 @@ def test_a_session_id_claimed_by_two_races_is_skipped_and_reported(db, caplog):
     assert [s.session_id for s in _db.list_sessions('101')] == [55]
     assert _db.list_sessions('202') == []
     assert '55' in caplog.text
+
+
+def test_reimport_does_not_overwrite_a_corrected_race_time(db):
+    # A legacy race point's timestamp may itself be the live monitor's
+    # wall-clock guess, so the import inserts it but never writes it over a
+    # stored value the backfill has since corrected from StartDateEpoc.
+    # Grafana derives race_from from race_time, so regressing it hides every
+    # lap before the guess.
+    from lemongrass import _db
+    corrected = datetime(2026, 5, 1, 14, 30, tzinfo=UTC)
+    _db.upsert_race(_db.RaceRow(race_id='101', race_time=corrected))
+    query_api = MagicMock()
+    # What read_legacy_races returns for a legacy point, flag included.
+    with patch.object(_mod, 'read_legacy_races', return_value=[
+            _db.RaceRow(race_id='101',
+                        race_time=datetime(2026, 5, 1, 9, 0, tzinfo=UTC),
+                        race_time_estimated=True)]), \
+         patch.object(_mod, 'read_legacy_sessions', return_value=[]):
+        _mod.import_legacy(query_api)
+    assert _db.get_race('101').race_time == corrected
+
+
+def test_read_legacy_races_flags_race_time_as_estimated(db):
+    from lemongrass import _db
+    query_api = MagicMock()
+    record = MagicMock()
+    record.values = {'race_id': '101'}
+    record.get_time.return_value = datetime(2026, 5, 1, tzinfo=UTC)
+    table = MagicMock()
+    table.records = [record]
+    query_api.query.return_value = [table]
+    rows = _mod.read_legacy_races(query_api)
+    assert [r.race_time_estimated for r in rows] == [True]
+    # The row still inserts its race_time when nothing is stored yet.
+    _db.upsert_race(rows[0])
+    assert _db.get_race('101').race_time == datetime(2026, 5, 1, tzinfo=UTC)
+
+
+def test_a_claimed_session_clears_the_losing_races_session_count(db):
+    # The loser keeps a session_count that counts a session it will never own,
+    # and no rewrite can ever satisfy it: replace_sessions raises on the
+    # claimed id. Left set, _influx_only_skip sees the shortfall, refuses the
+    # cheap skip, and every backfill re-fetches the race and then fails. NULL
+    # is the honest answer -- this import does not know how many sessions the
+    # race has -- and _influx_only_skip leaves a NULL count alone.
+    from lemongrass import _db
+    query_api = MagicMock()
+    with patch.object(_mod, 'read_legacy_races', return_value=[
+            _db.RaceRow(race_id='101', race_time=datetime(2026, 5, 1, tzinfo=UTC),
+                        session_count=1),
+            _db.RaceRow(race_id='202', race_time=datetime(2026, 6, 1, tzinfo=UTC),
+                        session_count=1)]), \
+         patch.object(_mod, 'read_legacy_sessions', return_value=[
+            _db.SessionRow(session_id=55, race_id='101', name='Q'),
+            _db.SessionRow(session_id=55, race_id='202', name='Q')]):
+        _mod.import_legacy(query_api)
+    # 101 won the id and keeps its verified count; 202 lost it.
+    assert _db.get_race('101').session_count == 1
+    assert _db.get_race('202').session_count is None
+
+
+def test_a_claimed_session_leaves_the_count_alone_under_dry_run(db):
+    from lemongrass import _db
+    query_api = MagicMock()
+    _db.upsert_race(_db.RaceRow(race_id='202',
+                                race_time=datetime(2026, 6, 1, tzinfo=UTC),
+                                session_count=1))
+    with patch.object(_mod, 'read_legacy_races', return_value=[
+            _db.RaceRow(race_id='101', race_time=datetime(2026, 5, 1, tzinfo=UTC)),
+            _db.RaceRow(race_id='202', race_time=datetime(2026, 6, 1, tzinfo=UTC))]), \
+         patch.object(_mod, 'read_legacy_sessions', return_value=[
+            _db.SessionRow(session_id=55, race_id='101', name='Q'),
+            _db.SessionRow(session_id=55, race_id='202', name='Q')]):
+        _mod.import_legacy(query_api, dry_run=True)
+    assert _db.get_race('202').session_count == 1
 
 
 def test_orphan_sessions_are_skipped_and_reported(db, caplog):
@@ -399,7 +475,10 @@ def test_export_round_trips_through_import(db):
     records = _parse_line_protocol_as_records(out.getvalue())   # step 2
     query_api = MagicMock(query=MagicMock(return_value=_tables(records)))
     (back,) = _mod.read_legacy_races(query_api)
-    assert back == original
+    # race_time_estimated is a write-policy flag, not a stored column: it says
+    # how upsert_race should treat this row's race_time, and read_legacy_races
+    # sets it on everything it reads. Every persisted field round trips.
+    assert back == replace(original, race_time_estimated=True)
 
 
 def _parse_line_protocol_as_records(text):

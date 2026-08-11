@@ -24,20 +24,21 @@ def _tables(mapping):
     return [t]
 
 
-def _row(race_id, name, when):
+def _list_row(race_id, name, when, venue_name=None, event_name=None):
     from lemongrass import _db
-    return _db.RaceRow(race_id=race_id, race_time=when, name=name)
+    return _db.RaceListRow(race_id=race_id, name=name, race_time=when,
+                           venue_name=venue_name, event_name=event_name)
 
 
 def test_fetch_race_rows_joins_sql_attributes_with_flux_counts():
-    rows = [_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC)),
-            _row('102', 'Fall', datetime(2026, 9, 1, tzinfo=UTC))]
+    rows = [_list_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC)),
+            _list_row('102', 'Fall', datetime(2026, 9, 1, tzinfo=UTC))]
     query_api = MagicMock()
     query_api.query.side_effect = [
         _tables({'101': 40, '102': 10}),   # total lap counts
         _tables({'101': 40}),              # current-schema lap counts
     ]
-    with patch('lemongrass.races._db.list_races', return_value=rows):
+    with patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
         got = races_mod.fetch_race_rows(query_api)
     assert [r['race_id'] for r in got] == ['102', '101']   # newest first
     assert got[1]['total'] == 40 and got[1]['current'] == 40
@@ -46,16 +47,66 @@ def test_fetch_race_rows_joins_sql_attributes_with_flux_counts():
     assert query_api.query.call_count == 2   # the race query is gone
 
 
+def test_fetch_race_rows_renders_the_date_in_utc():
+    # psycopg returns TIMESTAMPTZ in the connection's timezone, not UTC. A
+    # race stored at 02:00Z comes back as the previous day on any host behind
+    # UTC, so `races list` would show a date one day earlier than the race ran
+    # -- and one day earlier than the same race showed before the cutover.
+    # race_backfill.validate_backfill already normalizes for this reason.
+    from datetime import timedelta, timezone
+    pacific = timezone(timedelta(hours=-7))
+    rows = [_list_row('101', 'Spring',
+                      datetime(2026, 8, 10, 19, 0, tzinfo=pacific))]
+    query_api = MagicMock()
+    query_api.query.side_effect = [_tables({}), _tables({})]
+    with patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
+        got = races_mod.fetch_race_rows(query_api)
+    assert got[0]['date'] == '2026-08-11'
+
+
 def test_fetch_race_rows_reports_the_current_schema_version():
     # Deliberate: races list renders "stale (N/M at vX)" where X is the
     # version laps should be at, not the version stored on the race.
     from lemongrass.laps import SCHEMA_VERSION
-    rows = [_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC))]
+    rows = [_list_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC))]
     query_api = MagicMock()
     query_api.query.side_effect = [_tables({}), _tables({})]
-    with patch('lemongrass.races._db.list_races', return_value=rows):
+    with patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
         got = races_mod.fetch_race_rows(query_api)
     assert got[0]['schema_version'] == SCHEMA_VERSION
+
+
+def test_fetch_race_rows_includes_venue_and_event_names():
+    rows = [_list_row('101', 'GP du Lac', datetime(2024, 5, 1, tzinfo=UTC),
+                      'Thompson Speedway Motorsports Park', 'GP du Lac'),
+            _list_row('102', 'Mystery', datetime(2023, 5, 1, tzinfo=UTC))]
+    query_api = MagicMock()
+    query_api.query.side_effect = [_tables({}), _tables({})]
+    with patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
+        got = {r['race_id']: r for r in races_mod.fetch_race_rows(query_api)}
+    assert got['101']['venue_name'] == 'Thompson Speedway Motorsports Park'
+    assert got['101']['event_name'] == 'GP du Lac'
+    assert got['102']['venue_name'] == ''
+    assert got['102']['event_name'] == ''
+
+
+def test_races_list_prints_a_venue_column(capsys):
+    rows = [{"race_id": "101", "name": "GP du Lac", "date": "2024-05-01",
+             "total": 400, "current": 400, "schema_version": 5,
+             "venue_name": "Thompson Speedway Motorsports Park", "event_name": "GP du Lac"}]
+    with patch("lemongrass._influx.connect"), \
+         patch("lemongrass.races.fetch_race_rows", return_value=rows):
+        races_mod._handle_list()
+    out = capsys.readouterr().out
+    header, rule, row = out.splitlines()[:3]
+    # The widths are chosen, not incidental: NAME 35->24 pays for an 18-wide
+    # VENUE, and 'New Jersey Motorsports Park' is 27 characters, so anything
+    # narrower than 18 makes the column useless.
+    assert header == (f"{'RACE ID':<10} {'NAME':<24} {'VENUE':<18} "
+                      f"{'DATE':<12} {'LAPS':<8} SCHEMA")
+    assert rule == '-' * 91
+    # Venue names are truncated to 18, not dropped.
+    assert row.startswith("101        GP du Lac                Thompson Speedway  ")
 
 
 def test_prune_deletes_influx_before_the_race_row():
@@ -212,6 +263,19 @@ class TestHandlePrune:
                        return_value=self._make_influx_client()):
                 with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                     with patch('builtins.input', return_value='n'):
+                        with pytest.raises(SystemExit) as exc:
+                            _mod._handle_prune()
+        assert exc.value.code == 0
+        assert 'Aborted' in capsys.readouterr().out
+
+    def test_prune_aborts_on_eof(self, capsys):
+        # Ctrl-D, or a redirected stdin that runs out, is not consent to
+        # delete: it aborts like 'n' rather than tracebacking.
+        with patch.object(sys, 'argv', ['lemongrass-races-prune', '12345']):
+            with patch('lemongrass._influx.connect',
+                       return_value=self._make_influx_client()):
+                with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
+                    with patch('builtins.input', side_effect=EOFError):
                         with pytest.raises(SystemExit) as exc:
                             _mod._handle_prune()
         assert exc.value.code == 0
@@ -479,10 +543,10 @@ class TestHandleBackfill:
 
 class TestHandleList:
     def _race_rows(self, races):
-        """races: list of (race_id, race_name, date_str) -> list[RaceRow]."""
+        """races: list of (race_id, race_name, date_str) -> list[RaceListRow]."""
         from lemongrass import _db
         return [
-            _db.RaceRow(
+            _db.RaceListRow(
                 race_id=race_id, name=race_name,
                 race_time=datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=UTC))
             for race_id, race_name, date_str in races
@@ -519,7 +583,7 @@ class TestHandleList:
         client = self._make_client(totals={}, currents={})
         rows = self._race_rows([('R1', 'Empty Race', '2026-01-01')])
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         assert 'no laps' in capsys.readouterr().out
@@ -529,7 +593,7 @@ class TestHandleList:
         client = self._make_client(totals={'R1': 50}, currents={'R1': 50})
         rows = self._race_rows([('R1', 'Full Race', '2026-01-01')])
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         assert f'current (v{SCHEMA_VERSION})' in capsys.readouterr().out
@@ -538,7 +602,7 @@ class TestHandleList:
         client = self._make_client(totals={'R1': 50}, currents={'R1': 20})
         rows = self._race_rows([('R1', 'Old Race', '2026-01-01')])
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out
@@ -552,7 +616,7 @@ class TestHandleList:
             ('R2', 'New Race', '2026-06-01'),
         ])
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out
@@ -569,9 +633,9 @@ class TestHandleList:
         # column rather than crashing on None.strftime.
         from lemongrass import _db
         client = self._make_client(totals={}, currents={})
-        rows = [_db.RaceRow(race_id='R1', name='Dateless Race', race_time=None)]
+        rows = [_db.RaceListRow(race_id='R1', name='Dateless Race', race_time=None)]
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out
@@ -628,3 +692,152 @@ class TestRacesTuiEntry:
         monkeypatch.setattr(_mod.sys.stdout, 'isatty', lambda: True)
         with pytest.raises(SystemExit):
             _mod.main()
+
+
+def _stored(race_id, name, track_name, series_id=None, **ids):
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    return _db.RaceRow(race_id=race_id, race_time=datetime(2024, 5, 1, tzinfo=UTC),
+                       name=name, track_name=track_name, series_id=series_id, **ids)
+
+
+def test_identify_resolves_a_stored_race():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac 2023", "Thompson Motor Speedway", 145)]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity") as write:
+        changes, unresolved, _ = races_mod.identify_races()
+    assert changes == [("101", (None, None, None),
+                        ("thompson", None, "gp-du-lac"))]
+    assert unresolved == {}
+    write.assert_called_once_with("101", "thompson", None, "gp-du-lac")
+
+
+def test_identify_leaves_unresolved_races_null_and_counts_them():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "Race A", "Mystery Park"),
+            _stored("102", "Race B", "Mystery Park")]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity") as write:
+        changes, unresolved, _ = races_mod.identify_races()
+    assert changes == []
+    assert unresolved == {"Mystery Park": 2}
+    assert not write.called
+
+
+def test_identify_is_idempotent():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac 2023", "Thompson Motor Speedway", 145,
+                    venue_id="thompson", event_id="gp-du-lac")]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity") as write:
+        changes, _, _ = races_mod.identify_races()
+    assert changes == []
+    assert not write.called
+
+
+def test_identify_dry_run_writes_nothing():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac 2023", "Thompson Motor Speedway", 145)]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks") as sync, \
+         patch("lemongrass._db.set_race_identity") as write:
+        changes, _, _ = races_mod.identify_races(dry_run=True)
+    assert len(changes) == 1
+    assert not write.called
+    assert not sync.called
+
+
+def test_identify_resolves_the_event_of_a_legacy_race_with_no_series_id():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac 2019", "Thompson Motor Speedway", None)]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity"):
+        changes, _, _ = races_mod.identify_races()
+    assert changes[0][2] == ("thompson", None, "gp-du-lac")
+
+
+def test_identify_can_be_limited_to_named_races():
+    from unittest.mock import patch
+
+    from lemongrass import races as races_mod
+    rows = [_stored("101", "GP du Lac", "Thompson Motor Speedway", 145),
+            _stored("102", "Other", "Gingerman")]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity"):
+        changes, _, _ = races_mod.identify_races(race_ids=["102"])
+    assert [c[0] for c in changes] == ["102"]
+
+
+def test_identify_reports_race_ids_with_no_stored_row():
+    # A typo'd id must not read the same as "already correct".
+    rows = [_stored("101", "GP du Lac", "Thompson Motor Speedway", 145)]
+    with patch("lemongrass._db.list_races", return_value=rows), \
+         patch("lemongrass._db.sync_tracks"), \
+         patch("lemongrass._db.set_race_identity"):
+        _, _, missing = races_mod.identify_races(race_ids=["101", "999", "998"])
+    assert missing == ["998", "999"]
+
+
+class TestHandleIdentify:
+    def _run(self, argv, result):
+        with patch.object(sys, 'argv', ['lemongrass-races-identify', *argv]), \
+             patch.object(_mod, 'identify_races', return_value=result) as ident:
+            code = _mod._handle_identify()
+        return code, ident
+
+    def test_reports_changes_and_returns_zero(self, capsys):
+        changes = [("101", (None, None, None), ("thompson", None, "gp-du-lac"))]
+        code, ident = self._run([], (changes, {}, []))
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "101        -/-/- -> thompson/-/gp-du-lac" in out
+        assert "1 race(s) changed" in out
+        ident.assert_called_once_with(race_ids=None, dry_run=False)
+
+    def test_dry_run_switches_the_verb_and_the_flag(self, capsys):
+        code, ident = self._run(['--dry-run'], ([], {}, []))
+        assert code == 0
+        assert "0 race(s) would change" in capsys.readouterr().out
+        ident.assert_called_once_with(race_ids=None, dry_run=True)
+
+    def test_passes_positional_race_ids_through(self):
+        _, ident = self._run(['101', '102'], ([], {}, []))
+        ident.assert_called_once_with(race_ids=['101', '102'], dry_run=False)
+
+    def test_unresolved_report_is_sorted_by_count_then_name(self, capsys):
+        unresolved = {"Zed Park": 1, "Mystery Park": 3, "Alpha Park": 1, "": 2}
+        code, _ = self._run([], ([], unresolved, []))
+        lines = capsys.readouterr().out.splitlines()
+        assert code == 0
+        assert lines[1] == "unresolved track names (add to tracks.toml):"
+        assert [line.split(None, 1)[1] for line in lines[2:]] == [
+            "Mystery Park", "(blank)", "Alpha Park", "Zed Park"]
+
+    def test_missing_race_ids_are_reported_and_exit_nonzero(self, capsys):
+        code, _ = self._run(['999'], ([], {}, ["999"]))
+        assert code == 1
+        assert "No race row stored for race 999" in capsys.readouterr().err
+
+    def test_the_exit_code_survives_dispatch_through_main(self):
+        # Testing the handler alone would not catch races.main() discarding
+        # what the handler returns, which is what cli.main exits with.
+        with patch.object(sys, 'argv', ['lemongrass-races', 'identify', '999']), \
+             patch.object(_mod, 'identify_races', return_value=([], {}, ["999"])):
+            assert _mod.main() == 1

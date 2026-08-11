@@ -136,6 +136,41 @@ def test_delete_race_reports_whether_it_deleted(db):
     assert _db.get_race("101") is None
 
 
+def test_an_estimated_race_time_does_not_overwrite_a_stored_one(db):
+    # The live monitor has no StartDateEpoc until RaceMonitor posts one and
+    # falls back to wall-clock now(). Restarting the monitor mid-race would
+    # otherwise move race_time forward to the restart, and Grafana's race_from
+    # is derived from it -- every lap before the restart vanishes from the
+    # dashboard and validate_backfill reports the race as empty.
+    from lemongrass import _db
+    real = datetime(2026, 5, 1, 10, 0, tzinfo=UTC)
+    _db.upsert_race(_race("101", race_time=real))
+    _db.upsert_race(_race("101", race_time=datetime(2026, 5, 1, 13, 0, tzinfo=UTC),
+                           race_time_estimated=True))
+    assert _db.get_race("101").race_time == real
+
+
+def test_an_estimated_race_time_still_inserts_a_brand_new_race(db):
+    # race_time is NOT NULL, so a guess is better than no row at all -- the
+    # live monitor must be able to store a race it is seeing for the first
+    # time before the epoch is posted.
+    from lemongrass import _db
+    guess = datetime(2026, 5, 1, 13, 0, tzinfo=UTC)
+    _db.upsert_race(_race("101", race_time=guess, race_time_estimated=True))
+    assert _db.get_race("101").race_time == guess
+
+
+def test_a_known_race_time_still_corrects_a_stored_one(db):
+    # The backfill learns the real start epoch and must be able to fix a row
+    # the live path guessed at.
+    from lemongrass import _db
+    _db.upsert_race(_race("101", race_time=datetime(2026, 5, 1, 13, 0, tzinfo=UTC),
+                           race_time_estimated=True))
+    real = datetime(2026, 5, 1, 10, 0, tzinfo=UTC)
+    _db.upsert_race(_race("101", race_time=real))
+    assert _db.get_race("101").race_time == real
+
+
 def test_statements_join_a_caller_transaction(db):
     # Passing conn lets several statements share one transaction — and one
     # rollback. replace_sessions depends on this.
@@ -276,3 +311,190 @@ def test_list_sessions_without_a_race_id_returns_all(db):
     _db.upsert_session(_session(10, race_id="101"))
     _db.upsert_session(_session(20, race_id="202"))
     assert len(_db.list_sessions()) == 2
+
+
+def _track_data(venue_name="Thompson Speedway Motorsports Park"):
+    from lemongrass import _tracks
+    return _tracks.TrackData(
+        venues=(
+            _tracks.Venue(venue_id="thompson", name=venue_name,
+                          candidates=("thompson",), layouts=()),
+            _tracks.Venue(
+                venue_id="njmp", name="New Jersey Motorsports Park",
+                candidates=("new jersey motorsports park",),
+                layouts=(_tracks.Layout(layout_id="thunderbolt",
+                                        name="Thunderbolt Course",
+                                        candidates=("thunderbolt course",)),)),
+        ),
+        series=(
+            _tracks.Series(series_id=145, events=(
+                _tracks.Event(event_id="gp-du-lac", series_id=145,
+                              name="GP du Lac", keywords=("gp du lac",)),)),
+        ),
+    )
+
+
+def test_sync_tracks_creates_rows(db):
+    from sqlalchemy import text
+
+    from lemongrass import _db
+    summary = _db.sync_tracks(_track_data())
+    assert (summary["venues_created"], summary["layouts_created"],
+            summary["events_created"]) == (2, 1, 1)
+    with db.begin() as conn:
+        assert conn.execute(text(
+            "SELECT name FROM venues WHERE venue_id='thompson'")).scalar() == (
+            "Thompson Speedway Motorsports Park")
+        assert conn.execute(text(
+            "SELECT name FROM layouts WHERE venue_id='njmp' "
+            "AND layout_id='thunderbolt'")).scalar() == "Thunderbolt Course"
+        assert conn.execute(text(
+            "SELECT series_id FROM events WHERE event_id='gp-du-lac'")).scalar() == 145
+
+
+def test_sync_tracks_is_idempotent(db):
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    summary = _db.sync_tracks(_track_data())
+    assert (summary["venues_created"], summary["venues_updated"]) == (0, 0)
+    assert (summary["layouts_created"], summary["layouts_updated"]) == (0, 0)
+    assert (summary["events_created"], summary["events_updated"]) == (0, 0)
+
+
+def test_sync_tracks_updates_a_renamed_venue(db):
+    from sqlalchemy import text
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data(venue_name="Thompson Motor Speedway"))
+    summary = _db.sync_tracks(_track_data())
+    assert summary["venues_updated"] == 1
+    with db.begin() as conn:
+        assert conn.execute(text(
+            "SELECT name FROM venues WHERE venue_id='thompson'")).scalar() == (
+            "Thompson Speedway Motorsports Park")
+
+
+def test_sync_tracks_reports_rows_with_no_file_counterpart(db):
+    from sqlalchemy import text
+
+    from lemongrass import _db
+    with db.begin() as conn:
+        conn.execute(text("INSERT INTO venues (venue_id, name) "
+                          "VALUES ('gone', 'Closed Track')"))
+        conn.execute(text("INSERT INTO events (event_id, series_id, name) "
+                          "VALUES ('old', 145, 'Old Event')"))
+    summary = _db.sync_tracks(_track_data())
+    assert summary["orphan_venues"] == ["gone"]
+    assert summary["orphan_events"] == ["old"]
+    # Never deleted: a removed venue may still be referenced by stored races.
+    with db.begin() as conn:
+        assert conn.execute(text(
+            "SELECT count(*) FROM venues WHERE venue_id='gone'")).scalar() == 1
+
+
+def test_sync_tracks_dry_run_writes_nothing(db):
+    from sqlalchemy import text
+
+    from lemongrass import _db
+    summary = _db.sync_tracks(_track_data(), dry_run=True)
+    assert summary["venues_created"] == 2
+    with db.begin() as conn:
+        assert conn.execute(text("SELECT count(*) FROM venues")).scalar() == 0
+
+
+def test_upsert_race_stores_identity(db):
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    _db.upsert_race(_db.RaceRow(
+        race_id="r1", race_time=datetime(2024, 5, 1, tzinfo=UTC),
+        name="GP du Lac", track_name="Thompson Motor Speedway",
+        venue_id="thompson", event_id="gp-du-lac"))
+    row = _db.get_race("r1")
+    assert (row.venue_id, row.layout_id, row.event_id) == (
+        "thompson", None, "gp-du-lac")
+
+
+def test_upsert_race_keeps_identity_when_a_later_write_resolves_nothing(db):
+    # A failed details fetch produces a blank track_name, which resolves to
+    # all-None; that must not erase what a successful fetch already stored.
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    when = datetime(2024, 5, 1, tzinfo=UTC)
+    _db.upsert_race(_db.RaceRow(race_id="r1", race_time=when,
+                                track_name="Thompson", venue_id="thompson"))
+    _db.upsert_race(_db.RaceRow(race_id="r1", race_time=when))
+    assert _db.get_race("r1").venue_id == "thompson"
+
+
+def test_upsert_race_moves_layout_with_venue_when_venue_changes(db):
+    # A later resolve() may return a new venue with no layout (e.g. after a
+    # tracks.toml edit changes which venue a track name maps to). COALESCE'ing
+    # venue_id and layout_id independently would pair the new venue with the
+    # OLD layout_id, which can violate the composite FK — or worse, silently
+    # match a same-named layout at the wrong venue. venue_id and layout_id
+    # must always come from the same source.
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    when = datetime(2024, 5, 1, tzinfo=UTC)
+    _db.upsert_race(_db.RaceRow(race_id="r1", race_time=when,
+                                venue_id="njmp", layout_id="thunderbolt"))
+    _db.upsert_race(_db.RaceRow(race_id="r1", race_time=when,
+                                venue_id="thompson"))
+    row = _db.get_race("r1")
+    assert (row.venue_id, row.layout_id) == ("thompson", None)
+
+
+def test_upsert_race_rejects_a_layout_without_its_venue(db):
+    from datetime import UTC, datetime
+
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    with pytest.raises(IntegrityError):
+        _db.upsert_race(_db.RaceRow(
+            race_id="r1", race_time=datetime(2024, 5, 1, tzinfo=UTC),
+            layout_id="thunderbolt"))
+
+
+def test_list_races_with_venue_joins_names_and_tolerates_nulls(db):
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    _db.upsert_race(_db.RaceRow(
+        race_id="r1", race_time=datetime(2024, 5, 1, tzinfo=UTC),
+        name="GP du Lac", track_name="Thompson Motor Speedway",
+        venue_id="thompson", event_id="gp-du-lac"))
+    _db.upsert_race(_db.RaceRow(
+        race_id="r2", race_time=datetime(2023, 5, 1, tzinfo=UTC),
+        name="Mystery", track_name="Somewhere Else"))
+    rows = {r.race_id: r for r in _db.list_races_with_venue()}
+    assert rows["r1"].venue_name == "Thompson Speedway Motorsports Park"
+    assert rows["r1"].event_name == "GP du Lac"
+    assert rows["r2"].venue_name is None
+    assert rows["r2"].event_name is None
+    # Same ordering as list_races: newest first, race_id breaking ties.
+    assert [r.race_id for r in _db.list_races_with_venue()] == ["r1", "r2"]
+
+
+def test_set_race_identity_updates_and_can_clear(db):
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    _db.upsert_race(_db.RaceRow(race_id="r1",
+                                race_time=datetime(2024, 5, 1, tzinfo=UTC)))
+    assert _db.set_race_identity("r1", "thompson", None, "gp-du-lac") is True
+    assert _db.get_race("r1").venue_id == "thompson"
+    # An explicit UPDATE, unlike the upsert, can clear a tag back to NULL.
+    assert _db.set_race_identity("r1", None, None, None) is True
+    assert _db.get_race("r1").venue_id is None
+    assert _db.set_race_identity("nope", None, None, None) is False

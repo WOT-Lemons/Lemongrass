@@ -46,6 +46,13 @@ def _handle_upgrade():
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     logging.getLogger('alembic').setLevel(logging.INFO)
     command.upgrade(_db.alembic_config(), 'head')
+    # Schema and curated data arrive together. Without this a deploy that adds
+    # a venue to tracks.toml would leave resolve() returning an id no row
+    # exists for, and the resulting foreign key violation would surface as a
+    # failed store_race mid-race.
+    from lemongrass import _tracks
+    from lemongrass.tracks import print_sync_summary
+    print_sync_summary(_db.sync_tracks(_tracks.data()))
     return 0
 
 

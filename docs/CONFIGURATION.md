@@ -67,6 +67,7 @@ Config is validated on load and fails loud rather than silently misbehaving:
 | `races.backfill.search_terms` | list of strings | `["Real Hoopties", "GP du Lac", "Halloween Hoop"]` | RaceMonitor search terms |
 | `races.backfill.default_start_date` | string | `2017-01-01` | earliest race date, `YYYY-MM-DD` (`--start-date` overrides) |
 | `racemonitor.tokens_env` | string | `RACEMONITOR_TOKENS` | env var holding the token pool |
+| `team.id` | string | `""` | the `team_id` this deployment races as; a live capture records its `entries` row automatically when set (create the team first with `lemongrass teams add`). `""` disables it |
 | `telem.vin` | string | `""` | VIN fallback when OBD does not report one |
 | `telem.obd.port` | string | `/dev/obd` | OBD serial/socket port |
 | `telem.obd.baudrate` | int | `0` | baud rate (`0` = auto-detect) |

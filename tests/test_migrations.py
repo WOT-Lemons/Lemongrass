@@ -129,3 +129,118 @@ def test_migration_head_matches_the_schema_module(clean_db, postgres_url):
                     and d[0] == 'remove_table'
                     and d[1].name == 'alembic_version')]
     assert diff == [], f"schema drift between _schema.py and the migrations: {diff}"
+
+
+def test_upgrade_creates_the_identity_tables(clean_db, postgres_url):
+    _upgrade(postgres_url)
+    names = set(inspect(clean_db).get_table_names())
+    assert {"venues", "layouts", "events", "teams", "team_aliases",
+            "entries"} <= names
+
+
+def test_downgrade_removes_the_identity_tables_and_columns(clean_db, postgres_url):
+    _upgrade(postgres_url)
+    _downgrade(postgres_url, "0001")
+    insp = inspect(clean_db)
+    names = set(insp.get_table_names())
+    assert not ({"venues", "layouts", "events", "teams", "team_aliases",
+                 "entries"} & names)
+    assert "races" in names
+    columns = {c["name"] for c in insp.get_columns("races")}
+    assert not ({"venue_id", "layout_id", "event_id"} & columns)
+
+
+def _seed_identity(conn):
+    conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('njmp', 'NJMP')"))
+    conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('other', 'Other')"))
+    conn.execute(text("INSERT INTO layouts (venue_id, layout_id, name) "
+                      "VALUES ('njmp', 'thunderbolt', 'Thunderbolt Course')"))
+    conn.execute(text("INSERT INTO races (race_id, race_time) VALUES ('r1', now())"))
+
+
+def test_venue_without_layout_is_allowed(clean_db, postgres_url):
+    _upgrade(postgres_url)
+    with clean_db.begin() as conn:
+        _seed_identity(conn)
+        conn.execute(text(
+            "UPDATE races SET venue_id='njmp' WHERE race_id='r1'"))
+        assert conn.execute(text(
+            "SELECT layout_id FROM races WHERE race_id='r1'")).scalar() is None
+
+
+def test_layout_without_venue_is_rejected_by_the_check(clean_db, postgres_url):
+    # MATCH SIMPLE skips the composite FK check when any column is NULL, so the
+    # composite key alone would silently permit this orphan.
+    _upgrade(postgres_url)
+    with clean_db.begin() as conn:
+        _seed_identity(conn)
+    with pytest.raises(IntegrityError):
+        with clean_db.begin() as conn:
+            conn.execute(text(
+                "UPDATE races SET layout_id='thunderbolt' WHERE race_id='r1'"))
+
+
+def test_layout_belonging_to_another_venue_is_rejected(clean_db, postgres_url):
+    _upgrade(postgres_url)
+    with clean_db.begin() as conn:
+        _seed_identity(conn)
+    with pytest.raises(IntegrityError):
+        with clean_db.begin() as conn:
+            conn.execute(text(
+                "UPDATE races SET venue_id='other', layout_id='thunderbolt' "
+                "WHERE race_id='r1'"))
+
+
+def test_entries_are_unique_per_race_and_car(clean_db, postgres_url):
+    _upgrade(postgres_url)
+    with clean_db.begin() as conn:
+        conn.execute(text("INSERT INTO races (race_id, race_time) VALUES ('r1', now())"))
+        conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('a', 'A')"))
+        conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('b', 'B')"))
+        conn.execute(text("INSERT INTO entries (race_id, car_number, team_id) "
+                          "VALUES ('r1', '252', 'a')"))
+        # Two cars for one team in one race is two rows, no schema change.
+        conn.execute(text("INSERT INTO entries (race_id, car_number, team_id) "
+                          "VALUES ('r1', '253', 'a')"))
+    with pytest.raises(IntegrityError):
+        with clean_db.begin() as conn:
+            conn.execute(text("INSERT INTO entries (race_id, car_number, team_id) "
+                              "VALUES ('r1', '252', 'b')"))
+
+
+def test_one_alias_cannot_map_to_two_teams(clean_db, postgres_url):
+    _upgrade(postgres_url)
+    with clean_db.begin() as conn:
+        conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('a', 'A')"))
+        conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('b', 'B')"))
+        conn.execute(text("INSERT INTO team_aliases (team_id, alias) "
+                          "VALUES ('a', 'wot lemons')"))
+    with pytest.raises(IntegrityError):
+        with clean_db.begin() as conn:
+            conn.execute(text("INSERT INTO team_aliases (team_id, alias) "
+                              "VALUES ('b', 'wot lemons')"))
+
+
+def test_deleting_a_race_cascades_to_its_entries(clean_db, postgres_url):
+    _upgrade(postgres_url)
+    with clean_db.begin() as conn:
+        conn.execute(text("INSERT INTO races (race_id, race_time) VALUES ('r1', now())"))
+        conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('a', 'A')"))
+        conn.execute(text("INSERT INTO entries (race_id, car_number, team_id) "
+                          "VALUES ('r1', '252', 'a')"))
+        conn.execute(text("DELETE FROM races WHERE race_id='r1'"))
+        assert conn.execute(text("SELECT count(*) FROM entries")).scalar() == 0
+
+
+def test_a_referenced_team_cannot_be_deleted(clean_db, postgres_url):
+    # entries.team_id is NO ACTION on purpose: dropping a team must go through
+    # `teams merge`, which reassigns its entries first.
+    _upgrade(postgres_url)
+    with clean_db.begin() as conn:
+        conn.execute(text("INSERT INTO races (race_id, race_time) VALUES ('r1', now())"))
+        conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('a', 'A')"))
+        conn.execute(text("INSERT INTO entries (race_id, car_number, team_id) "
+                          "VALUES ('r1', '252', 'a')"))
+    with pytest.raises(IntegrityError):
+        with clean_db.begin() as conn:
+            conn.execute(text("DELETE FROM teams WHERE team_id='a'"))

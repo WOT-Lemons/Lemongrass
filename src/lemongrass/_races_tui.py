@@ -31,8 +31,8 @@ def _row_label(row):
         schema = f'current v{row["schema_version"]}'
     else:
         schema = f'stale {row["current"]}/{row["total"]}'
-    return (f"{row['date']}  {row['name'][:32]:<32}  (#{row['race_id']})  "
-            f"{row['total']:>4} laps  {schema}")
+    return (f"{row['date']}  {row['name'][:22]:<22}  {row.get('venue_name', '')[:18]:<18}  "
+            f"(#{row['race_id']})  {row['total']:>4} laps  {schema}")
 
 
 EPOCH_START = '1970-01-01T00:00:00Z'
@@ -199,10 +199,11 @@ class RacesBrowserScreen(LogPaneScreen, Screen):
         """Start the log drain timer, then load rows if Influx and the database
         are both configured.
 
-        Race rows come from Postgres (via ``fetch_race_rows`` -> ``_db.list_races``);
-        checking ``db_password_present`` up front avoids a worker-thread
-        ``SystemExit`` from ``_db.database_url`` bubbling past the worker's
-        ``except Exception`` and killing the load silently.
+        Race rows come from Postgres (via ``fetch_race_rows`` ->
+        ``_db.list_races_with_venue``); checking ``db_password_present`` up
+        front avoids a worker-thread ``SystemExit`` from ``_db.database_url``
+        bubbling past the worker's ``except Exception`` and killing the load
+        silently.
         """
         self.set_interval(0.25, self._drain_log)
         if not _influx.influx_token_present():
