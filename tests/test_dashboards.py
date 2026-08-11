@@ -125,6 +125,26 @@ def _venue_with_two_races(conn):
         "('1', '252', 'wot'), ('2', '253', 'wot'), ('1', '253', 'other')"))
 
 
+def test_the_team_picker_excludes_teams_with_no_entries_at_the_venue(db):
+    # 'other' ran at watkins but never at thompson. If the team picker's JOIN
+    # to entries/races were dropped -- back to a bare SELECT ... FROM teams --
+    # 'other' would still show up under thompson, and picking it would render
+    # four "No data" panels with no signal that the combination is impossible.
+    with db.begin() as conn:
+        _venue_with_two_races(conn)
+        conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('watkins', 'Watkins')"))
+        conn.execute(text(
+            "INSERT INTO races (race_id, race_time, venue_id) VALUES "
+            "('3', '2025-07-01T12:00:00Z', 'watkins')"))
+        conn.execute(text(
+            "INSERT INTO entries (race_id, car_number, team_id) VALUES ('3', '99', 'other')"))
+        conn.execute(text(
+            "DELETE FROM entries WHERE race_id = '1' AND team_id = 'other'"))
+        rows = conn.execute(text(_variable_sql(
+            'team', venue="'thompson'", event="'all'"))).fetchall()
+    assert rows == [('wot', 'WOT Lemons')]
+
+
 def test_the_pair_predicate_keeps_pairs_paired(db):
     with db.begin() as conn:
         _venue_with_two_races(conn)

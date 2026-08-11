@@ -174,10 +174,10 @@
         "label": "Team",
         "type": "query",
         "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
-        "definition": "SELECT team_id AS \"__value\", name AS \"__text\" FROM teams ORDER BY name",
+        "definition": "SELECT t.team_id AS \"__value\", t.name AS \"__text\" FROM teams t JOIN entries e ON e.team_id = t.team_id JOIN races r ON r.race_id = e.race_id WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring}) GROUP BY t.team_id, t.name ORDER BY t.name",
         "query": {
           "format": "table",
-          "rawSql": "SELECT team_id AS \"__value\", name AS \"__text\" FROM teams ORDER BY name"
+          "rawSql": "SELECT t.team_id AS \"__value\", t.name AS \"__text\" FROM teams t JOIN entries e ON e.team_id = t.team_id JOIN races r ON r.race_id = e.race_id WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring}) GROUP BY t.team_id, t.name ORDER BY t.name"
         },
         "refresh": 2,
         "sort": 0,
