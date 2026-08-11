@@ -367,8 +367,14 @@ def resolve(track_name, race_name, series_id):
     match to see. When that happens, retry the layout match against the full
     normalized track name instead of the (now empty) remainder. This only
     ever adds matches — a remainder that already named the layout is
-    unaffected — and a track name that names no layout still yields None,
-    since the layout candidates themselves are unchanged.
+    unaffected.
+
+    Curator caveat: this retry only stays harmless while no venue's layout
+    candidates include one that is also a prefix of the venue candidate that
+    matched. The layout-to-venue-alias promotion above is exactly what can
+    create such a pair — a venue aliased "sonoma" with its own layout also
+    named "sonoma" would let a bare "Sonoma Raceway" pick up a layout the
+    input never named.
     """
     track_data = data()
     venue, remainder = _best_match(normalize(track_name), track_data.venues)

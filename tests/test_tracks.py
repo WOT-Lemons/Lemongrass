@@ -341,6 +341,30 @@ id = 145
     assert _tracks._match_event("spring classic", data.series, 900) is None
 
 
+def test_resolve_normalizes_the_race_name_before_matching_events(tmp_path):
+    # _match_event is tested directly above with already-normalized text,
+    # which covers none of resolve()'s own normalize(race_name) call. Keywords
+    # are stored normalized but race names never are, so this only passes if
+    # resolve() normalizes what it passes to _match_event.
+    path = _write(tmp_path, """
+[[venue]]
+id = "thompson"
+name = "Thompson Speedway Motorsports Park"
+
+[[series]]
+id = 145
+
+  [[series.event]]
+  id = "lemons-spring"
+  name = "Spring"
+  keywords = ["spring classic"]
+""")
+    _tracks._DATA = _tracks.load(path)
+    got = _tracks.resolve(
+        "Thompson Speedway Motorsports Park", "Lemons - SPRING Classic!, 2019", 145)
+    assert got.event_id == "lemons-spring"
+
+
 def test_two_events_in_one_series_matching_one_name_resolve_to_nothing(tmp_path):
     # Naming the series narrows the search but does not disambiguate within
     # it, so the same "unresolved beats wrong" rule has to apply inside a
@@ -488,6 +512,25 @@ def test_bare_venue_yields_no_layout():
     assert got.layout_id is None
 
 
-def test_event_is_not_resolved_when_the_venue_is_not():
+def test_event_is_not_resolved_when_the_venue_is_not(tmp_path):
+    # The shipped file carries no events, so this needs its own fixture: an
+    # event-matching race name must still yield event_id is None when the
+    # venue does not resolve, and yield the event id when it does.
+    path = _write(tmp_path, """
+[[venue]]
+id = "thompson"
+name = "Thompson Speedway Motorsports Park"
+
+[[series]]
+id = 145
+
+  [[series.event]]
+  id = "gp-du-lac"
+  name = "GP du Lac"
+  keywords = ["gp du lac"]
+""")
+    _tracks._DATA = _tracks.load(path)
     got = _tracks.resolve("Nowhere Speedway", "GP du Lac 2023", 145)
     assert got.event_id is None
+    got = _tracks.resolve("Thompson Speedway Motorsports Park", "GP du Lac 2023", 145)
+    assert got.event_id == "gp-du-lac"

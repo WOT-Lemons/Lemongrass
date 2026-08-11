@@ -251,7 +251,10 @@ Then revert the code and restart the services.
 **Caveat:** `export-legacy` emits `series_id` as a field when the row has one, and `import-legacy`
 reads it back, so a round trip preserves it. What a rollback *cannot* preserve is a `series_id` that
 was never in Influx to begin with: rows created by `import-legacy` from legacy points have it NULL
-permanently, because the legacy race point carried no series id to read. Reverting is otherwise
-lossless for rows already migrated, but a revert performed *without* running `export-legacy` first
-loses every race and session written directly to PostgreSQL since cutover — they have no Influx
-counterpart at all.
+permanently, because the legacy race point carried no series id to read. A revert also drops the
+curated track identity: `export-legacy` never writes `venue_id`, `layout_id`, or `event_id` onto the
+race point, and `import-legacy` never reads them, so those three columns come back NULL for every
+migrated row regardless of what they held before the revert — recovery is re-running
+`lemongrass races identify`. A revert performed *without* running `export-legacy` first loses every
+race and session written directly to PostgreSQL since cutover — they have no Influx counterpart at
+all.
