@@ -453,6 +453,14 @@ def test_the_best_lap_tile_links_into_the_per_race_dashboard():
             assert len(links) == 1
             assert laps_uid in links[0]['url']
             assert 'var-raceid=${__data.fields.race_id}' in links[0]['url']
+            # laps.json defaults its competitor picker to the lowest-numbered
+            # car in the race, which is almost never the car that set the best
+            # lap -- at Thompson 2022 the link landed on car 252 for a lap set
+            # by car 155. min() is a selector and keeps the row's tags, so
+            # car_number is available to carry through.
+            assert 'var-carno=${__data.fields.car_number}' in links[0]['url']
+            assert 'car_number: r.car_number' in _panel_query(panel)
+            assert 'carno' in var_names
             # Grafana data links don't inherit the source dashboard's time
             # range, and laps.json defaults to now-30m: without an explicit
             # range here, opening this link for any older race renders blank.

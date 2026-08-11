@@ -9,7 +9,7 @@
       "id": 1,
       "type": "trend",
       "title": "Lap time by year",
-      "description": "Median and best lap for the selected team at the selected venue. Grouped by the race's year from Postgres, never by the lap timestamp -- lap timestamps are synthetic and some legacy laps are anchored to 1970.\n\nDrawn as a line on an auto-scaled axis rather than as bars. Lap time has no meaningful zero, and a zero-baseline bar renders a fifteen-percent improvement as two near-identical heights. The `trend` panel rather than `timeseries` because the x axis is a year from Postgres, not a timestamp.",
+      "description": "Median and best lap for the selected team at the selected venue. Grouped by the race's year from Postgres, never by the lap timestamp -- lap timestamps are synthetic and some legacy laps are anchored to 1970.\n\nDrawn as a line on an auto-scaled axis rather than as bars. Lap time has no meaningful zero, and a zero-baseline bar renders a fifteen-percent improvement as two near-identical heights. The `trend` panel rather than `timeseries` because the x axis is a year from Postgres, not a timestamp.\n\nKnown cosmetic limitation: the x axis is continuous, so over a short span the tick algorithm picks half-year steps and rounds them to duplicate year labels (2022, 2023, 2023, 2024...). The panel exposes no tick-interval setting. The tooltip and the summary table both give the exact year; a bar chart would fix the ticks only by reintroducing the zero baseline, which costs more than it buys.",
       "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
       "gridPos": {"h": 10, "w": 12, "x": 0, "y": 0},
       "fieldConfig": {
@@ -120,7 +120,7 @@
       "id": 4,
       "type": "table",
       "title": "Best lap ever",
-      "description": "Fastest lap across the whole selection, and the race it happened at. A table rather than a stat tile because it names the race and carries the drill-down link.",
+      "description": "Fastest lap across the whole selection, and the race and car it happened in. A table rather than a stat tile because it names the race and carries the drill-down link.\n\nThe link passes the car as well as the race: laps.json defaults its competitor picker to the lowest-numbered car in the race, so a race-only link lands on someone else's car and shows a lap that has nothing to do with the number clicked.",
       "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
       "gridPos": {"h": 9, "w": 12, "x": 12, "y": 10},
       "fieldConfig": {
@@ -131,7 +131,7 @@
           "links": [
             {
               "title": "Open this race",
-              "url": "/d/SI7eTlIMk/laps?var-raceid=${__data.fields.race_id}&from=0&to=now"
+              "url": "/d/SI7eTlIMk/laps?var-raceid=${__data.fields.race_id}&var-carno=${__data.fields.car_number}&from=0&to=now"
             }
           ]
         },
@@ -147,7 +147,7 @@
         {
           "refId": "A",
           "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
-          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\nraces = dict.fromList(pairs: ${racemap:raw})\n\nfrom(bucket: \"laps\")\n  |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n  |> filter(fn: (r) => r._measurement == \"lap\")\n  |> filter(fn: (r) => ${pairs:raw})\n  |> filter(fn: (r) => r._field == \"lap_time\")\n  |> filter(fn: (r) => r._value > 0)\n  |> group()\n  |> min()\n  |> map(fn: (r) => ({\n      best_lap: r._value,\n      race_id: r.race_id,\n      race: dict.get(dict: races, key: r.race_id, default: \"unknown\"),\n      year: dict.get(dict: years, key: r.race_id, default: \"unknown\"),\n    }))"
+          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\nraces = dict.fromList(pairs: ${racemap:raw})\n\nfrom(bucket: \"laps\")\n  |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n  |> filter(fn: (r) => r._measurement == \"lap\")\n  |> filter(fn: (r) => ${pairs:raw})\n  |> filter(fn: (r) => r._field == \"lap_time\")\n  |> filter(fn: (r) => r._value > 0)\n  |> group()\n  |> min()\n  |> map(fn: (r) => ({\n      best_lap: r._value,\n      race_id: r.race_id,\n      car_number: r.car_number,\n      race: dict.get(dict: races, key: r.race_id, default: \"unknown\"),\n      year: dict.get(dict: years, key: r.race_id, default: \"unknown\"),\n    }))"
         }
       ]
     },
