@@ -54,6 +54,28 @@ def run_races_tui(client):
     return 0
 
 
+def _count_laps_by_race(query_api, races, key, predicate):
+    """Count lap points per race and store each total under `races[rid][key]`.
+
+    `predicate` is the field-selecting half of the filter; the rest of the
+    query — bucket, range, measurement, grouping, count — is identical for both
+    counts fetch_race_rows needs, so it lives here once. Race ids with no entry
+    in `races` are dropped: the laps bucket outlives the race rows, so it
+    carries pre-cutover races that were never imported."""
+    for table in query_api.query(
+        f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
+        f'  |> range(start: {EPOCH_START})\n'
+        f'  |> filter(fn: (r) => r._measurement == "lap"\n'
+        f'      and {predicate})\n'
+        f'  |> group(columns: ["race_id"])\n'
+        f'  |> count()'
+    ):
+        for record in table.records:
+            rid = record.values.get('race_id')
+            if rid in races:
+                races[rid][key] = record.get_value()
+
+
 def fetch_race_rows(query_api):
     """Return per-race rows for the stored races: id, name, date, total laps,
     current-schema lap count, and the schema version. Date-sorted, newest first.
@@ -89,30 +111,10 @@ def fetch_race_rows(query_api):
         for row in _db.list_races_with_venue()
     }
 
-    for table in query_api.query(
-        f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
-        f'  |> range(start: {EPOCH_START})\n'
-        f'  |> filter(fn: (r) => r._measurement == "lap" and r._field == "lap_no")\n'
-        f'  |> group(columns: ["race_id"])\n'
-        f'  |> count()'
-    ):
-        for record in table.records:
-            rid = record.values.get('race_id')
-            if rid in races:
-                races[rid]['total'] = record.get_value()
-
-    for table in query_api.query(
-        f'from(bucket: "{_influx.BUCKET_LAPS}")\n'
-        f'  |> range(start: {EPOCH_START})\n'
-        f'  |> filter(fn: (r) => r._measurement == "lap"\n'
-        f'      and r._field == "schema_version" and r._value == {SCHEMA_VERSION})\n'
-        f'  |> group(columns: ["race_id"])\n'
-        f'  |> count()'
-    ):
-        for record in table.records:
-            rid = record.values.get('race_id')
-            if rid in races:
-                races[rid]['current'] = record.get_value()
+    _count_laps_by_race(query_api, races, 'total', 'r._field == "lap_no"')
+    _count_laps_by_race(
+        query_api, races, 'current',
+        f'r._field == "schema_version" and r._value == {SCHEMA_VERSION}')
 
     return sorted(races.values(), key=lambda r: r['date'], reverse=True)
 

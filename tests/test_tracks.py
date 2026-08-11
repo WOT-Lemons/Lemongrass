@@ -344,7 +344,7 @@ name = "Summit Point Raceway"
 
 
 def test_colliding_venue_aliases_are_rejected(tmp_path):
-    # Two venues whose normalized candidates tie in length: _match_venue's
+    # Two venues whose normalized candidates tie in length: _best_match's
     # strict "longer than best" comparison would silently let file order pick
     # a winner, and every race at either venue gets tagged with one venue_id
     # forever, with no error to notice it. This must be rejected at load time.

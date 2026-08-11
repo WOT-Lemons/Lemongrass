@@ -1010,10 +1010,7 @@ def old_race(ctx, opts):
                     # the sessions on the skip path too — store_sessions replaces
                     # the race's whole set in one transaction, so repeating it on
                     # an already-correct race is a no-op.
-                    if not store_sessions(ctx, [
-                            (session['session_id'], session['session_name'],
-                             session['start_epoc'])
-                            for session in pending_writes]):
+                    if not store_sessions(ctx, _session_triples(pending_writes)):
                         logging.error(
                             "Session write incomplete for race %s — failing the "
                             "run so the next backfill retries", ctx.race_id)
@@ -1065,10 +1062,7 @@ def old_race(ctx, opts):
                 "next backfill retries", ctx.race_id)
             return 1
 
-        if not store_sessions(ctx, [
-                (session['session_id'], session['session_name'],
-                 session['start_epoc'])
-                for session in pending_writes]):
+        if not store_sessions(ctx, _session_triples(pending_writes)):
             # store_sessions replaces the race's whole set in one transaction,
             # so a failure leaves the previous set intact. Bail out before the
             # standings phase so the next backfill redoes the rewrite rather
@@ -1257,12 +1251,11 @@ def monitor_routine(ctx, laps, opts, competitor_name=None, car_info=None, _stop_
                 # next poll rather than being dropped by an unconditional
                 # clear(), which would reintroduce the drop-and-warn behavior
                 # this queue exists to replace.
-                still_pending = [
+                pending_sessions = [
                     (pending_id, pending_name)
                     for pending_id, pending_name in pending_sessions
                     if not store_session(ctx, pending_id, pending_name, None)
                 ]
-                pending_sessions[:] = still_pending
 
             try:
                 session_response = ctx.client.live.get_session(ctx.race_id)
@@ -1744,12 +1737,27 @@ def store_entry(ctx):
         return False
 
 
+def _session_row(ctx, session_id, session_name, start_epoc):
+    """Build one SessionRow for this race."""
+    return _db.SessionRow(session_id=int(session_id), race_id=ctx.race_id,
+                          name=session_name or '',
+                          start_time=_epoch_to_dt(start_epoc))
+
+
 def _session_rows(ctx, sessions):
     """Build SessionRows from (session_id, session_name, start_epoc) triples."""
-    return [_db.SessionRow(session_id=int(session_id), race_id=ctx.race_id,
-                           name=session_name or '',
-                           start_time=_epoch_to_dt(start_epoc))
-            for session_id, session_name, start_epoc in sessions]
+    return [_session_row(ctx, *session) for session in sessions]
+
+
+def _session_triples(pending_writes):
+    """Turn old_race's deduped session dicts into store_sessions' triples.
+
+    Both of old_race's store_sessions calls — the already-complete skip path
+    and the full rewrite — write the same set from the same dicts.
+    """
+    return [(session['session_id'], session['session_name'],
+             session['start_epoc'])
+            for session in pending_writes]
 
 
 def store_session(ctx, session_id, session_name, start_epoc):
@@ -1761,8 +1769,8 @@ def store_session(ctx, session_id, session_name, start_epoc):
     rather than 1970.
     """
     try:
-        _db.upsert_session(_session_rows(
-            ctx, [(session_id, session_name, start_epoc)])[0])
+        _db.upsert_session(
+            _session_row(ctx, session_id, session_name, start_epoc))
         return True
     except Exception as e:
         logging.error(

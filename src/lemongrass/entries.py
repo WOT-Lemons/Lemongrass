@@ -28,8 +28,33 @@ def main():
 
 
 def _resolve_team(explicit):
-    """Return the team id to use: the flag, else [team] id from config."""
-    return explicit or _config.load_config().team.id
+    """Return the team id to use — the flag, else [team] id from config.
+
+    Returns None, having already reported it, when neither names a team, so a
+    handler's whole response is `if not team_id: return 1`.
+    """
+    team_id = explicit or _config.load_config().team.id
+    if not team_id:
+        print("Error: no team given and [team] id is not set in the config file",
+              file=sys.stderr)
+        return None
+    return team_id
+
+
+def _team_exists(team_id):
+    """True if team_id has a row; otherwise report how to create it.
+
+    Both handlers pre-check rather than letting the write raise: set_entry's
+    team_id has no ValueError path, so an unknown team surfaces as a raw FK
+    IntegrityError. They check at different points, though — _handle_set after
+    its car-number guard, _handle_propose before it scans Influx — so this is a
+    helper they call, not a step folded into _resolve_team.
+    """
+    if _db.get_team(team_id) is not None:
+        return True
+    print(f"Error: no team {team_id!r}; run `lemongrass teams add "
+          f"{team_id} <name>` first", file=sys.stderr)
+    return False
 
 
 def _handle_set():
@@ -44,8 +69,6 @@ def _handle_set():
     args = parser.parse_args()
     team_id = _resolve_team(args.team)
     if not team_id:
-        print("Error: no team given and [team] id is not set in the config file",
-              file=sys.stderr)
         return 1
     # Mirror store_entry's (laps.py) guards: a blank car number would write a
     # row with an empty-string primary-key component, and an unknown team
@@ -53,9 +76,7 @@ def _handle_set():
     if not args.car_number.strip():
         print("Error: car number is blank", file=sys.stderr)
         return 1
-    if _db.get_team(team_id) is None:
-        print(f"Error: no team {team_id!r}; run `lemongrass teams add "
-              f"{team_id} <name>` first", file=sys.stderr)
+    if not _team_exists(team_id):
         return 1
     try:
         _db.set_entry(args.race_id, args.car_number, team_id)
@@ -205,16 +226,12 @@ def _handle_propose():
     args = parser.parse_args()
     team_id = _resolve_team(args.team)
     if not team_id:
-        print("Error: no team given and [team] id is not set in the config file",
-              file=sys.stderr)
         return 1
-    # Mirror _handle_set's guard: without it, an unknown team scans Influx,
-    # prints proposals, prompts the operator, and only then dies on an
-    # unhandled FK IntegrityError inside confirm_proposals at the first
-    # accepted proposal, abandoning the rest.
-    if _db.get_team(team_id) is None:
-        print(f"Error: no team {team_id!r}; run `lemongrass teams add "
-              f"{team_id} <name>` first", file=sys.stderr)
+    # Checked before the scan, not at the first write: without it an unknown
+    # team scans Influx, prints proposals, prompts the operator, and only then
+    # dies on an unhandled FK IntegrityError inside confirm_proposals at the
+    # first accepted proposal, abandoning the rest.
+    if not _team_exists(team_id):
         return 1
 
     with _influx.connect() as client:

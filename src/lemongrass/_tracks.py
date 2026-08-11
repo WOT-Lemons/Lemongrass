@@ -301,24 +301,24 @@ def _match(text, candidates):
     return None, text
 
 
-def _match_venue(text, venues):
-    """Return (venue, remainder) for the longest-matching venue, or (None, text)."""
+def _best_match(text, entries):
+    """Return (entry, remainder) for the entry with the longest matching candidate.
+
+    ``entries`` is any sequence of objects carrying a ``candidates`` tuple —
+    venues or one venue's layouts. Longest-first inside a single entry is
+    ``_match``'s job; this picks between entries. The comparison is strictly
+    ``>``, so an exact-length tie keeps the first entry in file order, which is
+    the only tie-break the file's own uniqueness rules leave possible.
+
+    Returns (None, text) when nothing matched, so the caller can keep threading
+    the untouched text through.
+    """
     best = None
-    for venue in venues:
-        candidate, remainder = _match(text, venue.candidates)
+    for entry in entries:
+        candidate, remainder = _match(text, entry.candidates)
         if candidate is not None and (best is None or len(candidate) > best[0]):
-            best = (len(candidate), venue, remainder)
+            best = (len(candidate), entry, remainder)
     return (best[1], best[2]) if best is not None else (None, text)
-
-
-def _match_layout(remainder, layouts):
-    """Return the longest-matching layout id among this venue's layouts, or None."""
-    best = None
-    for layout in layouts:
-        candidate, _ = _match(remainder, layout.candidates)
-        if candidate is not None and (best is None or len(candidate) > best[0]):
-            best = (len(candidate), layout.layout_id)
-    return best[1] if best is not None else None
 
 
 def _match_event(race_name, series, series_id):
@@ -364,13 +364,12 @@ def resolve(track_name, race_name, series_id):
     event without a venue is of no use to a year-over-year comparison.
     """
     track_data = data()
-    venue, remainder = _match_venue(normalize(track_name), track_data.venues)
+    venue, remainder = _best_match(normalize(track_name), track_data.venues)
     if venue is None:
         return TrackIdentity()
-    layout_id = (_match_layout(remainder, venue.layouts)
-                 if remainder and venue.layouts else None)
+    layout = _best_match(remainder, venue.layouts)[0] if remainder else None
     return TrackIdentity(
         venue_id=venue.venue_id,
-        layout_id=layout_id,
+        layout_id=layout.layout_id if layout is not None else None,
         event_id=_match_event(normalize(race_name), track_data.series, series_id),
     )
