@@ -28,7 +28,7 @@ from influxdb_client import Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from race_monitor import RaceMonitorClient, get_streaming_command
 
-from lemongrass import _config, _db, _env, _influx
+from lemongrass import _config, _db, _env, _influx, _tracks
 from lemongrass._env import resolve_tokens
 
 UNDERLINE = "-" * 80
@@ -117,6 +117,11 @@ class RaceMetadata:
     # because event matching is series-scoped: a name alone cannot
     # distinguish two series that share a display name.
     series_id: int | None = None
+    # Curated identity resolved from track_name/race_name/series_id at
+    # startup, carried here so store_race writes it in the same upsert.
+    venue_id: str | None = None
+    layout_id: str | None = None
+    event_id: str | None = None
 
 
 @dataclass
@@ -1610,6 +1615,37 @@ def _epoch_to_dt(epoch_s):
     return datetime.fromtimestamp(epoch_s, tz=UTC) if epoch_s else None
 
 
+_tracks_synced = False
+
+
+def _sync_tracks_once():
+    """Sync the curated track data before this process writes any race row.
+
+    ``resolve`` reads the file that ships with the code; the foreign keys are
+    satisfied only by rows in the database. A deploy that adds a venue would
+    otherwise make store_race raise a foreign key violation, which returns
+    False, which makes the monitor treat the run as failed and retry forever —
+    mid-race. Once per process: the file cannot change under a running monitor.
+
+    Called from store_race rather than from its callers, because store_race is
+    not reached only through backfill_race — _laps_tui._network_ctx resolves
+    its own metadata and calls live_race directly, and that unattended TUI
+    capture is exactly the path this protects. Guarding the function that
+    issues the write covers every caller by construction.
+
+    Failures are logged, not raised. A sync that could not run leaves the
+    pre-existing risk exactly as it was; crashing the run would be worse.
+    """
+    global _tracks_synced
+    if _tracks_synced:
+        return
+    try:
+        _db.sync_tracks(_tracks.data())
+        _tracks_synced = True
+    except Exception as e:
+        logging.error("Syncing curated track data failed: %s", e)
+
+
 def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
     """Insert or update this race's row in Postgres.
 
@@ -1628,6 +1664,7 @@ def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
         return False
     meta = ctx.metadata
     try:
+        _sync_tracks_once()
         _db.upsert_race(_db.RaceRow(
             race_id=ctx.race_id,
             race_time=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
@@ -1640,6 +1677,9 @@ def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
             session_count=session_count if expected_lap_count is not None else None,
             lap_schema_version=(
                 SCHEMA_VERSION if expected_lap_count is not None else None),
+            venue_id=meta.venue_id,
+            layout_id=meta.layout_id,
+            event_id=meta.event_id,
         ))
         return True
     except Exception as e:
@@ -2205,12 +2245,16 @@ def _resolve_race_metadata(race_details, client):
                     series_name = resp['Races'][0]['SeriesName']
         except Exception:
             logging.warning("Failed to resolve series name for series_id=%s", series_id)
+    identity = _tracks.resolve(race['Track'], race['Name'], series_id)
     return RaceMetadata(
         race_name=race['Name'],
         track_name=race['Track'],
         series_name=series_name,
         end_time_epoc=race.get('EndDateEpoc', 0),
         series_id=series_id,
+        venue_id=identity.venue_id,
+        layout_id=identity.layout_id,
+        event_id=identity.event_id,
     )
 
 

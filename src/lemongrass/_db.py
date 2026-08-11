@@ -130,6 +130,11 @@ class RaceRow:
     expected_lap_count: int | None = None
     session_count: int | None = None
     lap_schema_version: int | None = None
+    # Curated identity, resolved by _tracks.resolve. All three are NULL when
+    # the track name matched no curated venue.
+    venue_id: str | None = None
+    layout_id: str | None = None
+    event_id: str | None = None
 
 
 @contextmanager
@@ -160,6 +165,9 @@ def _race_row(row):
         expected_lap_count=row.expected_lap_count,
         session_count=row.session_count,
         lap_schema_version=row.lap_schema_version,
+        venue_id=row.venue_id,
+        layout_id=row.layout_id,
+        event_id=row.event_id,
     )
 
 
@@ -183,6 +191,11 @@ def upsert_race(row, conn=None):
     a row, and a later successful fetch's non-blank values still win.
     ``race_time`` keeps blanket EXCLUDED — it is NOT NULL and always
     genuinely supplied.
+
+    The three identity columns COALESCE for the same reason as the identity
+    text: a failed details fetch resolves to all-None and must not erase a
+    good tag. Clearing or correcting a tag downward is `races identify`'s job,
+    which issues an explicit UPDATE.
     """
     from sqlalchemy import func
     from sqlalchemy.dialects.postgresql import insert
@@ -197,6 +210,9 @@ def upsert_race(row, conn=None):
         expected_lap_count=row.expected_lap_count,
         session_count=row.session_count,
         lap_schema_version=row.lap_schema_version,
+        venue_id=row.venue_id,
+        layout_id=row.layout_id,
+        event_id=row.event_id,
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=[_schema.races.c.race_id],
@@ -220,6 +236,12 @@ def upsert_race(row, conn=None):
             'lap_schema_version': func.coalesce(
                 stmt.excluded.lap_schema_version,
                 _schema.races.c.lap_schema_version),
+            'venue_id': func.coalesce(
+                stmt.excluded.venue_id, _schema.races.c.venue_id),
+            'layout_id': func.coalesce(
+                stmt.excluded.layout_id, _schema.races.c.layout_id),
+            'event_id': func.coalesce(
+                stmt.excluded.event_id, _schema.races.c.event_id),
             'updated_at': func.now(),
         },
     )

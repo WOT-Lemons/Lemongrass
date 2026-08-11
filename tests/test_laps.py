@@ -89,11 +89,13 @@ def _stub_db_writes(monkeypatch):
     patch `store_race`/`store_session`/`store_sessions` (or `_db.upsert_race` etc.)
     directly are unaffected — this only backstops the call sites nobody mocked,
     mirroring the always-succeeding `ctx.write_api`/`ctx.delete_api` MagicMocks the
-    Influx-era tests relied on.
+    Influx-era tests relied on. `sync_tracks` is stubbed too: `store_race` calls it
+    via `_sync_tracks_once` before every write, so it needs the same backstop.
     """
     monkeypatch.setattr(_mod._db, 'upsert_race', MagicMock())
     monkeypatch.setattr(_mod._db, 'upsert_session', MagicMock())
     monkeypatch.setattr(_mod._db, 'replace_sessions', MagicMock())
+    monkeypatch.setattr(_mod._db, 'sync_tracks', MagicMock())
 
 
 class TestResolveTokens:
@@ -5679,3 +5681,87 @@ class TestMainTuiLaunch:
         monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
         with pytest.raises(SystemExit):
             _mod.main()  # argparse errors on the required race_id
+
+
+def test_resolve_race_metadata_carries_track_identity():
+    from unittest.mock import MagicMock
+
+    from lemongrass import laps
+    client = MagicMock()
+    client.common.current_races.return_value = {
+        'Races': [{'SeriesName': '24 Hours of Lemons'}]}
+    meta = laps._resolve_race_metadata({
+        'Successful': True,
+        'Race': {'Name': 'GP du Lac 2023',
+                 'Track': 'New Jersey Motorsports Park - Thunderbolt Course',
+                 'SeriesID': 145, 'EndDateEpoc': 0},
+    }, client)
+    assert (meta.venue_id, meta.layout_id, meta.event_id) == (
+        'njmp', 'thunderbolt', 'gp-du-lac')
+
+
+def test_resolve_race_metadata_on_a_failed_fetch_has_no_identity():
+    from lemongrass import laps
+    meta = laps._resolve_race_metadata({'Successful': False}, None)
+    assert (meta.venue_id, meta.layout_id, meta.event_id) == (None, None, None)
+
+
+def test_store_race_passes_identity_through():
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    ctx = laps.RaceContext('101', '252', None, None, 0, metadata=laps.RaceMetadata(
+        race_name='GP du Lac', track_name='Thompson', series_name='Lemons',
+        end_time_epoc=0, series_id=145, venue_id='thompson',
+        event_id='gp-du-lac'))
+    with patch('lemongrass._db.upsert_race') as upsert:
+        assert laps.store_race(ctx, 1_700_000_000_000) is True
+    row = upsert.call_args.args[0]
+    assert (row.venue_id, row.layout_id, row.event_id) == (
+        'thompson', None, 'gp-du-lac')
+
+
+def test_store_race_syncs_curated_tracks_before_writing():
+    # resolve() reads the shipped file; the foreign keys are satisfied only by
+    # rows. Syncing inside store_race — rather than in one caller — is what
+    # stops a curated-data edit causing a race-day outage on ANY write path,
+    # including the TUI live monitor, which never goes through backfill_race.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    laps._tracks_synced = False
+    ctx = laps.RaceContext('101', '252', None, None, 0, metadata=laps.RaceMetadata(
+        race_name='GP du Lac', track_name='Thompson', series_name='Lemons',
+        end_time_epoc=0, venue_id='thompson'))
+    with patch('lemongrass._db.sync_tracks') as sync, \
+         patch('lemongrass._db.upsert_race') as upsert:
+        assert laps.store_race(ctx, 1_700_000_000_000) is True
+    assert sync.called
+    assert upsert.called
+
+
+def test_store_race_still_writes_when_the_sync_fails():
+    # A sync that cannot run leaves the pre-existing risk as it was; failing
+    # the race outright would be worse than attempting the write.
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    laps._tracks_synced = False
+    ctx = laps.RaceContext('101', '252', None, None, 0, metadata=laps.RaceMetadata(
+        race_name='GP du Lac', track_name='Thompson', series_name='Lemons',
+        end_time_epoc=0))
+    with patch('lemongrass._db.sync_tracks', side_effect=RuntimeError('down')), \
+         patch('lemongrass._db.upsert_race') as upsert:
+        assert laps.store_race(ctx, 1_700_000_000_000) is True
+    assert upsert.called
+
+
+def test_sync_tracks_once_runs_only_once_per_process():
+    from unittest.mock import patch
+
+    from lemongrass import laps
+    laps._tracks_synced = False
+    with patch('lemongrass._db.sync_tracks') as sync:
+        laps._sync_tracks_once()
+        laps._sync_tracks_once()
+    assert sync.call_count == 1

@@ -329,3 +329,45 @@ def test_sync_tracks_dry_run_writes_nothing(db):
     assert summary["venues_created"] == 2
     with db.begin() as conn:
         assert conn.execute(text("SELECT count(*) FROM venues")).scalar() == 0
+
+
+def test_upsert_race_stores_identity(db):
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    _db.upsert_race(_db.RaceRow(
+        race_id="r1", race_time=datetime(2024, 5, 1, tzinfo=UTC),
+        name="GP du Lac", track_name="Thompson Motor Speedway",
+        venue_id="thompson", event_id="gp-du-lac"))
+    row = _db.get_race("r1")
+    assert (row.venue_id, row.layout_id, row.event_id) == (
+        "thompson", None, "gp-du-lac")
+
+
+def test_upsert_race_keeps_identity_when_a_later_write_resolves_nothing(db):
+    # A failed details fetch produces a blank track_name, which resolves to
+    # all-None; that must not erase what a successful fetch already stored.
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    when = datetime(2024, 5, 1, tzinfo=UTC)
+    _db.upsert_race(_db.RaceRow(race_id="r1", race_time=when,
+                                track_name="Thompson", venue_id="thompson"))
+    _db.upsert_race(_db.RaceRow(race_id="r1", race_time=when))
+    assert _db.get_race("r1").venue_id == "thompson"
+
+
+def test_upsert_race_rejects_a_layout_without_its_venue(db):
+    from datetime import UTC, datetime
+
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    with pytest.raises(IntegrityError):
+        _db.upsert_race(_db.RaceRow(
+            race_id="r1", race_time=datetime(2024, 5, 1, tzinfo=UTC),
+            layout_id="thunderbolt"))
