@@ -1633,8 +1633,12 @@ def _sync_tracks_once():
     capture is exactly the path this protects. Guarding the function that
     issues the write covers every caller by construction.
 
-    Failures are logged, not raised. A sync that could not run leaves the
-    pre-existing risk exactly as it was; crashing the run would be worse.
+    An ordinary sync failure (the database is unreachable, a query errors) is
+    logged here and the write proceeds with the pre-existing risk unchanged.
+    A missing-credentials ``SystemExit`` from ``_db.database_url`` is not
+    caught here — ``except Exception`` deliberately does not widen to catch
+    it, since ``_db.upsert_race`` runs one statement later through that same
+    path and would end the run at the write itself regardless.
     """
     global _tracks_synced
     if _tracks_synced:
@@ -1642,8 +1646,8 @@ def _sync_tracks_once():
     try:
         _db.sync_tracks(_tracks.data())
         _tracks_synced = True
-    except Exception as e:
-        logging.error("Syncing curated track data failed: %s", e)
+    except Exception:
+        logging.exception("Syncing curated track data failed")
 
 
 def store_race(ctx, timestamp_ms, expected_lap_count=None, session_count=None):
