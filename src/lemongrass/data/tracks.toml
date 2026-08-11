@@ -60,12 +60,12 @@ aliases = []
 [[venue]]
 id = "njmp"
 name = "New Jersey Motorsports Park"
-aliases = []
+aliases = ["njmp", "thunderbolt"]
 
   [[venue.layout]]
   id = "thunderbolt"
   name = "Thunderbolt Course"
-  aliases = []
+  aliases = ["thunderbolt"]
 
   [[venue.layout]]
   id = "lightning"

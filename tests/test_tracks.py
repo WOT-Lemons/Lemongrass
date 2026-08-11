@@ -275,6 +275,8 @@ def test_data_is_cached(tmp_path):
     ("New Jersey Motorsports Park", "njmp", None),
     ("New Jersey Motorsports Park - Thunderbolt Course", "njmp", "thunderbolt"),
     ("New Jersey Motorsports Park - Lightning Course", "njmp", "lightning"),
+    ("NJMP Thunderbolt", "njmp", "thunderbolt"),
+    ("Thunderbolt", "njmp", None),
 ])
 def test_resolve_maps_every_known_spelling(track_name, venue_id, layout_id):
     got = _tracks.resolve(track_name, "", None)
