@@ -322,6 +322,25 @@ id = 900
         "spring classic", data.series, 145) == "lemons-spring"
 
 
+def test_series_id_scopes_the_event_lookup(tmp_path):
+    # The shipped file carries no events, so the two halves of the scoping
+    # contract -- an id searches only that series, NULL searches all of them --
+    # need a fixture of their own to stay covered.
+    path = _write(tmp_path, """
+[[series]]
+id = 145
+
+  [[series.event]]
+  id = "lemons-spring"
+  name = "Spring"
+  keywords = ["spring classic"]
+""")
+    data = _tracks.load(path)
+    assert _tracks._match_event("spring classic", data.series, 145) == "lemons-spring"
+    assert _tracks._match_event("spring classic", data.series, None) == "lemons-spring"
+    assert _tracks._match_event("spring classic", data.series, 900) is None
+
+
 def test_two_events_in_one_series_matching_one_name_resolve_to_nothing(tmp_path):
     # Naming the series narrows the search but does not disambiguate within
     # it, so the same "unresolved beats wrong" rule has to apply inside a
