@@ -38,6 +38,27 @@ def test_row_label_marks_stale_and_current():
     assert 'stale' in _row_label(_rows()[1])
 
 
+def test_row_label_shows_the_venue():
+    from lemongrass._races_tui import _row_label
+    label = _row_label({"race_id": "101", "name": "GP du Lac 2024",
+                        "date": "2024-05-01", "total": 400, "current": 400,
+                        "schema_version": 5,
+                        "venue_name": "Thompson Speedway Motorsports Park",
+                        "event_name": "GP du Lac"})
+    # Name narrows 32 -> 22 to pay for the 18-wide venue, so the line holds
+    # roughly the width it had before (85 columns here).
+    assert label == ("2024-05-01  GP du Lac 2024          "
+                     "Thompson Speedway   (#101)   400 laps  current v5")
+
+
+def test_row_label_tolerates_a_missing_venue():
+    from lemongrass._races_tui import _row_label
+    label = _row_label({"race_id": "101", "name": "Mystery",
+                        "date": "2024-05-01", "total": 0, "current": 0,
+                        "schema_version": 5, "venue_name": "", "event_name": ""})
+    assert "no laps" in label
+
+
 @pytest.mark.asyncio
 async def test_prune_deletes_checked_and_reloads():
     app = _Host(MagicMock())

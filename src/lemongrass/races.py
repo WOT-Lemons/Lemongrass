@@ -63,6 +63,11 @@ def fetch_race_rows(query_api):
     stored on the race — `races list` renders "stale (N/M at vX)" where X is
     the version the laps should be at.
 
+    venue_name/event_name are the joined curated names, blank when the race
+    resolved to nothing — which is itself the prompt to run `races identify`.
+    (The dict keys deliberately match the spec's names and the `RaceListRow`
+    attributes, because sub-project 3's dashboard work consumes this surface.)
+
     Shared by the CLI `races list` table and the interactive races browser so
     the two never drift."""
     from lemongrass.laps import SCHEMA_VERSION
@@ -72,11 +77,13 @@ def fetch_race_rows(query_api):
             'race_id': row.race_id,
             'name': row.name or 'unknown',
             'date': row.race_time.strftime('%Y-%m-%d') if row.race_time else '?',
+            'venue_name': row.venue_name or '',
+            'event_name': row.event_name or '',
             'total': 0,
             'current': 0,
             'schema_version': SCHEMA_VERSION,
         }
-        for row in _db.list_races()
+        for row in _db.list_races_with_venue()
     }
 
     for table in query_api.query(
@@ -112,8 +119,9 @@ def _handle_list():
     schema version status (current, stale, or no laps)."""
     with _influx.connect() as client:
         rows = fetch_race_rows(client.query_api())
-        print(f"{'RACE ID':<10} {'NAME':<35} {'DATE':<12} {'LAPS':<8} SCHEMA")
-        print('-' * 80)
+        print(f"{'RACE ID':<10} {'NAME':<24} {'VENUE':<18} {'DATE':<12} "
+              f"{'LAPS':<8} SCHEMA")
+        print('-' * 91)
         for info in rows:
             if info['total'] == 0:
                 schema_str = 'no laps'
@@ -122,7 +130,8 @@ def _handle_list():
             else:
                 schema_str = (f'stale   ({info["current"]}/{info["total"]} '
                               f'at v{info["schema_version"]})')
-            print(f"{info['race_id']:<10} {info['name'][:35]:<35} {info['date']:<12} "
+            print(f"{info['race_id']:<10} {info['name'][:24]:<24} "
+                  f"{info['venue_name'][:18]:<18} {info['date']:<12} "
                   f"{info['total']:<8} {schema_str}")
 
 

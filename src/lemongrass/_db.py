@@ -275,6 +275,47 @@ def list_races(conn=None):
     return [_race_row(r) for r in rows]
 
 
+@dataclass
+class RaceListRow:
+    """A race as the listing surfaces need it: identity plus joined names.
+
+    Deliberately not RaceRow: venue_name and event_name are joined, not
+    writable columns, and RaceRow is the shape upsert_race accepts.
+    """
+
+    race_id: str
+    name: str
+    race_time: datetime
+    venue_name: str | None = None
+    event_name: str | None = None
+
+
+def list_races_with_venue(conn=None):
+    """Return every race with its venue and event names, newest first.
+
+    Outer joins, so an unresolved race still appears with both names NULL. One
+    query, not a round trip per race.
+    """
+    from sqlalchemy import select
+    stmt = (
+        select(_schema.races.c.race_id, _schema.races.c.name,
+               _schema.races.c.race_time,
+               _schema.venues.c.name.label('venue_name'),
+               _schema.events.c.name.label('event_name'))
+        .select_from(
+            _schema.races
+            .outerjoin(_schema.venues,
+                       _schema.races.c.venue_id == _schema.venues.c.venue_id)
+            .outerjoin(_schema.events,
+                       _schema.races.c.event_id == _schema.events.c.event_id))
+        .order_by(_schema.races.c.race_time.desc(), _schema.races.c.race_id))
+    with connection(conn) as c:
+        rows = c.execute(stmt).all()
+    return [RaceListRow(race_id=r.race_id, name=r.name, race_time=r.race_time,
+                        venue_name=r.venue_name, event_name=r.event_name)
+            for r in rows]
+
+
 def delete_race(race_id, conn=None):
     """Delete one race, cascading to its sessions. True if a row was removed."""
     from sqlalchemy import delete

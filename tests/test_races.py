@@ -26,7 +26,13 @@ def _tables(mapping):
 
 def _row(race_id, name, when):
     from lemongrass import _db
-    return _db.RaceRow(race_id=race_id, race_time=when, name=name)
+    return _db.RaceListRow(race_id=race_id, race_time=when, name=name)
+
+
+def _list_row(race_id, name, when, venue_name=None, event_name=None):
+    from lemongrass import _db
+    return _db.RaceListRow(race_id=race_id, name=name, race_time=when,
+                           venue_name=venue_name, event_name=event_name)
 
 
 def test_fetch_race_rows_joins_sql_attributes_with_flux_counts():
@@ -37,7 +43,7 @@ def test_fetch_race_rows_joins_sql_attributes_with_flux_counts():
         _tables({'101': 40, '102': 10}),   # total lap counts
         _tables({'101': 40}),              # current-schema lap counts
     ]
-    with patch('lemongrass.races._db.list_races', return_value=rows):
+    with patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
         got = races_mod.fetch_race_rows(query_api)
     assert [r['race_id'] for r in got] == ['102', '101']   # newest first
     assert got[1]['total'] == 40 and got[1]['current'] == 40
@@ -53,9 +59,42 @@ def test_fetch_race_rows_reports_the_current_schema_version():
     rows = [_row('101', 'Spring', datetime(2026, 5, 1, tzinfo=UTC))]
     query_api = MagicMock()
     query_api.query.side_effect = [_tables({}), _tables({})]
-    with patch('lemongrass.races._db.list_races', return_value=rows):
+    with patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
         got = races_mod.fetch_race_rows(query_api)
     assert got[0]['schema_version'] == SCHEMA_VERSION
+
+
+def test_fetch_race_rows_includes_venue_and_event_names():
+    rows = [_list_row('101', 'GP du Lac', datetime(2024, 5, 1, tzinfo=UTC),
+                      'Thompson Speedway Motorsports Park', 'GP du Lac'),
+            _list_row('102', 'Mystery', datetime(2023, 5, 1, tzinfo=UTC))]
+    query_api = MagicMock()
+    query_api.query.side_effect = [_tables({}), _tables({})]
+    with patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
+        got = {r['race_id']: r for r in races_mod.fetch_race_rows(query_api)}
+    assert got['101']['venue_name'] == 'Thompson Speedway Motorsports Park'
+    assert got['101']['event_name'] == 'GP du Lac'
+    assert got['102']['venue_name'] == ''
+    assert got['102']['event_name'] == ''
+
+
+def test_races_list_prints_a_venue_column(capsys):
+    rows = [{"race_id": "101", "name": "GP du Lac", "date": "2024-05-01",
+             "total": 400, "current": 400, "schema_version": 5,
+             "venue_name": "Thompson Speedway Motorsports Park", "event_name": "GP du Lac"}]
+    with patch("lemongrass._influx.connect"), \
+         patch("lemongrass.races.fetch_race_rows", return_value=rows):
+        races_mod._handle_list()
+    out = capsys.readouterr().out
+    header, rule, row = out.splitlines()[:3]
+    # The widths are chosen, not incidental: NAME 35->24 pays for an 18-wide
+    # VENUE, and 'New Jersey Motorsports Park' is 27 characters, so anything
+    # narrower than 18 makes the column useless.
+    assert header == (f"{'RACE ID':<10} {'NAME':<24} {'VENUE':<18} "
+                      f"{'DATE':<12} {'LAPS':<8} SCHEMA")
+    assert rule == '-' * 91
+    # Venue names are truncated to 18, not dropped.
+    assert row.startswith("101        GP du Lac                Thompson Speedway  ")
 
 
 def test_prune_deletes_influx_before_the_race_row():
@@ -426,10 +465,10 @@ class TestHandleBackfill:
 
 class TestHandleList:
     def _race_rows(self, races):
-        """races: list of (race_id, race_name, date_str) -> list[RaceRow]."""
+        """races: list of (race_id, race_name, date_str) -> list[RaceListRow]."""
         from lemongrass import _db
         return [
-            _db.RaceRow(
+            _db.RaceListRow(
                 race_id=race_id, name=race_name,
                 race_time=datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=UTC))
             for race_id, race_name, date_str in races
@@ -466,7 +505,7 @@ class TestHandleList:
         client = self._make_client(totals={}, currents={})
         rows = self._race_rows([('R1', 'Empty Race', '2026-01-01')])
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         assert 'no laps' in capsys.readouterr().out
@@ -476,7 +515,7 @@ class TestHandleList:
         client = self._make_client(totals={'R1': 50}, currents={'R1': 50})
         rows = self._race_rows([('R1', 'Full Race', '2026-01-01')])
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         assert f'current (v{SCHEMA_VERSION})' in capsys.readouterr().out
@@ -485,7 +524,7 @@ class TestHandleList:
         client = self._make_client(totals={'R1': 50}, currents={'R1': 20})
         rows = self._race_rows([('R1', 'Old Race', '2026-01-01')])
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out
@@ -499,7 +538,7 @@ class TestHandleList:
             ('R2', 'New Race', '2026-06-01'),
         ])
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out
@@ -516,9 +555,9 @@ class TestHandleList:
         # column rather than crashing on None.strftime.
         from lemongrass import _db
         client = self._make_client(totals={}, currents={})
-        rows = [_db.RaceRow(race_id='R1', name='Dateless Race', race_time=None)]
+        rows = [_db.RaceListRow(race_id='R1', name='Dateless Race', race_time=None)]
         with patch('lemongrass._influx.connect', return_value=client), \
-             patch('lemongrass.races._db.list_races', return_value=rows):
+             patch('lemongrass.races._db.list_races_with_venue', return_value=rows):
             with patch.dict('os.environ', {'INFLUX_TELEMETRY_TOKEN': 'tok'}):
                 _mod._handle_list()
         out = capsys.readouterr().out

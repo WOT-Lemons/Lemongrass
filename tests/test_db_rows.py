@@ -373,6 +373,27 @@ def test_upsert_race_rejects_a_layout_without_its_venue(db):
             layout_id="thunderbolt"))
 
 
+def test_list_races_with_venue_joins_names_and_tolerates_nulls(db):
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    _db.upsert_race(_db.RaceRow(
+        race_id="r1", race_time=datetime(2024, 5, 1, tzinfo=UTC),
+        name="GP du Lac", track_name="Thompson Motor Speedway",
+        venue_id="thompson", event_id="gp-du-lac"))
+    _db.upsert_race(_db.RaceRow(
+        race_id="r2", race_time=datetime(2023, 5, 1, tzinfo=UTC),
+        name="Mystery", track_name="Somewhere Else"))
+    rows = {r.race_id: r for r in _db.list_races_with_venue()}
+    assert rows["r1"].venue_name == "Thompson Speedway Motorsports Park"
+    assert rows["r1"].event_name == "GP du Lac"
+    assert rows["r2"].venue_name is None
+    assert rows["r2"].event_name is None
+    # Same ordering as list_races: newest first, race_id breaking ties.
+    assert [r.race_id for r in _db.list_races_with_venue()] == ["r1", "r2"]
+
+
 def test_set_race_identity_updates_and_can_clear(db):
     from datetime import UTC, datetime
 
