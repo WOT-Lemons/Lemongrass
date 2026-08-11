@@ -278,12 +278,19 @@ def test_data_is_cached(tmp_path):
     ("Autobahn Country Club", "autobahn", None),
     ("Autobahn Country Club - Joliet, IL", "autobahn", None),
     ("New Jersey Motorsports Park", "njmp", None),
+    ("NJMP", "njmp", None),
     ("New Jersey Motorsports Park - Thunderbolt Course", "njmp", "thunderbolt"),
     ("New Jersey Motorsports Park - Lightning Course", "njmp", "lightning"),
     ("NJMP Thunderbolt", "njmp", "thunderbolt"),
     ("Thunderbolt", "njmp", "thunderbolt"),
     ("Thunderbolt Course", "njmp", "thunderbolt"),
     ("NJMP Lightning", "njmp", "lightning"),
+    ("Lightning", "njmp", "lightning"),
+    # A bare layout word with extra trailing text is NOT rescued -- that
+    # would be the land grab the alias promotion used to commit: a race at
+    # some other "Thunderbolt" facility silently resolving to njmp.
+    ("Thunderbolt Speedway", None, None),
+    ("Thunderbolt Raceway Park", None, None),
     ("Pittsburgh International Race Complex", "pittrace", None),
     ("Pittsburgh Int'l Race Complex", "pittrace", None),
     ("Pittsburgh International Raceway", "pittrace", None),

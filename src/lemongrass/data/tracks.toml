@@ -19,11 +19,12 @@
 #     canonical name needs nothing ("Road Atlanta, Braselton GA"), but any form
 #     SHORTER than it must be listed as an alias ("Gingerman", "Nola").
 #
-# A layout name may be promoted to a VENUE alias when the production data
-# carries it with no venue prefix at all ("thunderbolt" on "njmp"). The venue
-# match then consumes the whole text, so `resolve` falls back to matching that
-# venue's layouts against the full track name instead of the (now empty)
-# remainder, and still finds the layout. This is intentional, not a bug.
+# A track name that is exactly a layout name, with no venue prefix at all
+# ("Thunderbolt" for "njmp"), is rescued by `resolve` itself: when no venue
+# matches, it tries every venue's layouts against the whole track name, exact
+# match only. A bare layout name must NEVER be added as a venue alias for
+# this -- that promotion is a land grab, claiming any track name that merely
+# starts with the layout word for this venue, even at a different facility.
 
 [[venue]]
 id = "thompson"
@@ -74,7 +75,7 @@ aliases = []
 [[venue]]
 id = "njmp"
 name = "New Jersey Motorsports Park"
-aliases = ["njmp", "thunderbolt"]
+aliases = ["njmp"]
 
   [[venue.layout]]
   id = "thunderbolt"
