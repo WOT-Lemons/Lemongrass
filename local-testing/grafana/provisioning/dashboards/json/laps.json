@@ -1066,7 +1066,7 @@
             "uid": "wotl-postgres"
           },
           "format": "table",
-          "rawSql": "SELECT coalesce(nullif(name, ''), 'session ' || session_id)\n         || to_char(coalesce(start_time, to_timestamp(0)),\n                    ' (FMMM/FMDD/YY)') AS session\nFROM sessions\nWHERE race_id = ${raceid:sqlstring}\n  AND session_id::text ~ '^(${session:regex})$'\nORDER BY start_time, session_id",
+          "rawSql": "SELECT coalesce(nullif(name, ''), 'session ' || session_id)\n         || coalesce(to_char(start_time, ' (FMMM/FMDD/YY)'), '') AS session\nFROM sessions\nWHERE race_id = ${raceid:sqlstring}\n  AND session_id::text ~ '^(${session:regex})$'\nORDER BY start_time, session_id",
           "refId": "A"
         }
       ],

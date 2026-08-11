@@ -202,6 +202,45 @@ def prune_races(delete_api, race_ids, on_progress=None, on_error=None):
     return failed
 
 
+def _influx_race_names(query_api, race_ids):
+    """Names for the given races as recorded in the legacy Influx races bucket.
+
+    Only prune needs this. Every pre-cutover race has laps, standings and a
+    race point in Influx but no Postgres row until `db import-legacy` runs,
+    and prune is the only thing that would ever clean that data up — so its
+    not-found guard has to see both stores, not just the new one.
+
+    A race that was renamed has two points carrying different race_name tags.
+    Tags are part of the series key, so those land in different Flux tables
+    and a bare ``last()`` — which runs per table — would leave the answer to
+    table order. The query regroups on race_id and sorts before taking the
+    last, and the newest ``_time`` wins again on the Python side, so the name
+    shown is the current one however the records arrive.
+
+    Callers pass ids already through ``_influx.invalid_flux_ids``, which is
+    what makes the interpolation below safe.
+    """
+    from lemongrass._legacy_migration import FAR_FUTURE
+    predicate = ' or '.join(f'r.race_id == "{rid}"' for rid in race_ids)
+    best = {}
+    for table in query_api.query(
+            f'from(bucket: "{_influx.BUCKET_RACES}")\n'
+            f'  |> range(start: {EPOCH_START}, stop: {FAR_FUTURE})\n'
+            f'  |> filter(fn: (r) => r._measurement == "race")\n'
+            f'  |> filter(fn: (r) => {predicate})\n'
+            f'  |> group(columns: ["race_id"])\n'
+            f'  |> sort(columns: ["_time"])\n'
+            f'  |> last()'):
+        for record in table.records:
+            rid = record.values.get('race_id')
+            if not rid:
+                continue
+            when = record.get_time() or datetime.min.replace(tzinfo=UTC)
+            if rid not in best or when >= best[rid][0]:
+                best[rid] = (when, record.values.get('race_name') or 'unknown')
+    return {rid: name for rid, (_, name) in best.items()}
+
+
 def _handle_prune():
     """Parse args and delete all data for the specified race(s) — the Postgres
     race/session rows plus the InfluxDB laps/standings/legacy race data,
@@ -226,6 +265,10 @@ def _handle_prune():
             row = _db.get_race(rid)
             if row is not None:
                 race_names[rid] = row.name or 'unknown'
+
+        missing = [rid for rid in race_ids if rid not in race_names]
+        if missing:
+            race_names.update(_influx_race_names(client.query_api(), missing))
 
         not_found = [rid for rid in race_ids if rid not in race_names]
         if not_found:

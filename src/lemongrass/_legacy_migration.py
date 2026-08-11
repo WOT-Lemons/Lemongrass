@@ -32,9 +32,20 @@ def _int_or_none(value):
 def read_legacy_races(query_api):
     """Read every race point from the legacy races bucket as RaceRows.
 
-    series_id is None for every row: _resolve_race_metadata read SeriesID and
-    discarded it, so it was never stored. Re-fetching it for ~184 races under
-    the 6 req/min limit is not worth it, and 1b stores it going forward.
+    series_id is None for every genuine pre-cutover row: _resolve_race_metadata
+    read SeriesID and discarded it, so it was never stored, and re-fetching it
+    for ~184 races under the 6 req/min limit is not worth it. It is still read
+    here because export_legacy writes it for races captured after the cutover
+    — that is the rollback path, and dropping it there would be lossy.
+
+    One race_id can hold more than one point: push_influx_race deleted with
+    ``stop=now()`` before rewriting, so a point timestamped in the future -- a
+    scheduled race whose start time later moved -- survived the delete. Both
+    would otherwise be imported and ``upsert_race`` would keep whichever Flux
+    happened to yield last. Collapsing on the latest timestamp makes the
+    import deterministic, and the duplicates are logged because which point is
+    right is a curation question this cannot answer: Influx does not record
+    when a point was written, only what time it describes.
     """
     rows = []
     for table in query_api.query(
@@ -52,14 +63,38 @@ def read_legacy_races(query_api):
                 # absent for a race written from an unsuccessful details fetch.
                 name=vals.get('race_name') or '',
                 track_name=vals.get('track_name') or '',
-                series_id=None,
+                series_id=_int_or_none(vals.get('series_id')),
                 series_name=vals.get('series_name') or None,
                 end_time=_epoch_to_dt(vals.get('end_time_epoc')),
                 expected_lap_count=_int_or_none(vals.get('expected_lap_count')),
                 session_count=_int_or_none(vals.get('session_count')),
                 lap_schema_version=_int_or_none(vals.get('schema_version')),
             ))
-    return rows
+    return _latest_per_race(rows)
+
+
+def _latest_per_race(rows):
+    """Collapse RaceRows to one per race_id, keeping the latest race_time.
+
+    Logs every race_id that carried more than one point: the import is a
+    one-shot an operator watches, and a race whose stored date is a coin flip
+    between two candidates is worth a look before the cutover is declared
+    done.
+    """
+    latest = {}
+    duplicated = set()
+    for row in rows:
+        seen = latest.get(row.race_id)
+        if seen is not None:
+            duplicated.add(row.race_id)
+            if seen.race_time >= row.race_time:
+                continue
+        latest[row.race_id] = row
+    for race_id in sorted(duplicated):
+        logging.warning(
+            "race %s had multiple race points in Influx; kept the one dated "
+            "%s", race_id, latest[race_id].race_time)
+    return list(latest.values())
 
 
 def read_legacy_sessions(query_api):
@@ -105,8 +140,9 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
     still previews what a real run would do (races_read ≈ races_would_write is
     the runbook's healthy-run check). races_skipped_existing/
     sessions_skipped_existing count rows only_missing left alone because
-    Postgres already had them; sessions_skipped keeps its original,
-    orphan-only meaning so read == written-or-would-write + skipped +
+    Postgres already had them; sessions_skipped counts the ones this refused
+    to write at all — an orphaned race, or a session id a different race
+    already owns — so read == written-or-would-write + skipped +
     skipped_existing reconciles in every mode.
     """
     races = read_legacy_races(query_api)
@@ -131,6 +167,10 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
         existing_races.add(row.race_id)
 
     existing_sessions = {s.session_id for s in _db.list_sessions()}
+    # session_id -> the race that owns it. sessions is keyed on session_id
+    # alone, so a second race claiming the same id would overwrite race_id
+    # rather than insert, quietly taking the session off the first race.
+    owners = {s.session_id: s.race_id for s in _db.list_sessions()}
     orphans = set()
     for row in sessions:
         if row.race_id not in existing_races:
@@ -140,6 +180,13 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
                 "session %s: race %s has no race point, skipping",
                 row.session_id, row.race_id)
             continue
+        owner = owners.get(row.session_id)
+        if owner is not None and owner != row.race_id:
+            summary['sessions_skipped'] += 1
+            logging.warning(
+                "session %s: already claimed by race %s, skipping the copy "
+                "under race %s", row.session_id, owner, row.race_id)
+            continue
         if only_missing and row.session_id in existing_sessions:
             summary['sessions_skipped_existing'] += 1
             continue
@@ -147,6 +194,7 @@ def import_legacy(query_api, dry_run=False, only_missing=False):
         if not dry_run:
             _db.upsert_session(row)
             summary['sessions_written'] += 1
+        owners[row.session_id] = row.race_id
 
     summary['orphan_race_ids'] = sorted(orphans)
     return summary
@@ -209,6 +257,13 @@ def race_line(row):
                   ('track_name', row.track_name),
                   ('series_name', row.series_name or '')])
     fields = [f'end_time_epoc={_dt_to_epoch(row.end_time)}i']
+    # series_id has no pre-cutover counterpart -- _resolve_race_metadata read
+    # it and threw it away. It is written anyway because this export is the
+    # rollback path for races captured *after* the cutover, which do carry
+    # one; omitting it would make the round trip lossy in the one direction
+    # that matters. Legacy readers ignore fields they do not name.
+    if row.series_id is not None:
+        fields.append(f'series_id={row.series_id}i')
     if row.lap_schema_version is not None:
         fields.append(f'schema_version={row.lap_schema_version}i')
     if row.expected_lap_count is not None:
