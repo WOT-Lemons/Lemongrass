@@ -192,3 +192,111 @@ def test_data_is_cached(tmp_path):
     assert _tracks.data() is first
     _tracks.reset_cache()
     assert _tracks.data() is not first
+
+
+@pytest.mark.parametrize("track_name,venue_id,layout_id", [
+    ("Thompson Motor Speedway", "thompson", None),
+    ("Thompson Speedway Motorsports Park", "thompson", None),
+    ("Thompson Raceway Motorsports Park", "thompson", None),
+    ("Gingerman", "gingerman", None),
+    ("Gingerman Raceway", "gingerman", None),
+    ("The Ridge", "the-ridge", None),
+    ("The Ridge Motorsports Park", "the-ridge", None),
+    ("Nola", "nola", None),
+    ("NOLA Motorsports Park", "nola", None),
+    ("Road Atlanta", "road-atlanta", None),
+    ("Road Atlanta, Braselton GA", "road-atlanta", None),
+    ("Sonoma Raceway", "sonoma", None),
+    ("Sonoma Raceway, Sonoma CA", "sonoma", None),
+    ("High Plains Raceway", "high-plains", None),
+    ("High Plains Raceway - Deer Trail, CO", "high-plains", None),
+    ("Autobahn Country Club", "autobahn", None),
+    ("Autobahn Country Club - Joliet, IL", "autobahn", None),
+    ("New Jersey Motorsports Park", "njmp", None),
+    ("New Jersey Motorsports Park - Thunderbolt Course", "njmp", "thunderbolt"),
+    ("New Jersey Motorsports Park - Lightning Course", "njmp", "lightning"),
+])
+def test_resolve_maps_every_known_spelling(track_name, venue_id, layout_id):
+    got = _tracks.resolve(track_name, "", None)
+    assert (got.venue_id, got.layout_id) == (venue_id, layout_id)
+
+
+def test_unmapped_track_resolves_to_nothing():
+    got = _tracks.resolve("Some Unknown Kart Track", "GP du Lac 2024", 145)
+    assert got == _tracks.TrackIdentity()
+
+
+def test_empty_input_is_safe():
+    # _resolve_race_metadata returns track_name='' on a failed details fetch.
+    assert _tracks.resolve("", "", None) == _tracks.TrackIdentity()
+    assert _tracks.resolve("   ", "", 145) == _tracks.TrackIdentity()
+
+
+def test_longest_venue_candidate_wins(tmp_path):
+    path = _write(tmp_path, """
+[[venue]]
+id = "short"
+name = "Summit Point"
+
+[[venue]]
+id = "long"
+name = "Summit Point Raceway"
+""")
+    _tracks._DATA = _tracks.load(path)
+    assert _tracks.resolve("Summit Point Raceway", "", None).venue_id == "long"
+    assert _tracks.resolve("Summit Point", "", None).venue_id == "short"
+
+
+def test_layout_does_not_cross_match_between_venues(tmp_path):
+    # The regression test for the flat-layout-namespace defect: a layout owned
+    # by one venue must never be returned for another, because (venue_id,
+    # layout_id) is a composite foreign key and the mismatched tuple would make
+    # store_race fail mid-race.
+    path = _write(tmp_path, """
+[[venue]]
+id = "other"
+name = "Other Park"
+
+  [[venue.layout]]
+  id = "full"
+  name = "Full Course"
+
+[[venue]]
+id = "atlanta"
+name = "Road Atlanta"
+""")
+    _tracks._DATA = _tracks.load(path)
+    got = _tracks.resolve("Road Atlanta - Full Course", "", None)
+    assert (got.venue_id, got.layout_id) == ("atlanta", None)
+
+
+def test_bare_venue_yields_no_layout():
+    got = _tracks.resolve("Thompson Speedway Motorsports Park", "", None)
+    assert got.layout_id is None
+
+
+@pytest.mark.parametrize("race_name", [
+    "GP du Lac Chargoggagoggmanchauggagoggchaubunagungamaugg",
+    "GP du Lac 2023",
+    "The GP du Lac",
+    "Lemons Chargoggagogg 24",
+])
+def test_event_matches_every_race_name_spelling(race_name):
+    got = _tracks.resolve("Thompson Motor Speedway", race_name, 145)
+    assert got.event_id == "gp-du-lac"
+
+
+def test_event_lookup_is_scoped_to_the_named_series():
+    got = _tracks.resolve("Thompson Motor Speedway", "GP du Lac 2023", 999)
+    assert got.event_id is None
+
+
+def test_event_lookup_with_no_series_searches_every_series():
+    # Influx never stored series_id, so every db import-legacy race has it NULL.
+    got = _tracks.resolve("Thompson Motor Speedway", "GP du Lac 2023", None)
+    assert got.event_id == "gp-du-lac"
+
+
+def test_event_is_not_resolved_when_the_venue_is_not():
+    got = _tracks.resolve("Nowhere Speedway", "GP du Lac 2023", 145)
+    assert got.event_id is None

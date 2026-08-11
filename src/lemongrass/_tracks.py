@@ -236,3 +236,79 @@ def reset_cache():
     """Forget the cached track data (tests)."""
     global _DATA
     _DATA = None
+
+
+def _match(text, candidates):
+    """Return (matched candidate, remainder) for the first candidate that fits.
+
+    Candidates arrive longest-first, so the first fit is the longest fit. The
+    test is equality or a whole-word prefix — never a bare ``startswith``,
+    which would match "Nola" inside "Nolan Speedway", and never an empty
+    candidate, which the loader already rejects.
+    """
+    for candidate in candidates:
+        if text == candidate:
+            return candidate, ""
+        if text.startswith(candidate + " "):
+            return candidate, text[len(candidate) + 1:]
+    return None, text
+
+
+def _match_venue(text, venues):
+    """Return (venue, remainder) for the longest-matching venue, or (None, text)."""
+    best = None
+    for venue in venues:
+        candidate, remainder = _match(text, venue.candidates)
+        if candidate is not None and (best is None or len(candidate) > best[0]):
+            best = (len(candidate), venue, remainder)
+    return (best[1], best[2]) if best is not None else (None, text)
+
+
+def _match_layout(remainder, layouts):
+    """Return the longest-matching layout id among this venue's layouts, or None."""
+    best = None
+    for layout in layouts:
+        candidate, _ = _match(remainder, layout.candidates)
+        if candidate is not None and (best is None or len(candidate) > best[0]):
+            best = (len(candidate), layout.layout_id)
+    return best[1] if best is not None else None
+
+
+def _match_event(race_name, series, series_id):
+    """Return the first event id whose keyword appears in the race name, or None.
+
+    An integer series_id selects only that series; None searches every series
+    in file order, which is what the back catalogue needs — Influx never stored
+    series_id, so every legacy race has it NULL and everything stored is Lemons.
+    """
+    if not race_name:
+        return None
+    for entry in series:
+        if series_id is not None and entry.series_id != series_id:
+            continue
+        for event in entry.events:
+            if any(keyword in race_name for keyword in event.keywords):
+                return event.event_id
+    return None
+
+
+def resolve(track_name, race_name, series_id):
+    """Resolve free-text race metadata to a TrackIdentity of three nullable ids.
+
+    Venue first, then that venue's layouts against whatever text the venue
+    match left over, then the event by keyword. A venue that does not match
+    stops resolution: layouts are keyed (venue_id, layout_id), so a layout
+    without its venue is a foreign key violation waiting to happen, and an
+    event without a venue is of no use to a year-over-year comparison.
+    """
+    track_data = data()
+    venue, remainder = _match_venue(normalize(track_name), track_data.venues)
+    if venue is None:
+        return TrackIdentity()
+    layout_id = (_match_layout(remainder, venue.layouts)
+                 if remainder and venue.layouts else None)
+    return TrackIdentity(
+        venue_id=venue.venue_id,
+        layout_id=layout_id,
+        event_id=_match_event(normalize(race_name), track_data.series, series_id),
+    )
