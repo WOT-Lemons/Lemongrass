@@ -3,7 +3,6 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
 
 
 def test_upsert_team_creates_and_renames(db):
@@ -30,8 +29,29 @@ def test_one_alias_cannot_be_claimed_by_two_teams(db):
     _db.upsert_team("a", "A")
     _db.upsert_team("b", "B")
     _db.add_team_alias("a", "shared name")
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ValueError, match="shared name"):
         _db.add_team_alias("b", "shared name")
+    # The conflict must not have overwritten the existing mapping.
+    assert _db.list_team_aliases("a") == [("a", "shared name")]
+    assert _db.list_team_aliases("b") == []
+
+
+def test_add_team_alias_repeating_the_same_team_is_a_no_op(db):
+    # `entries propose` -> `confirm_proposals` offers to record an alias for
+    # every matching proposal, even ones an earlier run already recorded —
+    # re-answering "y" must not raise.
+    from lemongrass import _db
+    _db.upsert_team("wot-lemons", "WOT Lemons")
+    _db.add_team_alias("wot-lemons", "WOT Lemons")
+    _db.add_team_alias("wot-lemons", "WOT Lemons")
+    assert _db.list_team_aliases("wot-lemons") == [("wot-lemons", "wot lemons")]
+
+
+def test_add_team_alias_rejects_an_unknown_team(db):
+    from lemongrass import _db
+    with pytest.raises(ValueError, match="nosuch"):
+        _db.add_team_alias("nosuch", "Some Name")
+    assert _db.list_team_aliases() == []
 
 
 def test_merge_moves_entries_and_aliases_and_drops_the_source(db):
@@ -150,6 +170,13 @@ def test_cli_alias_and_merge(capsys):
         assert _run(["lemongrass-teams", "merge", "old-name", "wot-lemons"]) == 0
     merge.assert_called_once_with("old-name", "wot-lemons")
     assert "3 entr" in capsys.readouterr().out
+
+
+def test_cli_alias_reports_a_bad_team(capsys):
+    with patch("lemongrass._db.add_team_alias",
+               side_effect=ValueError("no team nosuch")):
+        assert _run(["lemongrass-teams", "alias", "nosuch", "Old Name"]) == 1
+    assert "no team nosuch" in capsys.readouterr().err
 
 
 def test_cli_merge_reports_a_bad_target(capsys):

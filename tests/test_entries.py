@@ -47,7 +47,9 @@ def _run(argv):
 
 def test_cli_set_and_list(capsys):
     from lemongrass import _db
-    with patch("lemongrass._db.set_entry") as write:
+    with patch("lemongrass._db.set_entry") as write, \
+         patch("lemongrass._db.get_team",
+               return_value=_db.TeamRow("wot-lemons", "WOT Lemons")):
         assert _run(["lemongrass-entries", "set", "r1", "252",
                      "--team", "wot-lemons"]) == 0
     write.assert_called_once_with("r1", "252", "wot-lemons")
@@ -59,10 +61,13 @@ def test_cli_set_and_list(capsys):
 
 
 def test_cli_set_defaults_to_the_configured_team(monkeypatch, tmp_path):
+    from lemongrass import _db
     cfg = tmp_path / "c.toml"
     cfg.write_text('[team]\nid = "wot-lemons"\n', encoding="utf-8")
     monkeypatch.setenv("LEMONGRASS_CONFIG", str(cfg))
-    with patch("lemongrass._db.set_entry") as write:
+    with patch("lemongrass._db.set_entry") as write, \
+         patch("lemongrass._db.get_team",
+               return_value=_db.TeamRow("wot-lemons", "WOT Lemons")):
         assert _run(["lemongrass-entries", "set", "r1", "252"]) == 0
     write.assert_called_once_with("r1", "252", "wot-lemons")
 
@@ -71,6 +76,30 @@ def test_cli_set_without_a_team_anywhere_fails(monkeypatch, capsys):
     monkeypatch.delenv("LEMONGRASS_CONFIG", raising=False)
     assert _run(["lemongrass-entries", "set", "r1", "252"]) == 1
     assert "team" in capsys.readouterr().err
+
+
+def test_cli_set_rejects_a_blank_car_number(db, capsys):
+    # store_entry (laps.py) already screens whitespace-only car_number; the
+    # `entries set` CLI path must mirror that guard instead of writing a row
+    # with an empty-string primary-key component.
+    from lemongrass import _db
+    _race(db)
+    _db.upsert_team("wot-lemons", "WOT Lemons")
+    assert _run(["lemongrass-entries", "set", "r1", "  ",
+                "--team", "wot-lemons"]) == 1
+    assert "car number" in capsys.readouterr().err.lower()
+    assert _db.list_entries() == []
+
+
+def test_cli_set_rejects_an_unknown_team(db, capsys):
+    # store_entry checks get_team first; the CLI path must too, rather than
+    # letting the FK violation raise an unhandled IntegrityError.
+    from lemongrass import _db
+    _race(db)
+    assert _run(["lemongrass-entries", "set", "r1", "252",
+                "--team", "nosuch"]) == 1
+    assert "nosuch" in capsys.readouterr().err
+    assert _db.list_entries() == []
 
 
 def test_entries_is_a_registered_command():
@@ -192,6 +221,27 @@ def test_confirm_records_the_matched_spelling_as_an_alias():
          patch("lemongrass._db.add_team_alias") as alias:
         entries.confirm_proposals(proposals, "wot-lemons")
     alias.assert_called_once_with("wot-lemons", "Wide Open Throttle")
+
+
+def test_confirm_reports_an_alias_conflict_without_aborting(capsys):
+    # A different team already owns this spelling. add_team_alias raises
+    # ValueError for that; confirm_proposals must report it and keep going
+    # rather than losing every remaining proposal to an unhandled traceback.
+    from lemongrass import entries
+    proposals = [
+        {"race_id": "101", "car_number": "252", "competitor_name": "WOT Lemons",
+         "existing_team_id": None},
+        {"race_id": "102", "car_number": "7", "competitor_name": "Not Us",
+         "existing_team_id": None},
+    ]
+    with patch("builtins.input", side_effect=["y", "y", "y", "n"]), \
+         patch("lemongrass._db.set_entry") as write, \
+         patch("lemongrass._db.add_team_alias",
+               side_effect=ValueError("already recorded for team someone-else")):
+        written = entries.confirm_proposals(proposals, "wot-lemons")
+    assert written == 2
+    assert write.call_count == 2
+    assert "someone-else" in capsys.readouterr().err
 
 
 def test_propose_command_writes_nothing_when_every_answer_is_no(capsys):

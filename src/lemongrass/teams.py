@@ -62,7 +62,11 @@ def _handle_alias():
     parser.add_argument('team_id')
     parser.add_argument('alias')
     args = parser.parse_args()
-    _db.add_team_alias(args.team_id, args.alias)
+    try:
+        _db.add_team_alias(args.team_id, args.alias)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     print(f"{args.team_id}  <- {args.alias}")
     return 0
 

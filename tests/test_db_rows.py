@@ -359,6 +359,26 @@ def test_upsert_race_keeps_identity_when_a_later_write_resolves_nothing(db):
     assert _db.get_race("r1").venue_id == "thompson"
 
 
+def test_upsert_race_moves_layout_with_venue_when_venue_changes(db):
+    # A later resolve() may return a new venue with no layout (e.g. after a
+    # tracks.toml edit changes which venue a track name maps to). COALESCE'ing
+    # venue_id and layout_id independently would pair the new venue with the
+    # OLD layout_id, which can violate the composite FK — or worse, silently
+    # match a same-named layout at the wrong venue. venue_id and layout_id
+    # must always come from the same source.
+    from datetime import UTC, datetime
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    when = datetime(2024, 5, 1, tzinfo=UTC)
+    _db.upsert_race(_db.RaceRow(race_id="r1", race_time=when,
+                                venue_id="njmp", layout_id="thunderbolt"))
+    _db.upsert_race(_db.RaceRow(race_id="r1", race_time=when,
+                                venue_id="thompson"))
+    row = _db.get_race("r1")
+    assert (row.venue_id, row.layout_id) == ("thompson", None)
+
+
 def test_upsert_race_rejects_a_layout_without_its_venue(db):
     from datetime import UTC, datetime
 

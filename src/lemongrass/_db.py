@@ -197,7 +197,7 @@ def upsert_race(row, conn=None):
     good tag. Clearing or correcting a tag downward is `races identify`'s job,
     which issues an explicit UPDATE.
     """
-    from sqlalchemy import func
+    from sqlalchemy import case, func
     from sqlalchemy.dialects.postgresql import insert
     stmt = insert(_schema.races).values(
         race_id=row.race_id,
@@ -238,8 +238,17 @@ def upsert_race(row, conn=None):
                 _schema.races.c.lap_schema_version),
             'venue_id': func.coalesce(
                 stmt.excluded.venue_id, _schema.races.c.venue_id),
-            'layout_id': func.coalesce(
-                stmt.excluded.layout_id, _schema.races.c.layout_id),
+            # layout_id must follow whichever source venue_id came from — a
+            # per-column COALESCE could pair a newly-resolved venue with the
+            # PREVIOUS write's layout_id, a combination that was never
+            # resolved together and can violate the composite FK (or worse,
+            # silently match an unrelated same-named layout at the new
+            # venue). A blank write (excluded.venue_id IS NULL) still keeps
+            # the stored layout, same as before.
+            'layout_id': case(
+                (stmt.excluded.venue_id.isnot(None), stmt.excluded.layout_id),
+                else_=_schema.races.c.layout_id,
+            ),
             'event_id': func.coalesce(
                 stmt.excluded.event_id, _schema.races.c.event_id),
             'updated_at': func.now(),
@@ -566,13 +575,33 @@ def add_team_alias(team_id, alias, conn=None):
     stored normalized" an invariant instead of a convention: every writer goes
     through this function, and every reader compares against already-normalized
     stored values.
+
+    Re-recording an alias the team already owns is a silent no-op — the
+    `entries propose` -> `confirm_proposals` loop offers to record the alias
+    for every matching proposal, including ones an earlier run already
+    recorded, and re-answering "y" must not raise. An alias already claimed by
+    a *different* team, or a nonexistent team_id, raises ValueError instead of
+    a raw IntegrityError, so callers can report it instead of crashing on a
+    FK/unique-key violation mid-loop.
     """
-    from sqlalchemy import insert
+    from sqlalchemy import insert, select
 
     from lemongrass import _tracks
+    normalized = _tracks.normalize(alias)
     with connection(conn) as c:
+        if c.execute(select(_schema.teams.c.team_id).where(
+                _schema.teams.c.team_id == team_id)).scalar() is None:
+            raise ValueError(f"no team {team_id!r}")
+        owner = c.execute(select(_schema.team_aliases.c.team_id).where(
+            _schema.team_aliases.c.alias == normalized)).scalar()
+        if owner == team_id:
+            return
+        if owner is not None:
+            raise ValueError(
+                f"alias {normalized!r} is already recorded for team "
+                f"{owner!r}, not {team_id!r}")
         c.execute(insert(_schema.team_aliases).values(
-            team_id=team_id, alias=_tracks.normalize(alias)))
+            team_id=team_id, alias=normalized))
 
 
 def list_team_aliases(team_id=None, conn=None):

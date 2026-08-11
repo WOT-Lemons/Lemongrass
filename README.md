@@ -351,6 +351,7 @@ attached to a terminal); non-interactively, or when a subcommand is given,
 | `prune RACE_ID...` | Delete all data for one or more races from InfluxDB |
 | `backfill` | Run historical backfill for all tracked races (delegates to `lemongrass race-backfill`; use `--help` for all options) |
 | `diagnose RACE_ID CAR_NUMBER` | Compare RaceMonitor vs InfluxDB lap counts for a specific car |
+| `identify [--dry-run]` | Re-tag every stored race with venue, layout, and event ids resolved from `tracks.toml` (see [Track identity](#track-identity)) |
 
 ### Examples
 
@@ -404,6 +405,44 @@ is not subject to the API rate limit. A race whose track name matches nothing is
 with NULL ids and keeps showing its raw `track_name`; there is no fallback tag to clean
 up later. `lemongrass tracks sync` copies the file into the database on its own, and
 `lemongrass db upgrade` runs it as its final step.
+
+### Teams
+
+Unlike track data, team facts are operational rather than curated — they grow by one row
+every time we race — so they live only in PostgreSQL, via `lemongrass teams`.
+
+```shell
+lemongrass teams <subcommand> [args]
+```
+
+| Subcommand | Description |
+| ------------ | ------------- |
+| `add TEAM_ID NAME` | Create a team, or rename an existing one |
+| `list` | Print every team with its recorded aliases |
+| `alias TEAM_ID ALIAS` | Record a historical spelling for a team |
+| `merge FROM_ID INTO_ID` | Fold one team into another, moving its entries and aliases |
+
+A team must exist (`lemongrass teams add`) before `[team] id` in the config file or
+`lemongrass entries set --team` can reference it — see [Configuration](#configuration).
+
+### Entries
+
+`lemongrass entries` records which team ran which car number in which race — car numbers
+are not stable across events, so "our laps" cannot be derived from the number or team name
+alone.
+
+```shell
+lemongrass entries <subcommand> [args]
+```
+
+| Subcommand | Description |
+| ------------ | ------------- |
+| `set RACE_ID CAR_NUMBER [--team TEAM_ID]` | Record one race/car/team entry (`--team` defaults to `[team] id` from the config file) |
+| `list [--team TEAM_ID]` | Print stored entries, optionally filtered to one team |
+| `propose --term TERM [--term TERM ...] [--team TEAM_ID]` | Scan stored competitor names for a match and interactively confirm which entries to record (and optionally save the matched spelling as a new alias) |
+
+A live capture with `[team] id` set records its own entry automatically; `entries` is for
+filling in the rest of a team's history.
 
 ## Configuration
 

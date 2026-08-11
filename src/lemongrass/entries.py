@@ -47,6 +47,16 @@ def _handle_set():
         print("Error: no team given and [team] id is not set in the config file",
               file=sys.stderr)
         return 1
+    # Mirror store_entry's (laps.py) guards: a blank car number would write a
+    # row with an empty-string primary-key component, and an unknown team
+    # would raise an unhandled FK IntegrityError instead of a clean message.
+    if not args.car_number.strip():
+        print("Error: car number is blank", file=sys.stderr)
+        return 1
+    if _db.get_team(team_id) is None:
+        print(f"Error: no team {team_id!r}; run `lemongrass teams add "
+              f"{team_id} <name>` first", file=sys.stderr)
+        return 1
     _db.set_entry(args.race_id, args.car_number, team_id)
     print(f"{args.race_id}  {args.car_number.strip()}  {team_id}")
     return 0
@@ -146,7 +156,13 @@ def confirm_proposals(proposals, team_id):
         alias = input(f"  record {proposal['competitor_name']!r} as an alias "
                       f"of {team_id}? [y/N] ")
         if alias.strip().lower() == 'y':
-            _db.add_team_alias(team_id, proposal['competitor_name'])
+            try:
+                _db.add_team_alias(team_id, proposal['competitor_name'])
+            except ValueError as e:
+                # A conflicting alias (claimed by a different team) must not
+                # abort the loop: the entries already confirmed are good, and
+                # remaining proposals still deserve a prompt.
+                print(f"  {e}", file=sys.stderr)
     return written
 
 
