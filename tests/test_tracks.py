@@ -467,6 +467,7 @@ def test_bare_venue_yields_no_layout():
 
 @pytest.mark.parametrize("race_name", [
     "GP du Lac Chargoggagoggmanchauggagoggchaubunagungamaugg",
+    "GP du Lac Chargoggagogg(etc) 2023",
     "GP du Lac 2023",
     "The GP du Lac",
     "Lemons Chargoggagogg 24",
