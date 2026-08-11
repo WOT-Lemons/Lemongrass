@@ -248,8 +248,10 @@ that case.)
 
 Then revert the code and restart the services.
 
-**Caveat:** the legacy Influx schema has no `series_id` tag, so `export-legacy` does not
-emit one — a rollback silently drops `series_id` from every exported row, even though
-it's part of the Postgres schema. Reverting is otherwise lossless for rows already
-migrated, but revert *without* running `export-legacy` first loses every race and
-session written directly to Postgres since cutover (they have no Influx counterpart).
+**Caveat:** `export-legacy` emits `series_id` as a field when the row has one, and `import-legacy`
+reads it back, so a round trip preserves it. What a rollback *cannot* preserve is a `series_id` that
+was never in Influx to begin with: rows created by `import-legacy` from legacy points have it NULL
+permanently, because the legacy race point carried no series id to read. Reverting is otherwise
+lossless for rows already migrated, but a revert performed *without* running `export-legacy` first
+loses every race and session written directly to PostgreSQL since cutover — they have no Influx
+counterpart at all.
