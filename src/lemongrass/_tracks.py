@@ -329,29 +329,26 @@ def _match_event(race_name, series, series_id):
     every legacy race has it NULL, and read_legacy_races leaves it NULL
     permanently rather than re-fetching it.
 
-    A NULL series_id that matches events in more than one series resolves to
-    None rather than to whichever series the file lists first. Today there is
-    one series, so this cannot fire; the moment a second is added, "first in
-    file order" would silently tag ~184 legacy races with an event they never
-    ran, and a wrong event id is worse than an unresolved one — identify_races
-    reports unresolved names as a worklist, but reports a wrong tag as a
-    perfectly ordinary change.
+    A race name matching more than one event resolves to None rather than to
+    whichever event the file lists first, whether the rivals sit in two series
+    or side by side in one. Keyword overlap cannot be rejected at load time —
+    two events with unrelated keywords still collide on a race name that
+    happens to contain both — so ambiguity is decided here, per name. "First
+    in file order" would silently tag ~184 legacy races with an event they
+    never ran, and a wrong event id is worse than an unresolved one:
+    identify_races reports unresolved names as a worklist, but reports a wrong
+    tag as a perfectly ordinary change.
     """
     if not race_name:
         return None
-    matches = []
+    matches = set()
     for entry in series:
         if series_id is not None and entry.series_id != series_id:
             continue
         for event in entry.events:
             if any(keyword in race_name for keyword in event.keywords):
-                matches.append((entry.series_id, event.event_id))
-                break
-    if not matches:
-        return None
-    if len({s for s, _ in matches}) > 1:
-        return None
-    return matches[0][1]
+                matches.add(event.event_id)
+    return matches.pop() if len(matches) == 1 else None
 
 
 def resolve(track_name, race_name, series_id):

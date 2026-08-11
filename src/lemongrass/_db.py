@@ -723,7 +723,7 @@ def set_entry(race_id, car_number, team_id, conn=None):
     captured before the cutover), so this is a normal answer and callers need
     to be able to report it and carry on rather than crash mid-loop.
 
-    team_id is checked here: the caller must ensure the team exists, and an
+    team_id is not checked here: the caller must ensure the team exists, and an
     unknown one raises a raw IntegrityError. Every caller today pre-checks
     with get_team (entries._handle_set, entries._handle_propose,
     laps.store_entry) because each wants to report it differently.

@@ -310,6 +310,32 @@ id = 900
         "spring classic", data.series, 145) == "lemons-spring"
 
 
+def test_two_events_in_one_series_matching_one_name_resolve_to_nothing(tmp_path):
+    # Naming the series narrows the search but does not disambiguate within
+    # it, so the same "unresolved beats wrong" rule has to apply inside a
+    # single series.
+    path = _write(tmp_path, """
+[[series]]
+id = 145
+
+  [[series.event]]
+  id = "lemons-spring"
+  name = "Spring"
+  keywords = ["spring classic"]
+
+  [[series.event]]
+  id = "lemons-spring-enduro"
+  name = "Spring Enduro"
+  keywords = ["classic"]
+""")
+    data = _tracks.load(path)
+    assert _tracks._match_event("spring classic", data.series, 145) is None
+    assert _tracks._match_event("spring classic", data.series, None) is None
+    # An unambiguous name still resolves.
+    assert _tracks._match_event("the classic", data.series, 145) == (
+        "lemons-spring-enduro")
+
+
 def test_a_candidate_must_end_on_a_word_boundary():
     # "Nola" is a real curated candidate and a bare character prefix of
     # "Nolan Speedway"; matching it there would tag a different track.
