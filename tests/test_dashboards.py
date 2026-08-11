@@ -234,11 +234,11 @@ def test_the_maps_fall_back_to_a_typed_sentinel_row(db):
             assert emitted == '[{key: "", value: ""}]', name
 
 
-def test_the_race_map_strips_embedded_double_quotes_from_names(db):
-    # races.name is free text. Without the replace(...) strip, a race named
-    # The "Big" One closes the Flux string literal early and breaks every
-    # panel that interpolates racemap -- the same failure mode the pairs
-    # predicate now guards against for car_number.
+def test_the_race_map_escapes_embedded_double_quotes_in_names(db):
+    # races.name is free text. Unescaped, a race named The "Big" One closes the
+    # Flux string literal early and breaks every panel that interpolates
+    # racemap -- the same failure mode the pairs predicate guards against for
+    # car_number. Escaping rather than stripping keeps the label readable.
     with db.begin() as conn:
         conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
         conn.execute(text(
@@ -246,17 +246,16 @@ def test_the_race_map_strips_embedded_double_quotes_from_names(db):
             "('1', '2024-06-01T12:00:00Z', 'thompson', 'The \"Big\" One')"))
         racemap = conn.execute(text(_variable_sql(
             'racemap', venue="'thompson'", event="'all'"))).scalar()
-    assert '{key: "1", value: "The Big One"}' in racemap
+    assert '{key: "1", value: "The \\"Big\\" One"}' in racemap
     assert racemap.startswith('[') and racemap.endswith(']')
-    assert racemap.count('"') == 4  # exactly the key/value quote pairs, none stray
 
 
-def test_the_race_map_strips_embedded_backslashes_from_names(db):
+def test_the_race_map_escapes_embedded_backslashes_in_names(db):
     # Flux string literals only recognize a fixed escape set (\n \r \t \" \\ \{
     # \}); an unrecognized escape is a compile error. A race named
     # Thompson \ Fall Classic emits an illegal `\ ` escape and breaks every
     # panel that interpolates racemap -- the same total-failure mode the
-    # embedded-quote strip guards against.
+    # embedded-quote escape guards against.
     with db.begin() as conn:
         conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
         conn.execute(text(
@@ -264,15 +263,16 @@ def test_the_race_map_strips_embedded_backslashes_from_names(db):
             "('1', '2024-06-01T12:00:00Z', 'thompson', 'Thompson \\ Fall Classic')"))
         racemap = conn.execute(text(_variable_sql(
             'racemap', venue="'thompson'", event="'all'"))).scalar()
-    assert '{key: "1", value: "Thompson  Fall Classic"}' in racemap
-    assert '\\' not in racemap
+    assert '{key: "1", value: "Thompson \\\\ Fall Classic"}' in racemap
 
 
-def test_the_pair_predicate_strips_embedded_double_quotes_from_car_number(db):
+def test_the_pair_predicate_escapes_embedded_double_quotes_in_car_number(db):
     # entries.car_number has no CHECK constraint and reaches the DB via a bare
     # CLI arg with only .strip() applied -- "digit strings" is not enforced.
     # A stray quote in car_number would close the Flux string literal early,
-    # the same failure mode racemap guards against for race names.
+    # the same failure mode racemap guards against for race names. car_number
+    # is matched against an Influx tag value, so the escape has to preserve the
+    # character rather than drop it -- a stripped 252 would match the wrong car.
     with db.begin() as conn:
         conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
         conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('wot', 'WOT Lemons')"))
@@ -284,8 +284,35 @@ def test_the_pair_predicate_strips_embedded_double_quotes_from_car_number(db):
             "('1', '25\"2', 'wot')"))
         predicate = conn.execute(text(_variable_sql(
             'pairs', team="'wot'", venue="'thompson'", event="'all'"))).scalar()
-    assert '(r.race_id == "1" and r.car_number == "252")' in predicate
+    assert '(r.race_id == "1" and r.car_number == "25\\"2")' in predicate
     assert "'" not in predicate
+
+
+def test_every_emitted_race_id_is_escaped(db):
+    # races.race_id is Text with no CHECK constraint and arrives as a bare CLI
+    # argument (entries.py's positional race_id), exactly like car_number. It
+    # is emitted into a Flux literal three times -- once in the pairs
+    # predicate and once as the key of each of the two dicts -- so an
+    # unescaped quote or backslash breaks every panel on the dashboard.
+    race_id = 'ab"c\\d'
+    with db.begin() as conn:
+        conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
+        conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('wot', 'WOT Lemons')"))
+        conn.execute(text(
+            "INSERT INTO races (race_id, race_time, venue_id) VALUES "
+            "(:race_id, '2024-06-01T12:00:00Z', 'thompson')"), {'race_id': race_id})
+        conn.execute(text(
+            "INSERT INTO entries (race_id, car_number, team_id) VALUES "
+            "(:race_id, '252', 'wot')"), {'race_id': race_id})
+        emitted = {name: conn.execute(text(_variable_sql(
+            name, team="'wot'", venue="'thompson'", event="'all'"))).scalar()
+            for name in ('pairs', 'yearmap', 'racemap')}
+
+    escaped = 'ab\\"c\\\\d'  # Flux source text: ab\"c\\d
+    assert emitted['pairs'] == f'(r.race_id == "{escaped}" and r.car_number == "252")'
+    assert emitted['yearmap'] == f'[{{key: "{escaped}", value: "2024"}}]'
+    # The name fallback embeds race_id a second time, and is escaped with it.
+    assert emitted['racemap'] == f'[{{key: "{escaped}", value: "race {escaped}"}}]'
 
 
 def _panel_query(panel):

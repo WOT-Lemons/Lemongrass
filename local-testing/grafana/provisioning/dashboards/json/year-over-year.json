@@ -199,10 +199,10 @@
         "type": "query",
         "hide": 2,
         "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
-        "definition": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', e.race_id, replace(replace(btrim(e.car_number), '\"', ''), '\\', '')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
+        "definition": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', replace(replace(e.race_id, '\\', '\\\\'), '\"', '\\\"'), replace(replace(btrim(e.car_number), '\\', '\\\\'), '\"', '\\\"')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
         "query": {
           "format": "table",
-          "rawSql": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', e.race_id, replace(replace(btrim(e.car_number), '\"', ''), '\\', '')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
+          "rawSql": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', replace(replace(e.race_id, '\\', '\\\\'), '\"', '\\\"'), replace(replace(btrim(e.car_number), '\\', '\\\\'), '\"', '\\\"')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
         },
         "refresh": 2,
         "sort": 0,
@@ -214,10 +214,10 @@
         "type": "query",
         "hide": 2,
         "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
-        "definition": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', r.race_id, extract(year FROM r.race_time AT TIME ZONE 'UTC')::int::text), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
+        "definition": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', replace(replace(r.race_id, '\\', '\\\\'), '\"', '\\\"'), extract(year FROM r.race_time AT TIME ZONE 'UTC')::int::text), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
         "query": {
           "format": "table",
-          "rawSql": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', r.race_id, extract(year FROM r.race_time AT TIME ZONE 'UTC')::int::text), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
+          "rawSql": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', replace(replace(r.race_id, '\\', '\\\\'), '\"', '\\\"'), extract(year FROM r.race_time AT TIME ZONE 'UTC')::int::text), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
         },
         "refresh": 2,
         "sort": 0,
@@ -229,10 +229,10 @@
         "type": "query",
         "hide": 2,
         "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
-        "definition": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', r.race_id, replace(replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\"', ''), '\\', '')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
+        "definition": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', replace(replace(r.race_id, '\\', '\\\\'), '\"', '\\\"'), replace(replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\\', '\\\\'), '\"', '\\\"')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
         "query": {
           "format": "table",
-          "rawSql": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', r.race_id, replace(replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\"', ''), '\\', '')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
+          "rawSql": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', replace(replace(r.race_id, '\\', '\\\\'), '\"', '\\\"'), replace(replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\\', '\\\\'), '\"', '\\\"')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
         },
         "refresh": 2,
         "sort": 0,
