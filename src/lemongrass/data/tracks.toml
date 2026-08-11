@@ -8,7 +8,7 @@
 # Rules the loader enforces, and the two the curator has to remember:
 #   * A venue declares NO [[venue.layout]] when no surveyed track name carries
 #     a course name — not necessarily because the venue has only one course
-#     ("pitt-race" has named configurations; none appear in the data).
+#     ("pittrace" has named configurations; none appear in the data).
 #   * Matching is one-directional prefix matching, so an input LONGER than the
 #     canonical name needs nothing ("Road Atlanta, Braselton GA"), but any form
 #     SHORTER than it must be listed as an alias ("Gingerman", "Nola").
@@ -81,7 +81,7 @@ aliases = ["njmp", "thunderbolt"]
   aliases = ["lightning"]
 
 [[venue]]
-id = "pitt-race"
+id = "pittrace"
 name = "Pittsburgh International Race Complex"
 aliases = ["pittsburgh int l race complex", "pittsburgh international raceway"]
 
