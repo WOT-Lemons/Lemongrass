@@ -178,3 +178,40 @@ def test_the_maps_fall_back_to_a_typed_sentinel_row(db):
             emitted = conn.execute(text(_variable_sql(
                 name, venue="'no-such-venue'", event="'all'"))).scalar()
             assert emitted == '[{key: "", value: ""}]', name
+
+
+def test_the_race_map_strips_embedded_double_quotes_from_names(db):
+    # races.name is free text. Without the replace(...) strip, a race named
+    # The "Big" One closes the Flux string literal early and breaks every
+    # panel that interpolates racemap -- the same failure mode the pairs
+    # predicate now guards against for car_number.
+    with db.begin() as conn:
+        conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
+        conn.execute(text(
+            "INSERT INTO races (race_id, race_time, venue_id, name) VALUES "
+            "('1', '2024-06-01T12:00:00Z', 'thompson', 'The \"Big\" One')"))
+        racemap = conn.execute(text(_variable_sql(
+            'racemap', venue="'thompson'", event="'all'"))).scalar()
+    assert '{key: "1", value: "The Big One"}' in racemap
+    assert racemap.startswith('[') and racemap.endswith(']')
+    assert racemap.count('"') == 4  # exactly the key/value quote pairs, none stray
+
+
+def test_the_pair_predicate_strips_embedded_double_quotes_from_car_number(db):
+    # entries.car_number has no CHECK constraint and reaches the DB via a bare
+    # CLI arg with only .strip() applied -- "digit strings" is not enforced.
+    # A stray quote in car_number would close the Flux string literal early,
+    # the same failure mode racemap guards against for race names.
+    with db.begin() as conn:
+        conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
+        conn.execute(text("INSERT INTO teams (team_id, name) VALUES ('wot', 'WOT Lemons')"))
+        conn.execute(text(
+            "INSERT INTO races (race_id, race_time, venue_id) VALUES "
+            "('1', '2024-06-01T12:00:00Z', 'thompson')"))
+        conn.execute(text(
+            "INSERT INTO entries (race_id, car_number, team_id) VALUES "
+            "('1', '25\"2', 'wot')"))
+        predicate = conn.execute(text(_variable_sql(
+            'pairs', team="'wot'", venue="'thompson'", event="'all'"))).scalar()
+    assert '(r.race_id == "1" and r.car_number == "252")' in predicate
+    assert "'" not in predicate
