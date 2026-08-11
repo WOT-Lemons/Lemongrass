@@ -4,7 +4,70 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
   "links": [],
-  "panels": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "barchart",
+      "title": "Lap time by year",
+      "description": "Median and best lap for the selected team at the selected venue. Grouped by the race's year from Postgres, never by the lap timestamp -- lap timestamps are synthetic and some legacy laps are anchored to 1970.",
+      "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisPlacement": "auto", "fillOpacity": 80, "lineWidth": 1},
+          "mappings": [],
+          "unit": "clockms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "year",
+        "orientation": "auto",
+        "showValue": "auto",
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\n\ndata =\n  from(bucket: \"laps\")\n    |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"lap\")\n    |> filter(fn: (r) => ${pairs:raw})\n    |> filter(fn: (r) => r._field == \"lap_time\")\n    |> map(fn: (r) => ({r with year: dict.get(dict: years, key: r.race_id, default: \"unknown\")}))\n    |> toFloat()\n\nmed =\n  data\n    |> group(columns: [\"year\"])\n    |> median()\n    |> map(fn: (r) => ({year: r.year, stat: \"median\", _value: r._value}))\n\nbest =\n  data\n    |> group(columns: [\"year\"])\n    |> min()\n    |> map(fn: (r) => ({year: r.year, stat: \"best\", _value: r._value}))\n\nunion(tables: [med, best])\n  |> pivot(rowKey: [\"year\"], columnKey: [\"stat\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"year\"])"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "barchart",
+      "title": "Total laps by year",
+      "description": "Raw lap-point count. Filtering to a single field is required: the laps bucket also holds standings points, and each lap point carries five to eight fields, so an unfiltered count overcounts roughly sixfold.",
+      "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisPlacement": "auto", "fillOpacity": 80, "lineWidth": 1},
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "year",
+        "orientation": "auto",
+        "showValue": "auto",
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "wotl-laps-flux"},
+          "query": "import \"dict\"\n\nyears = dict.fromList(pairs: ${yearmap:raw})\n\nlaps =\n  from(bucket: \"laps\")\n    |> range(start: 0, stop: 2100-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"lap\")\n    |> filter(fn: (r) => ${pairs:raw})\n    |> filter(fn: (r) => r._field == \"lap_no\")\n    |> map(fn: (r) => ({r with year: dict.get(dict: years, key: r.race_id, default: \"unknown\")}))\n\nlapCount =\n  laps\n    |> group(columns: [\"year\"])\n    |> count()\n    |> map(fn: (r) => ({year: r.year, stat: \"laps\", _value: r._value}))\n\nraceCount =\n  laps\n    |> group(columns: [\"year\"])\n    |> unique(column: \"race_id\")\n    |> count(column: \"race_id\")\n    |> map(fn: (r) => ({year: r.year, stat: \"races\", _value: r.race_id}))\n\nunion(tables: [lapCount, raceCount])\n  |> pivot(rowKey: [\"year\"], columnKey: [\"stat\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"year\"])"
+        }
+      ]
+    }
+  ],
   "preload": false,
   "refresh": "",
   "schemaVersion": 42,
