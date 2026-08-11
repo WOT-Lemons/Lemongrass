@@ -28,7 +28,7 @@ def test_shipped_file_loads_and_has_the_known_venues():
     data = _tracks.data()
     ids = {v.venue_id for v in data.venues}
     assert {"thompson", "gingerman", "the-ridge", "nola", "road-atlanta",
-            "sonoma", "high-plains", "autobahn", "njmp"} <= ids
+            "sonoma", "high-plains", "autobahn", "njmp", "pitt-race"} <= ids
     njmp = next(v for v in data.venues if v.venue_id == "njmp")
     assert {lay.layout_id for lay in njmp.layouts} == {"thunderbolt", "lightning"}
     thompson = next(v for v in data.venues if v.venue_id == "thompson")
@@ -278,6 +278,9 @@ def test_data_is_cached(tmp_path):
     ("New Jersey Motorsports Park - Lightning Course", "njmp", "lightning"),
     ("NJMP Thunderbolt", "njmp", "thunderbolt"),
     ("Thunderbolt", "njmp", None),
+    ("Pittsburgh International Race Complex", "pitt-race", None),
+    ("Pittsburgh Int'l Race Complex", "pitt-race", None),
+    ("Pittsburgh International Raceway", "pitt-race", None),
 ])
 def test_resolve_maps_every_known_spelling(track_name, venue_id, layout_id):
     got = _tracks.resolve(track_name, "", None)

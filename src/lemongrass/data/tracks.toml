@@ -72,6 +72,11 @@ aliases = ["njmp", "thunderbolt"]
   name = "Lightning Course"
   aliases = []
 
+[[venue]]
+id = "pitt-race"
+name = "Pittsburgh International Race Complex"
+aliases = ["pittsburgh int l race complex", "pittsburgh international raceway"]
+
 [[series]]
 id = 145   # 24 Hours of Lemons
 
