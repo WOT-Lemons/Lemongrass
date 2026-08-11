@@ -240,3 +240,92 @@ def test_list_sessions_without_a_race_id_returns_all(db):
     _db.upsert_session(_session(10, race_id="101"))
     _db.upsert_session(_session(20, race_id="202"))
     assert len(_db.list_sessions()) == 2
+
+
+def _track_data(venue_name="Thompson Speedway Motorsports Park"):
+    from lemongrass import _tracks
+    return _tracks.TrackData(
+        venues=(
+            _tracks.Venue(venue_id="thompson", name=venue_name,
+                          candidates=("thompson",), layouts=()),
+            _tracks.Venue(
+                venue_id="njmp", name="New Jersey Motorsports Park",
+                candidates=("new jersey motorsports park",),
+                layouts=(_tracks.Layout(layout_id="thunderbolt",
+                                        name="Thunderbolt Course",
+                                        candidates=("thunderbolt course",)),)),
+        ),
+        series=(
+            _tracks.Series(series_id=145, events=(
+                _tracks.Event(event_id="gp-du-lac", series_id=145,
+                              name="GP du Lac", keywords=("gp du lac",)),)),
+        ),
+    )
+
+
+def test_sync_tracks_creates_rows(db):
+    from sqlalchemy import text
+
+    from lemongrass import _db
+    summary = _db.sync_tracks(_track_data())
+    assert (summary["venues_created"], summary["layouts_created"],
+            summary["events_created"]) == (2, 1, 1)
+    with db.begin() as conn:
+        assert conn.execute(text(
+            "SELECT name FROM venues WHERE venue_id='thompson'")).scalar() == (
+            "Thompson Speedway Motorsports Park")
+        assert conn.execute(text(
+            "SELECT name FROM layouts WHERE venue_id='njmp' "
+            "AND layout_id='thunderbolt'")).scalar() == "Thunderbolt Course"
+        assert conn.execute(text(
+            "SELECT series_id FROM events WHERE event_id='gp-du-lac'")).scalar() == 145
+
+
+def test_sync_tracks_is_idempotent(db):
+    from lemongrass import _db
+    _db.sync_tracks(_track_data())
+    summary = _db.sync_tracks(_track_data())
+    assert (summary["venues_created"], summary["venues_updated"]) == (0, 0)
+    assert (summary["layouts_created"], summary["layouts_updated"]) == (0, 0)
+    assert (summary["events_created"], summary["events_updated"]) == (0, 0)
+
+
+def test_sync_tracks_updates_a_renamed_venue(db):
+    from sqlalchemy import text
+
+    from lemongrass import _db
+    _db.sync_tracks(_track_data(venue_name="Thompson Motor Speedway"))
+    summary = _db.sync_tracks(_track_data())
+    assert summary["venues_updated"] == 1
+    with db.begin() as conn:
+        assert conn.execute(text(
+            "SELECT name FROM venues WHERE venue_id='thompson'")).scalar() == (
+            "Thompson Speedway Motorsports Park")
+
+
+def test_sync_tracks_reports_rows_with_no_file_counterpart(db):
+    from sqlalchemy import text
+
+    from lemongrass import _db
+    with db.begin() as conn:
+        conn.execute(text("INSERT INTO venues (venue_id, name) "
+                          "VALUES ('gone', 'Closed Track')"))
+        conn.execute(text("INSERT INTO events (event_id, series_id, name) "
+                          "VALUES ('old', 145, 'Old Event')"))
+    summary = _db.sync_tracks(_track_data())
+    assert summary["orphan_venues"] == ["gone"]
+    assert summary["orphan_events"] == ["old"]
+    # Never deleted: a removed venue may still be referenced by stored races.
+    with db.begin() as conn:
+        assert conn.execute(text(
+            "SELECT count(*) FROM venues WHERE venue_id='gone'")).scalar() == 1
+
+
+def test_sync_tracks_dry_run_writes_nothing(db):
+    from sqlalchemy import text
+
+    from lemongrass import _db
+    summary = _db.sync_tracks(_track_data(), dry_run=True)
+    assert summary["venues_created"] == 2
+    with db.begin() as conn:
+        assert conn.execute(text("SELECT count(*) FROM venues")).scalar() == 0

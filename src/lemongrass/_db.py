@@ -355,3 +355,84 @@ def list_sessions(race_id=None, conn=None):
     with connection(conn) as c:
         rows = c.execute(stmt).all()
     return [_session_row(r) for r in rows]
+
+
+def sync_tracks(data, dry_run=False, conn=None):
+    """Make the venue/layout/event tables agree with the curated track data.
+
+    Upsert-only, deliberately: a venue removed from the file may still be
+    referenced by stored races, and silently breaking that is worse than a
+    stale row. Rows with no file counterpart are reported instead, for manual
+    handling. (Consequently layouts' ON DELETE CASCADE never fires in practice
+    — races_layout_fk is NO ACTION and would block the delete anyway.)
+
+    ``data`` is a ``_tracks.TrackData``; it is read structurally so this module
+    keeps its SQL-only role and takes no import on the curated-data layer.
+    Returns a summary of what changed (or would change, under dry_run).
+    """
+    from sqlalchemy import select
+    from sqlalchemy.dialects.postgresql import insert
+    summary = {
+        'venues_created': 0, 'venues_updated': 0,
+        'layouts_created': 0, 'layouts_updated': 0,
+        'events_created': 0, 'events_updated': 0,
+        'orphan_venues': [], 'orphan_layouts': [], 'orphan_events': [],
+    }
+    with connection(conn) as c:
+        stored_venues = {r.venue_id: r.name
+                         for r in c.execute(select(_schema.venues)).all()}
+        stored_layouts = {(r.venue_id, r.layout_id): r.name
+                          for r in c.execute(select(_schema.layouts)).all()}
+        stored_events = {r.event_id: (r.series_id, r.name)
+                         for r in c.execute(select(_schema.events)).all()}
+
+        file_venues, file_layouts, file_events = set(), set(), set()
+        for venue in data.venues:
+            file_venues.add(venue.venue_id)
+            if venue.venue_id not in stored_venues:
+                summary['venues_created'] += 1
+            elif stored_venues[venue.venue_id] != venue.name:
+                summary['venues_updated'] += 1
+            if not dry_run:
+                stmt = insert(_schema.venues).values(
+                    venue_id=venue.venue_id, name=venue.name)
+                c.execute(stmt.on_conflict_do_update(
+                    index_elements=[_schema.venues.c.venue_id],
+                    set_={'name': stmt.excluded.name}))
+            for layout in venue.layouts:
+                key = (venue.venue_id, layout.layout_id)
+                file_layouts.add(key)
+                if key not in stored_layouts:
+                    summary['layouts_created'] += 1
+                elif stored_layouts[key] != layout.name:
+                    summary['layouts_updated'] += 1
+                if not dry_run:
+                    stmt = insert(_schema.layouts).values(
+                        venue_id=venue.venue_id, layout_id=layout.layout_id,
+                        name=layout.name)
+                    c.execute(stmt.on_conflict_do_update(
+                        index_elements=[_schema.layouts.c.venue_id,
+                                        _schema.layouts.c.layout_id],
+                        set_={'name': stmt.excluded.name}))
+
+        for series in data.series:
+            for event in series.events:
+                file_events.add(event.event_id)
+                current = (event.series_id, event.name)
+                if event.event_id not in stored_events:
+                    summary['events_created'] += 1
+                elif stored_events[event.event_id] != current:
+                    summary['events_updated'] += 1
+                if not dry_run:
+                    stmt = insert(_schema.events).values(
+                        event_id=event.event_id, series_id=event.series_id,
+                        name=event.name)
+                    c.execute(stmt.on_conflict_do_update(
+                        index_elements=[_schema.events.c.event_id],
+                        set_={'series_id': stmt.excluded.series_id,
+                              'name': stmt.excluded.name}))
+
+    summary['orphan_venues'] = sorted(set(stored_venues) - file_venues)
+    summary['orphan_layouts'] = sorted(set(stored_layouts) - file_layouts)
+    summary['orphan_events'] = sorted(set(stored_events) - file_events)
+    return summary

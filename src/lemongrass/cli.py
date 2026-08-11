@@ -18,6 +18,7 @@ _COMMANDS = {
     "laps": "lemongrass.laps",
     "race-backfill": "lemongrass.race_backfill",
     "races": "lemongrass.races",
+    "tracks": "lemongrass.tracks",
     "telem": "lemongrass.telem",
     "pisugar-monitor": "lemongrass.pisugar_monitor",
     "race-diagnose": "lemongrass.race_diagnose",
