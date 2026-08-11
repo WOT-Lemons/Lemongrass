@@ -129,7 +129,7 @@
       "gridPos": {"h": 6, "w": 24, "x": 0, "y": 19},
       "options": {
         "mode": "markdown",
-        "content": "**Lap counts are raw lap points**, not distinct lap numbers. Lap numbers restart at 1 in every session, so counting distinct ones undercounts multi-session races.\n\n**TotalTime collisions lose a few laps.** When two of a car's laps share a total time, they collapse onto one timestamp. Race 113450 stores 38,143 of the 38,155 laps written -- 12 short. Reproducible on every backfill; fixing it needs `lap_no` as a tag, which is a schema version bump.\n\n**Races missing from this view are unresolved, not missing data.** A race with no `venue_id` belongs to no venue here, and a race with no `entries` row belongs to no team. Those are the worklists `races identify --dry-run` and `entries propose` report -- curate the data rather than loosening the dashboard."
+        "content": "**Lap counts are raw lap points**, not distinct lap numbers. Lap numbers restart at 1 in every session, so counting distinct ones undercounts multi-session races.\n\n**TotalTime collisions lose a few laps.** When two of a car's laps share a total time, they collapse onto one timestamp. Race 113450 stores 38,143 of the 38,155 laps written -- 12 short. Reproducible on every backfill; fixing it needs `lap_no` as a tag, which is a schema version bump.\n\n**Races missing from this view are unresolved, not missing data.** A race with no `venue_id` belongs to no venue here, and a race with no `entries` row belongs to no team. Those are the worklists `races identify --dry-run` and `entries propose` report -- curate the data rather than loosening the dashboard.\n\n**A resolved race can still be absent.** Panels 2 and 3 count races from the Influx lap stream, not Postgres: a race with entries but no captured laps, or an `entries.car_number` that does not match the tag Influx stores, contributes zero laps and vanishes from those panels even though it is fully resolved."
       }
     }
   ],
@@ -189,10 +189,10 @@
         "type": "query",
         "hide": 2,
         "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
-        "definition": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', e.race_id, replace(btrim(e.car_number), '\"', '')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
+        "definition": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', e.race_id, replace(replace(btrim(e.car_number), '\"', ''), '\\', '')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
         "query": {
           "format": "table",
-          "rawSql": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', e.race_id, replace(btrim(e.car_number), '\"', '')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
+          "rawSql": "SELECT coalesce(string_agg(format('(r.race_id == \"%s\" and r.car_number == \"%s\")', e.race_id, replace(replace(btrim(e.car_number), '\"', ''), '\\', '')), ' or '), 'false') AS \"__value\" FROM entries e JOIN races r ON r.race_id = e.race_id WHERE e.team_id = ${team:sqlstring} AND r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
         },
         "refresh": 2,
         "sort": 0,
@@ -219,10 +219,10 @@
         "type": "query",
         "hide": 2,
         "datasource": {"type": "grafana-postgresql-datasource", "uid": "wotl-postgres"},
-        "definition": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', r.race_id, replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\"', '')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
+        "definition": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', r.race_id, replace(replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\"', ''), '\\', '')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})",
         "query": {
           "format": "table",
-          "rawSql": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', r.race_id, replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\"', '')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
+          "rawSql": "SELECT coalesce('[' || string_agg(format('{key: \"%s\", value: \"%s\"}', r.race_id, replace(replace(coalesce(nullif(r.name, ''), 'race ' || r.race_id), '\"', ''), '\\', '')), ', ') || ']', '[{key: \"\", value: \"\"}]') AS \"__value\" FROM races r WHERE r.venue_id = ${venue:sqlstring} AND (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring})"
         },
         "refresh": 2,
         "sort": 0,

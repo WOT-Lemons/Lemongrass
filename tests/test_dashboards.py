@@ -7,6 +7,7 @@ race, so the ones with a NULL-handling decision in them are exercised here.
 """
 import json
 import pathlib
+import re
 
 from sqlalchemy import text
 
@@ -136,6 +137,22 @@ def test_the_pair_predicate_keeps_pairs_paired(db):
     assert '(r.race_id == "1" and r.car_number == "253")' not in predicate
 
 
+def test_the_pair_predicate_narrows_to_the_selected_event(db):
+    # event="'all'" (used by every other test here) takes the left side of
+    # (${event:sqlstring} = 'all' OR r.event_id = ${event:sqlstring}) and
+    # short-circuits the event filter entirely -- this is the one test that
+    # exercises the right side, by actually selecting a specific event.
+    with db.begin() as conn:
+        _venue_with_two_races(conn)
+        conn.execute(text(
+            "INSERT INTO events (event_id, series_id, name) VALUES ('aaa', 1, 'AAA Event')"))
+        conn.execute(text("UPDATE races SET event_id = 'aaa' WHERE race_id = '1'"))
+        predicate = conn.execute(text(_variable_sql(
+            'pairs', team="'wot'", venue="'thompson'", event="'aaa'"))).scalar()
+    assert '(r.race_id == "1" and r.car_number == "252")' in predicate
+    assert '(r.race_id == "2" and r.car_number == "253")' not in predicate
+
+
 def test_the_pair_predicate_emits_flux_double_quotes(db):
     # Flux has no single-quoted string literal, so %L (which quotes with single
     # quotes) produces source that fails to compile. Nothing downstream would
@@ -168,6 +185,23 @@ def test_the_year_map_is_a_flux_list_of_utc_years(db):
     assert yearmap.startswith('[') and yearmap.endswith(']')
 
 
+def test_the_year_map_uses_utc_regardless_of_session_timezone(db):
+    # A race just after midnight UTC on Jan 1 is still Dec 31 in New York. If
+    # the AT TIME ZONE 'UTC' clause were dropped, extract(year FROM ...) would
+    # follow the session's TimeZone setting instead and this race would land
+    # in the wrong year -- 2024, not 2025.
+    with db.begin() as conn:
+        conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
+        conn.execute(text(
+            "INSERT INTO races (race_id, race_time, venue_id) VALUES "
+            "('3', '2025-01-01T00:30:00Z', 'thompson')"))
+        conn.execute(text("SET TIME ZONE 'America/New_York'"))
+        yearmap = conn.execute(text(_variable_sql(
+            'yearmap', venue="'thompson'", event="'all'"))).scalar()
+    assert '{key: "3", value: "2025"}' in yearmap
+    assert '{key: "3", value: "2024"}' not in yearmap
+
+
 def test_the_maps_fall_back_to_a_typed_sentinel_row(db):
     # dict.fromList(pairs: []) has no types to infer and fails the whole query
     # with a 500 ("invalid key nature: invalid") -- not an empty panel. A typed
@@ -197,6 +231,23 @@ def test_the_race_map_strips_embedded_double_quotes_from_names(db):
     assert racemap.count('"') == 4  # exactly the key/value quote pairs, none stray
 
 
+def test_the_race_map_strips_embedded_backslashes_from_names(db):
+    # Flux string literals only recognize a fixed escape set (\n \r \t \" \\ \{
+    # \}); an unrecognized escape is a compile error. A race named
+    # Thompson \ Fall Classic emits an illegal `\ ` escape and breaks every
+    # panel that interpolates racemap -- the same total-failure mode the
+    # embedded-quote strip guards against.
+    with db.begin() as conn:
+        conn.execute(text("INSERT INTO venues (venue_id, name) VALUES ('thompson', 'Thompson')"))
+        conn.execute(text(
+            "INSERT INTO races (race_id, race_time, venue_id, name) VALUES "
+            "('1', '2024-06-01T12:00:00Z', 'thompson', 'Thompson \\ Fall Classic')"))
+        racemap = conn.execute(text(_variable_sql(
+            'racemap', venue="'thompson'", event="'all'"))).scalar()
+    assert '{key: "1", value: "Thompson  Fall Classic"}' in racemap
+    assert '\\' not in racemap
+
+
 def test_the_pair_predicate_strips_embedded_double_quotes_from_car_number(db):
     # entries.car_number has no CHECK constraint and reaches the DB via a bare
     # CLI arg with only .strip() applied -- "digit strings" is not enforced.
@@ -217,15 +268,44 @@ def test_the_pair_predicate_strips_embedded_double_quotes_from_car_number(db):
     assert "'" not in predicate
 
 
+def _panel_query(panel):
+    return panel['targets'][0]['query']
+
+
+def test_the_lap_and_race_count_panels_share_a_byte_identical_query():
+    # Panels 2 and 3 carry the same ~1000-character Flux query by design --
+    # provisioned JSON has no shared-query mechanism. Nothing else catches
+    # drift between them if one gets edited and the other doesn't.
+    panels = {p['id']: p for p in _panels(json.loads(YEAR_OVER_YEAR.read_text()))}
+    assert _panel_query(panels[2]) == _panel_query(panels[3])
+
+
+def test_the_query_panels_share_their_load_bearing_flux_constraints():
+    panels = {p['id']: p for p in _panels(json.loads(YEAR_OVER_YEAR.read_text()))}
+    for panel_id in (1, 2, 3, 4):
+        query = _panel_query(panels[panel_id])
+        assert 'range(start: 0, stop: 2100-01-01T00:00:00Z)' in query, panel_id
+        assert '_measurement == "lap"' in query, panel_id
+        for match in re.findall(r'\$\{[^}]*\}', query):
+            assert match.endswith(':raw}'), (panel_id, match)
+    for panel_id in (2, 3):
+        assert '_field == "lap_no"' in _panel_query(panels[panel_id]), panel_id
+
+
 def test_the_best_lap_tile_links_into_the_per_race_dashboard():
     # The link is the only drill-down from an aggregate back to a single race.
     # laps.json's uid and its race variable name are what make it resolve; a
     # typo here degrades silently into a link that opens an unfiltered board.
+    laps_dashboard = json.loads(DASHBOARD.read_text())
+    laps_uid = laps_dashboard['uid']
+    var_names = {var['name'] for var in laps_dashboard['templating']['list']}
+    assert 'raceid' in var_names
+
     for panel in _panels(json.loads(YEAR_OVER_YEAR.read_text())):
         if panel.get('title') == 'Best lap ever':
             links = panel['fieldConfig']['defaults']['links']
             assert len(links) == 1
-            assert 'SI7eTlIMk' in links[0]['url']
+            assert laps_uid in links[0]['url']
             assert 'var-raceid=${__data.fields.race_id}' in links[0]['url']
             return
     raise AssertionError('no "Best lap ever" panel found in the dashboard')
