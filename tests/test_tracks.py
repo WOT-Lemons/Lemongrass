@@ -278,6 +278,7 @@ def test_data_is_cached(tmp_path):
     ("New Jersey Motorsports Park - Lightning Course", "njmp", "lightning"),
     ("NJMP Thunderbolt", "njmp", "thunderbolt"),
     ("Thunderbolt", "njmp", None),
+    ("NJMP Lightning", "njmp", "lightning"),
     ("Pittsburgh International Race Complex", "pitt-race", None),
     ("Pittsburgh Int'l Race Complex", "pitt-race", None),
     ("Pittsburgh International Raceway", "pitt-race", None),

@@ -6,10 +6,17 @@
 # re-tags stored races from it and reports every track name it could not match.
 #
 # Rules the loader enforces, and the two the curator has to remember:
-#   * A venue whose only course is unnamed declares NO [[venue.layout]] at all.
+#   * A venue declares NO [[venue.layout]] when no surveyed track name carries
+#     a course name — not necessarily because the venue has only one course
+#     ("pitt-race" has named configurations; none appear in the data).
 #   * Matching is one-directional prefix matching, so an input LONGER than the
 #     canonical name needs nothing ("Road Atlanta, Braselton GA"), but any form
 #     SHORTER than it must be listed as an alias ("Gingerman", "Nola").
+#
+# A layout name may be promoted to a VENUE alias when the production data
+# carries it with no venue prefix at all ("thunderbolt" on "njmp"). This
+# trades layout precision (layout ends up NULL) for venue resolution, and
+# is intentional, not a bug to be "fixed" away.
 
 [[venue]]
 id = "thompson"
@@ -70,7 +77,7 @@ aliases = ["njmp", "thunderbolt"]
   [[venue.layout]]
   id = "lightning"
   name = "Lightning Course"
-  aliases = []
+  aliases = ["lightning"]
 
 [[venue]]
 id = "pitt-race"
