@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.1.1](https://github.com/WOT-Lemons/Lemongrass/compare/v7.1.0...v7.1.1) (2026-08-16)
+
+
+### Dependencies
+
+* update python:3.14-slim-trixie docker digest to ce40764 ([#271](https://github.com/WOT-Lemons/Lemongrass/issues/271)) ([ae169c5](https://github.com/WOT-Lemons/Lemongrass/commit/ae169c5e5ed7bb1575535f0ce6c44bec07018541))
+
 ## [7.1.0](https://github.com/WOT-Lemons/Lemongrass/compare/v7.0.0...v7.1.0) (2026-08-11)
 
 
