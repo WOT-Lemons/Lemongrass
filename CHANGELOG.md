@@ -1,5 +1,13 @@
 # Changelog
 
+## [7.1.4](https://github.com/WOT-Lemons/Lemongrass/compare/v7.1.3...v7.1.4) (2026-09-27)
+
+
+### Dependencies
+
+* lock file maintenance ([#295](https://github.com/WOT-Lemons/Lemongrass/issues/295)) ([934f928](https://github.com/WOT-Lemons/Lemongrass/commit/934f928ef3fe21c6f48e3e0d4e80ccc171b383c6))
+* update python:3.14-slim-trixie docker digest to 51dafde ([#300](https://github.com/WOT-Lemons/Lemongrass/issues/300)) ([8b1e232](https://github.com/WOT-Lemons/Lemongrass/commit/8b1e232ae5f3459ecfe25141eb06e87e406faa8a))
+
 ## [7.1.3](https://github.com/WOT-Lemons/Lemongrass/compare/v7.1.2...v7.1.3) (2026-09-07)
 
 
