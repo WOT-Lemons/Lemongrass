@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:0.12.19-python3.14-trixie@sha256:c3534062316f77847b8d6b9aff1ffd2886c7838c3bea71a2f19051c778c2c383 AS builder
+FROM ghcr.io/astral-sh/uv:0.12.22-python3.14-trixie@sha256:e22a6c41bb3dbbe300531efa47f8470838b0a3e7f1af26db3e108507db6502c3 AS builder
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 COPY pyproject.toml uv.lock README.md LICENSE ./
