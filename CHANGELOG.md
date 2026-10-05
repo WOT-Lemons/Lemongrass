@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.1.6](https://github.com/WOT-Lemons/Lemongrass/compare/v7.1.5...v7.1.6) (2026-10-05)
+
+
+### Dependencies
+
+* lock file maintenance ([#313](https://github.com/WOT-Lemons/Lemongrass/issues/313)) ([29a8a04](https://github.com/WOT-Lemons/Lemongrass/commit/29a8a0428e7b9738a861c194b5d451d3ccda3f03))
+
 ## [7.1.5](https://github.com/WOT-Lemons/Lemongrass/compare/v7.1.4...v7.1.5) (2026-10-03)
 
 
