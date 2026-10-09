@@ -5,7 +5,7 @@ COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src/ src/
 RUN uv sync --frozen --no-dev --no-editable
 
-FROM python:3.14-slim-trixie@sha256:0741d101873c12ab927e6f8653feb8862b9bd58771177acb1b885b95141f91b4
+FROM python:3.14-slim-trixie@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
