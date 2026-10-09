@@ -5,7 +5,7 @@ name: lemongrass-local
 
 services:
   influxdb:
-    image: influxdb:2@sha256:db0bdab1e5ad5ee899c127b8c13d9c986a3ced78cd9200dd80a1064bf1533b6e
+    image: influxdb:2@sha256:cdd3dbdea45c2f43513abd06ee9644b6e05d2354a2b93ca829c9f07d716eaaac
     ports:
       - "127.0.0.1:8086:8086"
     environment:
@@ -25,7 +25,7 @@ services:
       retries: 12
 
   postgres:
-    image: postgres:18@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+    image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
     # Published so the CLI can run on the host against the local stack, the same
     # reason influxdb publishes 8086. Without this, `lemongrass db upgrade`
     # cannot reach the database.
