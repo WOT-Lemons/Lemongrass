@@ -39,7 +39,7 @@ Source = "https://github.com/WOT-Lemons/Lemongrass"
 Changelog = "https://github.com/WOT-Lemons/Lemongrass/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["uv-build>=0.12,<0.13"]
+requires = ["uv-build>=0.13,<0.14"]
 build-backend = "uv_build"
 
 [project.scripts]
