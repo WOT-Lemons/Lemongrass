@@ -102,10 +102,10 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
 
    or open Grafana at http://localhost:3000 (login `admin` / `local-dev-password`)
    — the InfluxDB datasource and lemongrass dashboards (**laps**, **race-control**, **standings**)
-   are pre-provisioned. The **telegraf** dashboard and the OBD panels in **race-control** render
-   emulated telemetry from the `telem` service, which starts with the default stack (see
-   "Emulated OBD telemetry" below). **car252-pisugar-ups** stays empty — it needs PiSugar UPS
-   hardware.
+   are pre-provisioned. The OBD panels in **race-control** render emulated telemetry from the
+   `telem` service, which starts with the default stack (see "Emulated OBD telemetry" below).
+   **car252-pisugar-ups** stays empty — it needs PiSugar UPS hardware. **telegraf** stays empty
+   too — the stack runs no Telegraf agent to write host metrics to `system_metrics/autogen`.
 
 5. Tear down (add `-v` to wipe data and re-trigger bucket init next start):
 
