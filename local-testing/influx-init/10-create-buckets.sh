@@ -14,12 +14,11 @@ for bucket in races race_sessions telem pisugar; do
     --token "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"
 done
 
-# stats_252 telemetry migrated from InfluxDB v1, so its bucket is NAMED
-# `stats_252/autogen` (v1 db/rp). telem + pisugar_monitor write to that exact
-# name via the v2 API, which matches on bucket name and ignores DBRP mappings —
-# so a bare `stats_252` bucket would 404 those writes.
+# Telegraf writes host metrics to a bucket NAMED `system_metrics/autogen` (v1
+# db/rp, kept from its InfluxDB v1 origin). The v2 write API matches on bucket
+# name and ignores DBRP mappings, so the bucket needs that literal name.
 influx bucket create \
-  --name 'stats_252/autogen' \
+  --name 'system_metrics/autogen' \
   --org "$DOCKER_INFLUXDB_INIT_ORG" \
   --host "http://localhost:${INFLUXD_INIT_PORT:-9999}" \
   --token "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"
