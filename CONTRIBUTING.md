@@ -62,7 +62,7 @@ When prod is unavailable, run the full pipeline against a local InfluxDB.
    `--build` builds the `elm327` and `telem` images on first start (and after
    changes). First start creates org `lemongrass`, a pinned operator token
    (`local-dev-token`), and the `laps`, `races`, `race_sessions`, `telem`,
-   `pisugar`, and legacy `stats_252/autogen` buckets. These are non-secret,
+   `pisugar`, and `system_metrics/autogen` buckets. These are non-secret,
    local-only values.
 
    A one-shot `grafana-library-panels` container also runs on every `up`. Grafana
