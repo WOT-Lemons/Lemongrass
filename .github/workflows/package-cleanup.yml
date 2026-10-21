@@ -12,7 +12,7 @@ on:
 jobs:
   cleanup-pr:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       packages: write
     strategy:
@@ -35,7 +35,7 @@ jobs:
 
   cleanup-scheduled:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       packages: write
     strategy:
