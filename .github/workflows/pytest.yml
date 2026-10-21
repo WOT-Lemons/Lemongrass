@@ -24,7 +24,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     services:
       postgres:
-        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        image: postgres:18@sha256:1267c7e692de235fda2a50dbcdbcbca4672ea6a0298576a6bd9d07cafc319b32
         env:
           POSTGRES_USER: lemongrass
           POSTGRES_PASSWORD: local-dev-password
