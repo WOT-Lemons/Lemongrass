@@ -29,7 +29,8 @@
           }
         ]
       },
-      "unit": "volt"
+      "unit": "volt",
+      "noValue": "Offline"
     },
     "overrides": []
   },
@@ -41,7 +42,7 @@
   },
   "options": {
     "colorMode": "background",
-    "graphMode": "area",
+    "graphMode": "none",
     "justifyMode": "auto",
     "orientation": "auto",
     "percentChangeColorMode": "standard",
@@ -106,5 +107,7 @@
     }
   ],
   "title": "PiSugar Battery Voltage",
-  "type": "stat"
+  "type": "stat",
+  "timeFrom": "1m",
+  "hideTimeOverride": true
 }

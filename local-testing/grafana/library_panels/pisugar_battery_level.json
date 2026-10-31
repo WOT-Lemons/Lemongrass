@@ -27,7 +27,8 @@
           }
         ]
       },
-      "unit": "percent"
+      "unit": "percent",
+      "noValue": "Offline"
     },
     "overrides": []
   },
@@ -102,5 +103,7 @@
     }
   ],
   "title": "PiSugar Battery Level",
-  "type": "gauge"
+  "type": "gauge",
+  "timeFrom": "1m",
+  "hideTimeOverride": true
 }

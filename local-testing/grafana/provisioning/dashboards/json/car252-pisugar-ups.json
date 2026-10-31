@@ -85,7 +85,8 @@
               }
             ]
           },
-          "unit": "celsius"
+          "unit": "celsius",
+          "noValue": "Offline"
         },
         "overrides": []
       },
@@ -98,7 +99,7 @@
       "id": 5,
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "percentChangeColorMode": "standard",
@@ -163,7 +164,9 @@
         }
       ],
       "title": "PiSugar Temperature",
-      "type": "stat"
+      "type": "stat",
+      "timeFrom": "1m",
+      "hideTimeOverride": true
     },
     {
       "gridPos": {

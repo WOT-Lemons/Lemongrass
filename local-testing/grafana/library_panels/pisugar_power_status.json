@@ -34,7 +34,8 @@
             "value": null
           }
         ]
-      }
+      },
+      "noValue": "Offline"
     },
     "overrides": []
   },
@@ -46,7 +47,7 @@
   },
   "options": {
     "colorMode": "background",
-    "graphMode": "area",
+    "graphMode": "none",
     "justifyMode": "auto",
     "orientation": "auto",
     "percentChangeColorMode": "standard",
@@ -111,5 +112,7 @@
     }
   ],
   "title": "PiSugar Power Status",
-  "type": "stat"
+  "type": "stat",
+  "timeFrom": "1m",
+  "hideTimeOverride": true
 }
