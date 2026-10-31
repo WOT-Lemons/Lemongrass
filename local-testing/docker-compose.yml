@@ -5,7 +5,7 @@ name: lemongrass-local
 
 services:
   influxdb:
-    image: influxdb:2@sha256:8f106f7ff12659c5e367b99f8a0e7d14cbd4e6ca1f2914094062db6a9813d9c2
+    image: influxdb:2@sha256:a450f6faf9573e6c2e96a0f575885ae8b7387cc87e4de94599e247ebfa3ac417
     ports:
       - "127.0.0.1:8086:8086"
     environment:
