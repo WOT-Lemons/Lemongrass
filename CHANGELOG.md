@@ -1,5 +1,13 @@
 # Changelog
 
+## [7.1.11](https://github.com/WOT-Lemons/Lemongrass/compare/v7.1.10...v7.1.11) (2026-10-31)
+
+
+### Dependencies
+
+* **docker:** build the venv with python 3.15 to match the runtime image ([#363](https://github.com/WOT-Lemons/Lemongrass/issues/363)) ([e1d3999](https://github.com/WOT-Lemons/Lemongrass/commit/e1d39996f91920ab1b946fc7c14ef47736f70bb8))
+* lock file maintenance ([#352](https://github.com/WOT-Lemons/Lemongrass/issues/352)) ([1f04b27](https://github.com/WOT-Lemons/Lemongrass/commit/1f04b27a4790646956ff4768c82b1f85a44aae42))
+
 ## [7.1.10](https://github.com/WOT-Lemons/Lemongrass/compare/v7.1.9...v7.1.10) (2026-10-22)
 
 
