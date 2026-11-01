@@ -1,24 +1,26 @@
 # Upgrading
 
-These major versions require action when you upgrade. For all breaking changes, see
-[CHANGELOG.md](../CHANGELOG.md).
+This document gives the steps that you must do when you upgrade to a new major
+version. For all breaking changes, see [CHANGELOG.md](../CHANGELOG.md).
 
-If you upgrade across several major versions, do the steps for each one, oldest
-first. Run `lemongrass races backfill --upgrade-stored` only once, after all other
-steps.
+If you upgrade across more than one major version, do the steps for each version.
+Start with the oldest version. Run `lemongrass races backfill --upgrade-stored` only
+one time, after all other steps.
 
 ## To 7.x
 
-Race and session metadata moved from InfluxDB to PostgreSQL. Before you deploy:
+lemongrass stores race and session metadata in PostgreSQL, not InfluxDB. Before you
+deploy version 7:
 
 1. Set up PostgreSQL 14 or later.
-2. Add `[postgres]` to the config file and set `LEMONGRASS_DB_PASSWORD`.
-3. Follow the runbook in
+2. Add a `[postgres]` section to the config file.
+3. Set `LEMONGRASS_DB_PASSWORD`.
+4. Follow the runbook in
    [local-testing/migrations/README.md](../local-testing/migrations/README.md).
 
 ## To 6.x
 
-The lap schema changed. Reprocess stored races:
+The lap schema changed. Import the stored races again:
 
 ```shell
 lemongrass races backfill --upgrade-stored
@@ -31,19 +33,21 @@ Non-secret settings moved from environment variables to a TOML file. See
 
 ## To 3.x
 
-`competitor_name` and `car_info` changed from tags to fields on the `lap` and
-`standings` measurements. Reprocess stored races:
+On the `lap` and `standings` measurements, `competitor_name` and `car_info` changed
+from tags to fields.
 
-```shell
-lemongrass races backfill --upgrade-stored
-```
+1. Import the stored races again:
 
-Update Grafana queries that group or pivot on these tags.
+   ```shell
+   lemongrass races backfill --upgrade-stored
+   ```
+
+2. Update the Grafana queries that group or pivot on these tags.
 
 ## To 2.x
 
-The separate commands were replaced by one `lemongrass` command. Add the
-`lemongrass` prefix:
+One `lemongrass` command replaces the separate commands. Add `lemongrass` before
+each command:
 
 | Before | After |
 | --- | --- |
