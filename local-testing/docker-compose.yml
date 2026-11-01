@@ -45,6 +45,32 @@ services:
       timeout: 3s
       retries: 12
 
+  # Postgres only creates an empty database. This one-shot container applies the
+  # schema (every migration, plus the curated tracks data) so a fresh volume comes
+  # up with all tables, and an existing one picks up any newer migrations.
+  db-schema:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command:
+      - /bin/sh
+      - -c
+      - |
+        cat > /tmp/lemongrass.toml <<'TOML'
+        [postgres]
+        host = "postgres"
+        port = 5432
+        database = "lemongrass"
+        user = "lemongrass"
+        TOML
+        exec lemongrass db upgrade
+    environment:
+      LEMONGRASS_CONFIG: /tmp/lemongrass.toml
+      LEMONGRASS_DB_PASSWORD: local-dev-password
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   grafana:
     image: grafana/grafana:13.2@sha256:9f7aa1e1e3246aade5792d35a738049f7f32f89cd51d1956cf426a4e86268a84
     ports:
@@ -52,8 +78,8 @@ services:
     depends_on:
       influxdb:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-schema:
+        condition: service_completed_successfully
     environment:
       GF_SECURITY_ADMIN_PASSWORD: local-dev-password
     volumes:
