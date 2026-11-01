@@ -1,34 +1,37 @@
 # Configuration
 
-lemongrass reads its non-secret settings from two layers, highest priority first:
+lemongrass reads non-secret settings from two sources. The first source has
+priority:
 
-1. **A TOML config file** — pointed to by the `LEMONGRASS_CONFIG` environment variable
-   (an absolute path). Optional; if unset, no file is read.
-2. **Built-in defaults** — the values shipped in the code.
+1. **A TOML file.** The `LEMONGRASS_CONFIG` environment variable gives the absolute
+   path to the file. The file is optional.
+2. **Built-in defaults.**
 
-Environment variables are used **only for secrets** (see below) — they do not override any
-non-secret setting. With no config file, lemongrass runs on its built-in defaults. Copy
-`lemongrass.toml.sample` (every key at its default) as a starting point and edit down.
+lemongrass reads only secrets from environment variables. Environment variables do
+not change other settings. To make a config file, copy `lemongrass.toml.sample`. This
+file contains all keys with their default values.
 
 ## Secrets
 
-Secrets are never stored in the config file. The file instead names the environment
-variable that holds each secret (`*_env` directives):
+Do not put secrets in the config file. For each secret, a `*_env` key gives the name
+of the environment variable that contains the secret:
 
-| Secret | Directive (default) | Env var read |
+| Secret | Key (default) | Notes |
 |---|---|---|
-| InfluxDB token | `influx.token_env` = `"INFLUX_TELEMETRY_TOKEN"` | value of that var |
-| RaceMonitor token pool | `racemonitor.tokens_env` = `"RACEMONITOR_TOKENS"` | comma-separated; legacy singular `RACEMONITOR_TOKEN` also honored |
-| PostgreSQL password | `postgres.password_env` = `"LEMONGRASS_DB_PASSWORD"` | value of that var |
+| InfluxDB token | `influx.token_env` = `"INFLUX_TELEMETRY_TOKEN"` | |
+| RaceMonitor tokens | `racemonitor.tokens_env` = `"RACEMONITOR_TOKENS"` | Separate tokens with commas. lemongrass also reads the legacy variable `RACEMONITOR_TOKEN`, which contains one token. |
+| PostgreSQL password | `postgres.password_env` = `"LEMONGRASS_DB_PASSWORD"` | |
 
 ## Migrating from environment variables
 
-Releases up to and including v4.0.0 configured non-secret settings via environment
-variables. Those variables are **no longer read** — after upgrading, any setting still
-supplied that way silently falls back to its built-in default (no error). Move each one
-into the TOML file and point `LEMONGRASS_CONFIG` at it:
+Version 4.0.0 and earlier read non-secret settings from environment variables.
+Later versions do not read these variables. If you still set one of them,
+lemongrass uses the default value and does not show an error. The CLI shows a
+warning at startup for each of these variables that it finds.
 
-| Old env var | TOML key |
+Move each setting to the TOML file:
+
+| Old environment variable | TOML key |
 |---|---|
 | `INFLUX_URL` | `influx.url` |
 | `INFLUX_ORG` | `influx.org` |
@@ -36,77 +39,75 @@ into the TOML file and point `LEMONGRASS_CONFIG` at it:
 | `OBD_BAUDRATE` | `telem.obd.baudrate` |
 | `OBD_DEBUG` | `telem.obd.debug` |
 
-Only the secrets stay in the environment: `INFLUX_TELEMETRY_TOKEN` and
-`RACEMONITOR_TOKENS` / legacy `RACEMONITOR_TOKEN` (variable names configurable via the
-`*_env` directives above).
-
-The CLI prints a startup warning for each dropped variable it finds still set.
-
 ## Validation
 
-Config is validated on load and fails loud rather than silently misbehaving:
+lemongrass validates the config when it loads it. It stops with an error in these
+conditions:
 
-- `LEMONGRASS_CONFIG` set but the file is missing/unreadable → error.
-- Malformed TOML → error naming the file.
-- Unknown keys or sections (e.g. `bucket` vs `buckets`) → error.
-- Wrong value types (e.g. a numeric `default_start_date`) → error.
-- An unparseable or non-positive `telem.spool.max_size` → error.
+- `LEMONGRASS_CONFIG` is set, but lemongrass cannot find or read the file.
+- The file is not valid TOML.
+- The file has an unknown key or section, for example `bucket` instead of `buckets`.
+- A value has the wrong type, for example a number for `default_start_date`.
+- The value of `telem.spool.max_size` is not a valid size, or is not more than 0.
 
 ## Key reference
 
-| TOML key | Type | Default | Description |
+| Key | Type | Default | Description |
 |---|---|---|---|
 | `influx.url` | string | `https://influxdb.focism.com` | InfluxDB base URL |
-| `influx.org` | string | `focism` | InfluxDB org |
-| `influx.token_env` | string | `INFLUX_TELEMETRY_TOKEN` | env var holding the Influx token |
-| `influx.buckets.laps` | string | `laps` | lap-data bucket |
-| `influx.buckets.races` | string | `races` | race-metadata bucket |
-| `influx.buckets.sessions` | string | `race_sessions` | session bucket |
-| `influx.buckets.telem` | string | `telem` | OBD telemetry bucket |
-| `influx.buckets.pisugar` | string | `pisugar` | PiSugar telemetry bucket |
-| `races.backfill.search_terms` | list of strings | `["Real Hoopties", "GP du Lac", "Halloween Hoop"]` | RaceMonitor search terms |
-| `races.backfill.default_start_date` | string | `2017-01-01` | earliest race date, `YYYY-MM-DD` (`--start-date` overrides) |
-| `racemonitor.tokens_env` | string | `RACEMONITOR_TOKENS` | env var holding the token pool |
-| `team.id` | string | `""` | the `team_id` this deployment races as; a live capture records its `entries` row automatically when set (create the team first with `lemongrass teams add`). `""` disables it |
-| `telem.vin` | string | `""` | VIN fallback when OBD does not report one |
-| `telem.obd.port` | string | `/dev/obd` | OBD serial/socket port |
-| `telem.obd.baudrate` | int | `0` | baud rate (`0` = auto-detect) |
-| `telem.obd.debug` | bool | `false` | verbose python-obd logging |
-| `telem.spool.dir` | string | `/data/telem-spool` | disk spool directory |
-| `telem.spool.max_size` | size | `1GiB` | spool cap; accepts `1GiB`/`1GB`/bytes int |
-| `pisugar.host` | string | `""` | host tag (`""` = system hostname) |
-| `pisugar.api_url` | string | `http://localhost:8421` | pisugar-server base URL |
-| `pisugar.config_path` | string | `/etc/pisugar-server/config.json` | pisugar credentials file |
+| `influx.org` | string | `focism` | InfluxDB organization |
+| `influx.token_env` | string | `INFLUX_TELEMETRY_TOKEN` | Environment variable that contains the InfluxDB token |
+| `influx.buckets.laps` | string | `laps` | Bucket for laps and standings |
+| `influx.buckets.races` | string | `races` | Legacy bucket for race metadata. Only `db import-legacy` and `races prune` use it. |
+| `influx.buckets.sessions` | string | `race_sessions` | Legacy bucket for sessions. Only `db import-legacy` and `races prune` use it. |
+| `influx.buckets.telem` | string | `telem` | Bucket for OBD telemetry |
+| `influx.buckets.pisugar` | string | `pisugar` | Bucket for PiSugar telemetry |
+| `races.backfill.search_terms` | list of strings | `["Real Hoopties", "GP du Lac", "Halloween Hoop"]` | Search terms for RaceMonitor |
+| `races.backfill.default_start_date` | string | `2017-01-01` | Earliest race date, as `YYYY-MM-DD`. `--start-date` overrides this value. |
+| `races.backfill.series_id` | int | `0` | RaceMonitor series to read races from. If set, the search terms filter the races in the series by name. `0` disables this setting. |
+| `racemonitor.tokens_env` | string | `RACEMONITOR_TOKENS` | Environment variable that contains the RaceMonitor tokens |
+| `team.id` | string | `""` | The `team_id` of your team. If set, a live capture records its own `entries` row. Create the team first with `lemongrass teams add`. `""` disables this setting. |
+| `telem.vin` | string | `""` | VIN to use if OBD does not report a VIN |
+| `telem.obd.port` | string | `/dev/obd` | OBD serial port or socket |
+| `telem.obd.baudrate` | int | `0` | Baud rate. `0` detects the baud rate automatically. |
+| `telem.obd.debug` | bool | `false` | Show debug log messages from python-obd |
+| `telem.spool.dir` | string | `/data/telem-spool` | Directory for the disk spool |
+| `telem.spool.max_size` | size | `1GiB` | Maximum size of the spool. Use `1GiB`, `1GB`, or an integer number of bytes. |
+| `pisugar.host` | string | `""` | Value of the `host` tag. `""` uses the system hostname. |
+| `pisugar.api_url` | string | `http://localhost:8421` | Base URL of pisugar-server |
+| `pisugar.config_path` | string | `/etc/pisugar-server/config.json` | pisugar-server file that contains the credentials |
 | `postgres.host` | string | `localhost` | PostgreSQL host |
 | `postgres.port` | int | `5432` | PostgreSQL port |
-| `postgres.database` | string | `lemongrass` | database name |
-| `postgres.user` | string | `lemongrass` | database user |
-| `postgres.password_env` | string | `LEMONGRASS_DB_PASSWORD` | env var holding the DB password |
+| `postgres.database` | string | `lemongrass` | Database name |
+| `postgres.user` | string | `lemongrass` | Database user |
+| `postgres.password_env` | string | `LEMONGRASS_DB_PASSWORD` | Environment variable that contains the database password |
 
-## Interactive search-term refinement
+## Changing search terms interactively
 
-When `race-backfill` runs in a terminal it opens an interactive checklist of the matched
-races; search terms added or removed there apply to that run only. On confirm, if the
-terms changed, it offers to write the updated `races.backfill.search_terms` back to the
-file named by `LEMONGRASS_CONFIG` — the rest of the file, including comments, is
-preserved. Without `LEMONGRASS_CONFIG` set (or if the save fails), it prints the TOML
-snippet to paste in by hand instead of writing any file.
+In a terminal, `race-backfill` shows a list of the matched races. You can add or
+remove search terms in this list. The changes apply to the current run.
+
+If you changed the terms, lemongrass offers to save them when you confirm. It writes
+them to `races.backfill.search_terms` in the file that `LEMONGRASS_CONFIG` gives.
+lemongrass does not change the other content of the file, including comments. If
+`LEMONGRASS_CONFIG` is not set, or if the save fails, lemongrass shows the TOML
+text. Copy this text into your config file.
+
+To find a series and save it as `races.backfill.series_id`, press `s` in the list.
 
 ## Examples
 
-Override only the bucket names (e.g. a shared InfluxDB):
+Change only the bucket names, for example on a shared InfluxDB:
 
 ```toml
 [influx.buckets]
 laps = "team2_laps"
-races = "team2_races"
-sessions = "team2_sessions"
 telem = "team2_telem"
 pisugar = "team2_pisugar"
 ```
 
-A fresh fork pointing at its own races and InfluxDB, with the token in a differently named
-env var:
+Use a different InfluxDB, different races, and a different name for the token
+variable:
 
 ```toml
 [influx]

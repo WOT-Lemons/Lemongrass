@@ -7,135 +7,170 @@ Open source car telemetry for 24 Hours of Lemons.
 - Raspberry Pi running Raspberry Pi OS
 - PiSugar 3 UPS
 - USB OBD-II adapter
-- An InfluxDB instance running v2.x
-- A PostgreSQL instance (v14 or later) for race and session metadata (managed via the
-  `lemongrass db` commands)
-- Grafana to visualize the data
+- InfluxDB 2.x
+- PostgreSQL 14 or later
+- Grafana
 
 ## Services
 
-This repo provides two long-running services that run on the pi:
+Two long-running services run on the Pi:
 
 | Service | Description |
 | --- | --- |
-| telem | Monitors car data via OBD-II USB adapter |
-| pisugar-monitor | Monitors PiSugar 3 UPS |
+| `telem` | Reads car data from the OBD-II adapter |
+| `pisugar-monitor` | Reads the status of the PiSugar 3 UPS |
 
-Deployment and orchestration (docker-compose, telegraf for OS metrics, etc.) should be managed in a separate IaC repository, not here.
+Deployment files are not part of this repository. Keep Docker Compose files,
+Telegraf configuration, and other deployment files in a separate infrastructure
+repository.
 
-## Lap Data
+## Installation
 
-### Setup
-
-1. Get a Race Monitor API token <https://www.race-monitor.com/Home/API>
-
-2. Add your token to a `.env` file (see `.env.sample`) and source it:
+Install lemongrass with one of these commands:
 
 ```shell
-source .env
+docker pull ghcr.io/wot-lemons/lemongrass:latest   # Docker
+pip install lemongrass                             # pip
+uv tool install lemongrass                         # uv
+uvx lemongrass <command>                           # uv, without installing
 ```
 
-3. Get your race ID
+To pin a lemongrass release, replace the image tag `latest` with the release
+version (`X.Y.Z`). For the list of tags, see `ghcr.io/wot-lemons/lemongrass`.
 
-We need a Race ID to get information for. Head to <https://www.race-monitor.com/Live/Race> while your race is live to get this easily from the URL.
-
-![Image of Race ID in URL bar](https://i.imgur.com/1FQNvSb.png)
-
-4. Run the tool
-
-Pull the latest image:
+The examples in this document use the installed `lemongrass` command. To run a
+command with Docker, run it in a container:
 
 ```shell
-docker pull ghcr.io/wot-lemons/lemongrass:latest
+docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass <command>
 ```
 
-### Interactive TUI
+## Configuration
 
-Run `lemongrass laps` with no arguments in a terminal to open an interactive
-UI: search for a race by name or paste its numeric ID, then either watch it
-live (lap table, field leaderboard, and a log pane) or import a completed
-race's full field into InfluxDB. A race that isn't live yet offers a third
-choice — enter your car number and wait for the green flag; the UI checks every
-10 seconds, starts monitoring by itself once the race goes live and your car
-appears in the timing feed, and keeps waiting until then. Once the race is
-live, press `c` to pick a different car from the live field — there is no field
-to choose from before the green flag. When a live race ends, the UI offers to
-run the authoritative final import.
+lemongrass reads secrets from environment variables:
 
-The scripted forms are unchanged: `lemongrass laps <race_id> [car_number]
-[-m] [-n] …` behave exactly as before and are what cron and race-backfill use.
+| Variable | Used for |
+| --- | --- |
+| `INFLUX_TELEMETRY_TOKEN` | InfluxDB |
+| `LEMONGRASS_DB_PASSWORD` | PostgreSQL |
+| `RACEMONITOR_TOKENS` | RaceMonitor API. Separate tokens with commas. To get a token, go to <https://www.race-monitor.com/Home/API>. |
 
-This Laps TUI is also reachable from the Home menu opened by running bare
-`lemongrass` (see [Race Management](#race-management)).
+To set the secrets:
 
-### Live Race
+1. Copy `.env.sample` to `.env`.
+2. Add the values to `.env`.
+3. Load the file into your shell:
 
-**Docker** — pass your credentials via an env file (see `.env.sample`). To pin to a specific version instead of `latest`, replace the tag (e.g. `1.2.3`). Available tags are listed at `ghcr.io/wot-lemons/lemongrass`.
+   ```shell
+   set -a && source .env && set +a
+   ```
 
-> **Note:** `CAR_NUMBER` is required for live/monitor mode. Omit it for completed races to write laps for all competitors (fieldwide backfill).
+lemongrass reads all other settings from an optional TOML file. The
+`LEMONGRASS_CONFIG` environment variable gives the path to this file. If
+`LEMONGRASS_CONFIG` is not set, lemongrass uses built-in defaults. To make a config
+file, copy `lemongrass.toml.sample`. With Docker, mount the file in the container.
+Then set `LEMONGRASS_CONFIG` to the path of the file in the container. For the list
+of all keys, see
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+## Database
+
+lemongrass stores race and session metadata in PostgreSQL. It stores laps,
+standings, telemetry, and PiSugar data in InfluxDB.
+
+Before you use lemongrass for the first time, apply the database schema. Apply it
+again after each upgrade that adds a migration.
 
 ```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps RACE_ID CAR_NUMBER -m -n
+lemongrass db upgrade
+lemongrass db current   # show the applied revision
 ```
 
-**pip** — install from PyPI and source your `.env` first (step 2 above):
+| Subcommand | Description |
+| --- | --- |
+| `upgrade` | Apply all pending migrations, then load the track data |
+| `current` | Show the applied revision |
+| `import-legacy [--dry-run] [--only-missing]` | Copy races and sessions from the legacy InfluxDB buckets to PostgreSQL |
+| `export-legacy [--output FILE]` | Export races and sessions as InfluxDB line protocol, for rollback |
+
+To move an existing installation from the legacy InfluxDB buckets to PostgreSQL,
+follow the runbook in
+[local-testing/migrations/README.md](local-testing/migrations/README.md).
+
+## Lap data
+
+`lemongrass laps` reads lap data from RaceMonitor. It can watch a live race or
+import a completed race.
+
+To find a race ID, open <https://www.race-monitor.com/Live/Race> while the race is
+live. The ID is in the URL:
+
+![Race ID in the URL bar](https://i.imgur.com/1FQNvSb.png)
+
+### Interactive mode
+
+To start interactive mode, run `lemongrass laps` with no arguments in a terminal.
+Search for a race by name, or enter its ID. Then select one of these options:
+
+- **Watch a live race.** lemongrass shows your car's laps, the field leaderboard,
+  and a log. When the race ends, lemongrass offers to run the final import.
+- **Import a completed race.** lemongrass imports the full field into InfluxDB.
+- **Wait for a race to start.** Enter your car number. lemongrass checks the race
+  every 10 seconds. When the race is live and your car is in the timing feed,
+  lemongrass starts to watch the race. To select a different car after the race
+  starts, press `c`.
+
+You can also start interactive mode from the Home menu. To open the Home menu, run
+`lemongrass` with no arguments.
+
+### Command-line mode
 
 ```shell
-pip install lemongrass
+lemongrass laps RACE_ID [CAR_NUMBER] [options]
+```
+
+Use this form in scripts and cron jobs. If the race is live, you must give
+`CAR_NUMBER`.
+
+| Option | Description |
+| --- | --- |
+| `-m`, `--monitor` | Watch a live race and show new laps when they arrive. Requires `CAR_NUMBER`. |
+| `-n`, `--network` | Write laps to InfluxDB |
+| `--wait-for-live` | Wait until the race is live, then watch it. Implies `-m`. |
+| `--interval SECONDS` | Time between checks in monitor mode. Default: 30. |
+| `-o`, `--out` | Write the car's laps to a CSV file. Live races only. |
+| `-c`, `--class A/B/C` | Group or filter by class |
+| `--dry-run` | Show what lemongrass would write, but do not write it. Implies `-n`. Completed races only. |
+| `--skip-if-complete` | Do not import the race if it already has all laps at the current schema version. Completed races with `-n` only. |
+| `-v`, `--verbose` | Show debug log messages |
+
+To stop, press Ctrl-C. The command exits with code 130. Monitor mode also stops
+when the race ends.
+
+#### Live race
+
+```shell
 lemongrass laps RACE_ID CAR_NUMBER -m -n
 ```
 
-**uv** — install from PyPI as a tool and source your `.env` first (step 2 above):
+To start before the green flag, use `--wait-for-live`. lemongrass checks the race
+every 10 seconds, with no time limit. If the race ends before your car is in the
+timing feed, the command exits with a non-zero code.
 
 ```shell
-uv tool install lemongrass
-lemongrass laps RACE_ID CAR_NUMBER -m -n
+lemongrass laps RACE_ID CAR_NUMBER -n --wait-for-live
 ```
 
-Or run ephemerally without installing:
-
-```shell
-uvx lemongrass laps RACE_ID CAR_NUMBER -m -n
-```
-
-> **Graceful exit:** Press Ctrl-C at any time to stop monitoring cleanly (exits 130). The monitor also exits automatically when the race ends.
-
-> **Starting before the green flag:** add `--wait-for-live` to poll the race
-> every 10 seconds and begin monitoring as soon as it goes live — useful when
-> you set the capture up and then leave for the grid. It implies `-m`, requires
-> `CAR_NUMBER`, and never times out; if the car isn't in the timing feed yet, it
-> keeps waiting for it, unless the race ends before the car ever appears, which
-> stops the wait and exits nonzero. Ctrl-C stops the wait (exits 130).
->
-> ```shell
-> lemongrass laps RACE_ID CAR_NUMBER -n --wait-for-live
-> ```
-
-Real example:
-
-```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps 166811 13 -m -n
-```
+Example output:
 
 ```plain
-2026-06-19 20:52:41,057 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/RaceDetails "HTTP/1.1 200 OK"
 --------------------------------------------------------------------------------
 Race 166811
 Fast Friday Started: 2026-06-19 16:00:00
 Seekonk Speedway   Ends: 2026-06-20 01:00:00
 --------------------------------------------------------------------------------
-2026-06-19 20:52:41,151 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/IsLive "HTTP/1.1 200 OK"
 2026-06-19 20:52:41,152 - INFO - Race 166811 is currently live.
-2026-06-19 20:52:41,251 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Live/GetSession "HTTP/1.1 200 OK"
---------------------------------------------------------------------------------
-2026-06-19 20:52:41,252 - INFO - Current overall rankings.
---------------------------------------------------------------------------------
-Empty DataFrame
-Columns: [Pos., #, Class, Class Pos., Name, Laps, Transponder]
-Index: []
---------------------------------------------------------------------------------
-2026-06-19 20:52:41,365 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Live/GetRacer "HTTP/1.1 200 OK"
---------------------------------------------------------------------------------
+...
 Team: Jacob Burns Car Number: 13   Class: Legends Transponder: 13775638
 Best Position: 2
 Final Position: 1
@@ -145,115 +180,36 @@ Best Lap: 6
 Best Lap Time: 00:00:14.165
 Total Time: 00:05:43.405
 --------------------------------------------------------------------------------
-Lap Position      LapTime FlagStatus    TotalTime
-  1        8 00:00:14.572      Green 00:00:23.097
-  2        5 00:00:14.458      Green 00:00:37.555
-  3        4 00:00:14.389      Green 00:00:51.944
-  4        3 00:00:14.258      Green 00:01:06.202
-  5        2 00:00:14.313      Green 00:01:20.515
-  6        2 00:00:14.165      Green 00:01:34.680
-  7        2 00:00:14.258      Green 00:01:48.938
-  8        1 00:00:14.391      Green 00:02:03.329
-  9        1 00:00:14.437      Green 00:02:17.766
- 10        1 00:00:14.299      Green 00:02:32.065
- 11        1 00:00:14.248      Green 00:02:46.313
- 12        1 00:00:14.260      Green 00:04:46.328
- 13        1 00:00:14.194      Green 00:05:00.522
- 14        1 00:00:14.251      Green 00:05:14.773
- 15        1 00:00:14.322      Green 00:05:29.095
- 16        1 00:00:14.310      Green 00:05:43.405
- 17        1 00:00:14.291      Green 00:05:57.696
---------------------------------------------------------------------------------
 2026-06-19 20:52:41,369 - INFO - Monitoring car 13...
 --------------------------------------------------------------------------------
 Lap Position      LapTime FlagStatus    TotalTime
   1        8 00:00:14.572      Green 00:00:23.097
   2        5 00:00:14.458      Green 00:00:37.555
   3        4 00:00:14.389      Green 00:00:51.944
-  4        3 00:00:14.258      Green 00:01:06.202
-  5        2 00:00:14.313      Green 00:01:20.515
-  6        2 00:00:14.165      Green 00:01:34.680
-  7        2 00:00:14.258      Green 00:01:48.938
-  8        1 00:00:14.391      Green 00:02:03.329
-  9        1 00:00:14.437      Green 00:02:17.766
- 10        1 00:00:14.299      Green 00:02:32.065
- 11        1 00:00:14.248      Green 00:02:46.313
- 12        1 00:00:14.260      Green 00:04:46.328
- 13        1 00:00:14.194      Green 00:05:00.522
- 14        1 00:00:14.251      Green 00:05:14.773
- 15        1 00:00:14.322      Green 00:05:29.095
- 16        1 00:00:14.310      Green 00:05:43.405
+...
  17        1 00:00:14.291      Green 00:05:57.696
 ```
 
-### Completed Race
-
-You can retrieve info for a completed race too. Omit `CAR_NUMBER` to write laps for all competitors in the field (fieldwide backfill mode).
-
-**Docker:**
+#### Completed race
 
 ```shell
-# Single car
-docker run --rm -it \
-  --env-file .env \
-  ghcr.io/wot-lemons/lemongrass:latest \
-  lemongrass laps RACE_ID CAR_NUMBER
-
-# Full field
-docker run --rm -it \
-  --env-file .env \
-  ghcr.io/wot-lemons/lemongrass:latest \
-  lemongrass laps RACE_ID
+lemongrass laps RACE_ID      # show the final standings
+lemongrass laps RACE_ID -n   # import the full field into InfluxDB
 ```
 
-**pip / uv:**
+For a completed race, lemongrass ignores `CAR_NUMBER`. The RaceMonitor API accepts
+approximately 6 requests per minute, so an import can take several minutes.
 
-```shell
-lemongrass laps RACE_ID CAR_NUMBER   # single car
-lemongrass laps RACE_ID              # full field
-```
-
-> **Persisting CSV output:** `lemongrass laps -o` writes a `.csv` to the container's
-> working directory (`/data`). The container runs as a non-root user, so that write
-> stays inside the container and is lost on exit unless you mount a writable directory
-> at `/data`. Bind mounts keep their host ownership, so pass `--user` to run as your
-> host user — the CSV then lands in `./out` owned by you:
->
-> ```shell
-> mkdir -p out
-> docker run --rm -it --env-file .env \
->   --user "$(id -u):$(id -g)" \
->   -v "$(pwd)/out:/data" \
->   ghcr.io/wot-lemons/lemongrass:latest \
->   lemongrass laps RACE_ID CAR_NUMBER -o
-> ```
-
-Real example:
-
-```shell
-docker run --rm -it --env-file .env ghcr.io/wot-lemons/lemongrass:latest lemongrass laps 166429 852
-```
+Example output:
 
 ```plain
-2026-06-19 20:46:17,391 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/RaceDetails "HTTP/1.1 200 OK"
 --------------------------------------------------------------------------------
 Race 166429
 The B.F.E. GP 2026 Started: 2026-06-12 10:00:00
 High Plains Raceway   Ends: 2026-06-14 19:30:00
 --------------------------------------------------------------------------------
-2026-06-19 20:46:17,487 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Race/IsLive "HTTP/1.1 200 OK"
 2026-06-19 20:46:17,488 - INFO - Race 166429 is not live. Monitor mode disabled.
-2026-06-19 20:46:17,587 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionsForRace "HTTP/1.1 200 OK"
-2026-06-19 20:46:17,692 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-06-19 20:46:17,797 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-06-19 20:46:17,945 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
 2026-06-19 20:46:17,948 - INFO - Rate limited: sleeping 59.34s [6/6 slots used over 60s window; oldest request 0.66s ago]
-2026-06-19 20:47:17,422 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-06-19 20:47:17,570 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-06-19 20:47:17,794 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-06-19 20:47:18,090 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-06-19 20:47:18,314 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
-2026-06-19 20:47:18,626 - INFO - HTTP Request: POST https://api.race-monitor.com/v2/Results/SessionDetails "HTTP/1.1 200 OK"
 --------------------------------------------------------------------------------
 2026-06-19 20:47:18,913 - INFO - Current overall rankings.
 --------------------------------------------------------------------------------
@@ -261,239 +217,156 @@ Pos.   # Class  Class Pos.                             Name Laps Transponder
    1 852     A           1              Rusty Bottom Racing  351        D-34
    2   4     A           2         Sew So Fast - GC edition  349         C-2
    3 380     A           3                 Vice City Racing  349        D-20
-   4   6     A           4               Stay Classy Racing  337         C-3
-   5 177     B           1                     DadBodCarMod  336        D-11
-   6  49     B           2             Broken Spokes Racing  334        C-20
-   7 101     A           5            Smokey and the Bandit  333         D-1
-   8  11     A           6          Whiskey + Doughnuts =É.  333      165002
-   9 300     A           7                     World War Zx  331        D-14
-  10 501     A           8            Vistabeam Racing Team  330        D-26
 ...
-  75 779     B          33     Poorsche Club of America (R)   59        D-31
-  76 333     B          34           Green Beret RacingÉ.II   53        D-19
-  77  73     B          35                      Team HonDuh   23     5632016
-  78  28     A          27             Liquid Mechanics (R)   11     6201404
-  79 150     A          28                       NTD Racing    9         D-8
-  80  35     C          17                         Passhark    8        C-13
-  81  17     C          18                     Haiku Racing              C-6
-  82  72                 1      Enforcement Motorsports (R)             C-25
---------------------------------------------------------------------------------
-Team:        Car Number: 852  Class: A Transponder: D-34
-Best Position: 7
-Final Position: 1
-Final Class Position: 1
-Total Laps: 351
-Best Lap: 214
-Best Lap Time: 00:02:12.483
-Total Time: 14:36:02.587
---------------------------------------------------------------------------------
-Lap      LapTime Position FlagStatus    TotalTime
-  1 00:02:25.450        6      Green 06:28:04.193
-  2 00:02:24.449        5      Green 06:30:28.642
-  3 00:02:24.332        5      Green 06:32:52.974
-  4 00:02:26.745        5      Green 06:35:19.719
-  5 00:02:23.508        5      Green 06:37:43.227
-  6 00:02:23.444        4      Green 06:40:06.671
-  7 00:02:24.004        3      Green 06:42:30.675
-  8 00:02:43.345        3      Green 06:45:14.020
-  9 00:36:18.582        7      Green 07:21:32.602
- 10 00:02:23.425        7      Green 07:23:56.027
-...
-340 00:02:21.490        1      Green 14:09:37.216
-341 00:02:26.332        1      Green 14:12:03.478
-342 00:02:26.332        1      Green 14:14:29.810
-343 00:02:24.485        1      Green 14:16:54.224
-344 00:02:24.068        1      Green 14:19:18.222
-345 00:02:21.403        1      Green 14:21:39.553
-346 00:02:27.229        1      Green 14:24:06.782
-347 00:02:28.195        1      Green 14:26:34.906
-348 00:02:24.841        1      Green 14:28:59.674
-349 00:02:20.867        1      Green 14:31:20.472
-350 00:02:21.190        1      Green 14:33:41.592
-351 00:02:21.065        1     Finish 14:36:02.587
---------------------------------------------------------------------------------
 ```
 
-## Race Management
+#### CSV output in Docker
 
-The `races` subcommand provides tools for inspecting and managing race data. Race and
-session metadata live in PostgreSQL; lap data stays in InfluxDB.
+`-o` writes the CSV file to `/data`, the working directory of the container. It
+works only for a live race. The container runs as a non-root user. To keep the
+file, mount a writable host directory at `/data`. Run the container as your host
+user:
+
+```shell
+mkdir -p out
+docker run --rm -it --env-file .env \
+  --user "$(id -u):$(id -g)" \
+  -v "$(pwd)/out:/data" \
+  ghcr.io/wot-lemons/lemongrass:latest \
+  lemongrass laps RACE_ID CAR_NUMBER -o
+```
+
+## Race management
 
 ```shell
 lemongrass races <subcommand> [args]
 ```
 
-### Interactive TUI
+| Subcommand | Description |
+| --- | --- |
+| `list` | List stored races, with lap counts and schema version status |
+| `prune RACE_ID... [--yes]` | Delete races. lemongrass deletes the laps and standings from InfluxDB, then deletes the race, its sessions, and its entries from PostgreSQL. To skip the confirmation prompt, use `--yes`. |
+| `backfill [options]` | Import historical races. Same as `lemongrass race-backfill`. |
+| `diagnose RACE_ID CAR_NUMBER` | Compare the RaceMonitor and InfluxDB lap counts for one car |
+| `identify [RACE_ID...] [--dry-run]` | Set the venue, layout, and event IDs from `tracks.toml`. See [Track identity](#track-identity). |
 
-Run bare `lemongrass` with no arguments in a terminal to open a **Home menu**
-that routes to the Laps and Races tools. Run `lemongrass races` with no
-subcommand in a terminal to jump straight into the **races browser**: a
-checklist of stored races.
+Examples:
+
+```shell
+lemongrass races list
+lemongrass races prune 144185
+lemongrass races prune 144185 120037 --yes
+lemongrass races diagnose 144185 252
+```
+
+### Races browser
+
+To open a list of stored races, run `lemongrass races` with no subcommand in a
+terminal.
 
 | Key | Action |
 | --- | --- |
 | `a` | Select all races |
-| `i` | Invert the current selection |
-| `p` | Prune (delete) all checked races |
-| `d` | Diagnose the highlighted race — pick a car to compare RaceMonitor vs. InfluxDB lap counts |
-| `r` | Re-import the highlighted race |
-| `b` | Backfill — search RaceMonitor by terms and import a race |
-| `esc` | Back |
+| `i` | Invert the selection |
+| `p` | Delete the selected races |
+| `d` | Diagnose the highlighted race |
+| `r` | Import the highlighted race again |
+| `b` | Search RaceMonitor and import a race |
+| `esc` | Go back |
 
-Both interactive entry points require an interactive TTY (`stdin`/`stdout`
-attached to a terminal); non-interactively, or when a subcommand is given,
-`lemongrass races <subcommand>` behaves exactly as documented below.
-`telem` and `pisugar-monitor` remain CLI-only and have no TUI.
+Interactive mode needs a terminal on stdin and stdout. If stdin or stdout is not a
+terminal, the commands run in command-line mode. `telem` and `pisugar-monitor` do not have an
+interactive mode.
 
-| Subcommand | Description |
-| ------------ | ------------- |
-| `list` | Show all stored races with lap counts and schema status |
-| `prune RACE_ID...` | Delete all data for one or more races: laps and standings from InfluxDB, then the race row from PostgreSQL, cascading to its sessions and entries |
-| `backfill` | Run historical backfill for all tracked races (delegates to `lemongrass race-backfill`; use `--help` for all options) |
-| `diagnose RACE_ID CAR_NUMBER` | Compare RaceMonitor vs InfluxDB lap counts for a specific car |
-| `identify [RACE_ID...] [--dry-run]` | Re-tag stored races (every race, or only the ones named) with venue, layout, and event ids resolved from `tracks.toml` (see [Track identity](#track-identity)) |
+### Backfill
 
-### Examples
+`lemongrass races backfill` finds past races on RaceMonitor and imports them. It
+searches with the terms in `races.backfill.search_terms`. If
+`races.backfill.series_id` is set, it reads the races in that series and uses the
+terms as a filter. In a terminal, it shows the matched races. You can change the
+selection before the import starts.
 
-```shell
-# List all stored races and their schema version status
-lemongrass races list
+| Option | Description |
+| --- | --- |
+| `--dry-run` | List the races that lemongrass would import, but do not import them |
+| `--force` | Import all races again, including complete races |
+| `--upgrade-stored` | Import stored races again if their laps or standings have an older `schema_version`. lemongrass uses the stored race list and does not search RaceMonitor, so this option is faster than `--force`. |
+| `--validate` | Make sure that each expected race has metadata and at least one lap |
+| `--start-date YYYY-MM-DD` | Include only races that start on or after this date. Default: `races.backfill.default_start_date`. |
 
-# Delete a race (prompts for confirmation)
-lemongrass races prune 144185
+You cannot use `--upgrade-stored` with `--start-date` or `--validate`. To also
+import races that are already at the current schema version, add `--force`.
 
-# Delete multiple races at once, skipping confirmation
-lemongrass races prune 144185 120037 --yes
+### Sessions
 
-# Diagnose a lap count mismatch for car 252 in race 144185
-lemongrass races diagnose 144185 252
-```
-
-### Backfill Options
-
-The `backfill` subcommand delegates to `lemongrass race-backfill` and supports these flags:
-
-| Flag | Description |
-| ------ | ------------- |
-| `--dry-run` | Print what would be backfilled without writing anything |
-| `--force` | Re-backfill every race, even those already complete and current |
-| `--upgrade-stored` | Re-process laps already in InfluxDB whose `schema_version` is older than current — faster than `--force` because it skips re-fetching from RaceMonitor |
-| `--validate` | Check that every expected race has metadata and at least one lap in InfluxDB |
-| `--start-date YYYY-MM-DD` | Only include races starting on/after this date (default: 2017-01-01) |
-
-> **Note:** `--upgrade-stored` is mutually exclusive with `--start-date` and `--validate`; combine it with `--force` to also re-fetch races already at the current schema.
-
-### Session Tracking
-
-All lap points written to InfluxDB include a `session_id` tag corresponding to the RaceMonitor session ID. In Flux queries you can filter by `session_id` to isolate specific race segments (e.g. Day 1 vs. Day 2). Session metadata itself is stored in PostgreSQL (see [Database Schema](#database-schema)); the legacy `race_sessions` Influx bucket is no longer written to and is kept only as migration/rollback material.
+Each lap point in InfluxDB has a `session_id` tag. This tag contains the RaceMonitor
+session ID. To separate the parts of a race, such as day 1 and day 2, filter on this
+tag in Flux. lemongrass stores session metadata in PostgreSQL. It no longer writes
+to the legacy `race_sessions` bucket.
 
 ### Track identity
 
-Venue, layout, and event ids come from `src/lemongrass/data/tracks.toml`, a curated file
-that ships with the package — RaceMonitor's `Track` field is free text and its spelling
-drifts between years, which is what stops races grouping across seasons. Editing that
-file is a normal pull request.
+RaceMonitor's track name is free text, and its spelling changes between years. To
+group races across seasons, lemongrass maps track names to venue, layout, and event
+IDs. The mapping is in `src/lemongrass/data/tracks.toml`. To change the mapping,
+edit that file in a pull request.
 
-```bash
-lemongrass races identify --dry-run   # what would change, plus every unmatched name
-# edit src/lemongrass/data/tracks.toml to cover what the report listed
-lemongrass races identify             # write the new ids
+```shell
+lemongrass races identify --dry-run   # show the changes and the unmatched names
+# add the unmatched names to src/lemongrass/data/tracks.toml
+lemongrass races identify             # write the IDs
 ```
 
-`races identify` reads only what is already stored, so it makes no RaceMonitor calls and
-is not subject to the API rate limit. A race whose track name matches nothing is left
-with NULL ids and keeps showing its raw `track_name`; there is no fallback tag to clean
-up later. Naming race ids re-tags only those races; an id with no stored row is
-reported on stderr and exits non-zero, so a typo does not read as "already correct".
+`races identify` uses only stored data. It does not send requests to RaceMonitor. If
+a race has an unmatched track name, its IDs stay NULL, and lemongrass shows the raw
+`track_name`. If you give a race ID that is not stored, the command shows an error
+on stderr and exits with a non-zero code.
 
-`lemongrass tracks sync [--dry-run]` copies the file into the database on its own, and
-`lemongrass db upgrade` runs it as its final step.
+`lemongrass tracks sync [--dry-run]` loads `tracks.toml` into the database.
+`lemongrass db upgrade` also does this.
 
 ### Teams
 
-Unlike track data, team facts are operational rather than curated — they grow by one row
-every time we race — so they live only in PostgreSQL, via `lemongrass teams`.
+lemongrass stores team data only in PostgreSQL.
 
 ```shell
 lemongrass teams <subcommand> [args]
 ```
 
 | Subcommand | Description |
-| ------------ | ------------- |
-| `add TEAM_ID NAME` | Create a team, or rename an existing one |
-| `list` | Print every team with its recorded aliases |
-| `alias TEAM_ID ALIAS` | Record a historical spelling for a team |
-| `merge FROM_ID INTO_ID` | Fold one team into another, moving its entries and aliases |
+| --- | --- |
+| `add TEAM_ID NAME` | Create a team. If the team exists, change its name. |
+| `list` | List the teams and their aliases |
+| `alias TEAM_ID ALIAS` | Add a different spelling of a team's name |
+| `merge FROM_ID INTO_ID` | Move the entries and aliases of one team to a different team, then delete the first team |
 
-A team must exist (`lemongrass teams add`) before `[team] id` in the config file or
-`lemongrass entries set --team` can reference it — see [Configuration](#configuration).
+Create a team before you use its ID in `team.id` or `entries set --team`.
 
 ### Entries
 
-`lemongrass entries` records which team ran which car number in which race — car numbers
-are not stable across events, so "our laps" cannot be derived from the number or team name
-alone.
+An entry records which team drove which car number in a race. Car numbers change
+between events. Thus, an entry is the only reliable link between a team and its
+laps.
 
 ```shell
 lemongrass entries <subcommand> [args]
 ```
 
 | Subcommand | Description |
-| ------------ | ------------- |
-| `set RACE_ID CAR_NUMBER [--team TEAM_ID]` | Record one race/car/team entry (`--team` defaults to `[team] id` from the config file) |
-| `list [--team TEAM_ID] [--race RACE_ID]` | Print stored entries, optionally filtered to one team or one race |
-| `propose --term TERM [--term TERM ...] [--team TEAM_ID]` | Scan stored competitor names for a match and interactively confirm which entries to record (and optionally save the matched spelling as a new alias) |
+| --- | --- |
+| `set RACE_ID CAR_NUMBER [--team TEAM_ID]` | Record an entry. The default for `--team` is `team.id`. |
+| `list [--team TEAM_ID] [--race RACE_ID]` | List entries. To show only one team or one race, use the options. |
+| `propose --term TERM [--term TERM ...] [--team TEAM_ID]` | Find stored competitor names that match the terms, and select the entries to record. You can also save a matched name as an alias. |
 
-A live capture with `[team] id` set records its own entry automatically; `entries` is for
-filling in the rest of a team's history.
-
-## Configuration
-
-lemongrass is configured by an optional TOML file named by the `LEMONGRASS_CONFIG` environment
-variable, falling back to built-in defaults. Secrets (`INFLUX_TELEMETRY_TOKEN`,
-`RACEMONITOR_TOKENS`) are supplied via the environment and referenced by `*_env` keys in the
-file — environment variables are not used for any non-secret setting. Copy
-`lemongrass.toml.sample` to get started. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for
-the full key reference.
-
-## Database Schema
-
-Race and session metadata live in PostgreSQL. Laps, standings, telemetry, and PiSugar
-data stay in InfluxDB. Before running any `lemongrass` command against a Postgres-backed
-install, set the password env var named by `postgres.password_env`
-(`LEMONGRASS_DB_PASSWORD` by default — see `.env.sample`) and apply the schema:
-
-```shell
-lemongrass db upgrade
-```
-
-Verify it landed:
-
-```shell
-lemongrass db current
-```
-
-Run `db upgrade` again after upgrading lemongrass whenever a new migration ships.
-
-For an existing install that still has race and session history sitting in the legacy
-InfluxDB buckets, `lemongrass db import-legacy` is the one-time migration step that
-copies it into PostgreSQL. See
-[local-testing/migrations/README.md](local-testing/migrations/README.md) for the full
-cutover runbook (ordering, flags, rollback).
+If `team.id` is set, a live capture records its own entry. To record entries for
+past races, use `lemongrass entries`.
 
 ## Contributing
 
-For development setup, running the test suite, and testing against a local
-InfluxDB stack instead of prod, see [CONTRIBUTING.md](CONTRIBUTING.md).
+To set up a development environment, run the tests, or run the local stack, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Upgrading from v1.x
+## Upgrading
 
-As of v2.0.0, the individual entry points (`laps`, `telem`, `race-backfill`, `pisugar-monitor`, `race-diagnose`) were replaced by a single `lemongrass` command. If you have the old package installed, update and prefix commands with `lemongrass`:
-
-| Before | After |
-| -------- | ------- |
-| `laps RACE_ID CAR_NUMBER` | `lemongrass laps RACE_ID CAR_NUMBER` |
-| `telem` | `lemongrass telem` |
-| `race-backfill` | `lemongrass race-backfill` or `lemongrass races backfill` |
-| `pisugar-monitor` | `lemongrass pisugar-monitor` |
-| `race-diagnose` | `lemongrass race-diagnose` or `lemongrass races diagnose` |
+To upgrade to a new major version, follow the steps in
+[docs/UPGRADING.md](docs/UPGRADING.md).
