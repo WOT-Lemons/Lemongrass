@@ -1,7 +1,7 @@
 # Contributing
 
-This project uses [`uv`](https://docs.astral.sh/uv/) for dependency management and
-running. Use `uv run ...` rather than invoking `.venv` paths directly.
+This project uses [`uv`](https://docs.astral.sh/uv/). Run everything through
+`uv run`. Do not call `.venv` paths directly.
 
 ## Running the tests
 
@@ -10,15 +10,16 @@ uv run pytest
 uv run ruff check
 ```
 
-CI runs lint separately from the test suite, so a green `pytest` does not imply a
-green lint — run both before pushing.
+CI runs lint and tests as separate jobs. Run both before you push.
 
-## Running the PostgreSQL-backed tests
+## Running the PostgreSQL tests
 
-Tests that touch PostgreSQL are skipped unless `LEMONGRASS_TEST_DATABASE_URL` is
-set. Point it at a **throwaway** database on a non-default port — never at the
-local-testing stack's Postgres (below), which uses the same port, credentials,
-and database name that CI's URL does, and whose data these tests would destroy:
+Tests that use PostgreSQL are skipped unless `LEMONGRASS_TEST_DATABASE_URL` is set.
+Point it at a throwaway database on a non-default port. Do not point it at the
+local stack's Postgres on port 5432. It uses the same credentials and database name
+as the test server, and these tests delete its data.
+
+Start a throwaway server and wait until it is healthy:
 
 ```bash
 docker run --rm -d --name lg-test-pg -p 127.0.0.1:55432:5432 \
@@ -30,8 +31,7 @@ docker run --rm -d --name lg-test-pg -p 127.0.0.1:55432:5432 \
 until [ "$(docker inspect -f '{{.State.Health.Status}}' lg-test-pg)" = healthy ]; do sleep 1; done
 ```
 
-`docker run -d` returns before the server finishes initializing, so wait for the
-health check rather than starting the tests straight away.
+Run the tests:
 
 ```bash
 export LEMONGRASS_TEST_DATABASE_URL=postgresql+psycopg://lemongrass:local-dev-password@localhost:55432/lemongrass
@@ -39,109 +39,116 @@ export LEMONGRASS_TEST_DB_ALLOW_WIPE=1
 uv run pytest
 ```
 
-`LEMONGRASS_TEST_DB_ALLOW_WIPE=1` is a required, separate opt-in: the `clean_db`
-fixture drops and recreates the target database's `public` schema before every
-test that uses it, and refuses to do so without this confirmation. Tear the
-container down when you're done:
+`LEMONGRASS_TEST_DB_ALLOW_WIPE=1` is a separate, required opt-in. Before each
+database test, the `clean_db` fixture drops and recreates the `public` schema. It
+refuses to run without this variable.
+
+Remove the container when you are done:
 
 ```bash
 docker rm -f lg-test-pg
 ```
 
-## Testing against a local InfluxDB stack
+## Running the local stack
 
-When prod is unavailable, run the full pipeline against a local InfluxDB.
+The local stack runs the full pipeline without prod. All credentials in it are
+non-secret and local-only.
 
-1. Start the stack (InfluxDB on `:8086`, Grafana on `:3000`, plus the emulated
-   OBD car — an ELM327 emulator + `telem`):
+| Service | Purpose |
+| --- | --- |
+| `influxdb` | InfluxDB 2 on `localhost:8086` |
+| `postgres` | PostgreSQL 18 on `localhost:5432` |
+| `db-schema` | One-shot: applies the database schema (`lemongrass db upgrade`) |
+| `grafana` | Grafana on `localhost:3000`, with datasources and dashboards provisioned |
+| `grafana-library-panels` | One-shot: loads library panels into Grafana |
+| `elm327` | ELM327 OBD-II emulator |
+| `telem` | `lemongrass telem`, reading from the emulator |
+
+1. Start the stack:
 
    ```bash
    docker compose -f local-testing/docker-compose.yml up --build -d
    ```
 
-   `--build` builds the `elm327` and `telem` images on first start (and after
-   changes). First start creates org `lemongrass`, a pinned operator token
-   (`local-dev-token`), and the `laps`, `races`, `race_sessions`, `telem`,
-   `pisugar`, and `system_metrics/autogen` buckets. These are non-secret,
-   local-only values.
+   `--build` builds the local images on first start and after code changes.
 
-   A one-shot `grafana-library-panels` container also runs on every `up`. Grafana
-   provisions dashboards and datasources from files but has no file provisioning
-   for library panels, so this container pushes them into Grafana over its HTTP
-   API instead; it exits with code 0 once done, which is normal. The models it
-   pushes, under `local-testing/grafana/library_panels/`, are copies of the
-   prod library panels — update both together whenever either side changes, or
-   the local stack stops reproducing prod.
+   On a new InfluxDB volume, the init scripts create org `lemongrass`, token
+   `local-dev-token`, and these buckets: `laps`, `telem`, `pisugar`,
+   `system_metrics/autogen`, and the legacy `races` and `race_sessions`. The legacy
+   buckets are not written to. They exist only for `lemongrass db import-legacy`.
 
-2. Point the CLI at the local stack by sourcing the committed app env:
+   `db-schema` runs every migration and loads the track data on each `up`, then
+   exits with code 0. Grafana waits for it to finish. If it fails with
+   `Can't locate revision`, the database was migrated by a newer checkout. Run the
+   stack from that checkout, or reset all data with `down -v`.
+
+   `grafana-library-panels` also exits with code 0 when done. Grafana cannot
+   provision library panels from files, so this container loads them through the
+   HTTP API. The panels in `local-testing/grafana/library_panels/` are copies of
+   the prod library panels. When you change one side, change the other.
+
+2. Configure your shell for the local stack:
 
    ```bash
    set -a && source local-testing/.env.local && set +a
    ```
 
-   This sets `LEMONGRASS_CONFIG` to `local-testing/lemongrass.toml` — which points the CLI at
-   the local InfluxDB (`url = http://localhost:8086`, `org = lemongrass`) — and the secret
-   `INFLUX_TELEMETRY_TOKEN=local-dev-token`. (Without a config file the CLI uses its built-in
-   defaults, `https://influxdb.focism.com` / `focism`.)
+   This sets `LEMONGRASS_CONFIG` to `local-testing/lemongrass.toml` (local InfluxDB
+   and Postgres), plus `INFLUX_TELEMETRY_TOKEN` and `LEMONGRASS_DB_PASSWORD`. Without
+   a config file, the CLI uses its prod defaults.
 
-3. Seed data by running a one-shot pull from RaceMonitor. This calls the RaceMonitor API, so it
-   needs your own RaceMonitor API token — this requires a Race Monitor account
-   with API access; get a token at <https://www.race-monitor.com/Home/API>. The
-   `-n`/`--network` flag does a one-shot pull of a completed race and writes it to the local
-   buckets. The API is rate-limited to ~6 req/min, so pulling a full race takes a few minutes:
+3. Load a race from RaceMonitor. You need a RaceMonitor API token
+   (<https://www.race-monitor.com/Home/API>). The API allows about 6 requests per
+   minute, so a full race takes a few minutes:
 
    ```bash
-   RACEMONITOR_TOKEN=<token> uv run lemongrass laps 161198 -n
+   RACEMONITOR_TOKENS=<token> uv run lemongrass laps 161198 -n
    ```
 
-4. Inspect the result:
+4. Check the result:
 
    ```bash
    uv run lemongrass races list
    ```
 
-   or open Grafana at http://localhost:3000 (login `admin` / `local-dev-password`)
-   — the InfluxDB datasource and lemongrass dashboards (**laps**, **race-control**, **standings**)
-   are pre-provisioned. The OBD panels in **race-control** render emulated telemetry from the
-   `telem` service, which starts with the default stack (see "Emulated OBD telemetry" below).
-   **car252-pisugar-ups** stays empty — it needs PiSugar UPS hardware. **telegraf** stays empty
-   too — the stack runs no Telegraf agent to write host metrics to `system_metrics/autogen`.
+   Or open Grafana at <http://localhost:3000> (user `admin`, password
+   `local-dev-password`). The provisioned dashboards are **laps**, **race-control**,
+   **standings**, **year-over-year**, **car252-pisugar-ups**, and **telegraf**. The
+   OBD panels in **race-control** show data from the emulator. **car252-pisugar-ups**
+   stays empty because it needs PiSugar hardware. **telegraf** stays empty because
+   the stack has no Telegraf agent.
 
-5. Tear down (add `-v` to wipe data and re-trigger bucket init next start):
+5. Stop the stack:
 
    ```bash
    docker compose -f local-testing/docker-compose.yml down
    ```
 
-   Storage is persistent named Docker volumes, so a plain `down` keeps your seeded
-   data across restarts; pass `-v` only when you want a clean reset.
+   Data is kept in named volumes. Add `-v` to delete all InfluxDB, Postgres, and
+   Grafana data and start fresh next time.
 
 ### Emulated OBD telemetry
 
-The `telem` service normally reads a physical ELM327 adapter. For local testing, a
-virtual ELM327 ([`ELM327-emulator`](https://pypi.org/project/ELM327-emulator/)) runs as
-the `elm327` service and telem connects to it over TCP (`socket://elm327:35000`). Both
-start as part of the default stack (step 1), so telem streams emulated OBD data with no
-extra flags.
+`telem` normally reads a physical ELM327 adapter. In the local stack, it connects to
+the [`ELM327-emulator`](https://pypi.org/project/ELM327-emulator/) over TCP at
+`socket://elm327:35000`. It writes OBD data to the `telem` bucket, tagged with the
+car VIN.
 
-telem writes emulated OBD data to the `telem` bucket (tagged with the car VIN);
-PiSugar host metrics go to the `pisugar` bucket (tagged with `host`). Both are
-created by the InfluxDB init scripts. The `telem` and `pisugar` buckets and
-their DBRPs are created only on a **fresh** InfluxDB volume, so if you had a
-stack running before they were added, recreate the volume:
+The `telem` and `pisugar` buckets are created only on a new InfluxDB volume. If your
+volume is older than these buckets, recreate it:
 
 ```bash
 docker compose -f local-testing/docker-compose.yml down -v
 docker compose -f local-testing/docker-compose.yml up --build -d
 ```
 
-(`pisugar-monitor` remains out of scope for local testing — it needs PiSugar UPS hardware.)
+`pisugar-monitor` is not part of the local stack because it needs PiSugar hardware.
 
 ### Running the OBD integration tests
 
-The default `uv run pytest` run is mock-only and fast. The integration tests drive telem's
-real OBD path against the emulator and are excluded by the `integration` marker. The
-emulator is installed imperatively (kept out of `uv.lock`):
+`uv run pytest` runs only the fast, mocked tests. The integration tests run telem's
+real OBD code against the emulator and use the `integration` marker. The emulator
+is installed separately so that it stays out of `uv.lock`:
 
 ```bash
 uv sync
@@ -149,9 +156,10 @@ bash local-testing/install-emulator.sh
 uv run --no-sync pytest -m integration tests/
 ```
 
-`--no-sync` prevents `uv run` from pruning the imperatively-installed emulator. CI runs
-this same sequence in the `integration` job.
+`--no-sync` stops `uv run` from removing the emulator. CI runs the same commands in
+the `integration` job.
 
-**Unreachable InfluxDB:** if the server is down or unreachable, commands retry a few
-times, then exit non-zero with a one-line `cannot reach InfluxDB at …` message
-rather than a traceback.
+## Troubleshooting
+
+**InfluxDB unreachable:** commands retry a few times, then exit non-zero with
+`cannot reach InfluxDB at …`.
