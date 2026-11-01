@@ -352,4 +352,5 @@ stack.
 
 ## Upgrading
 
-See [docs/UPGRADING.md](docs/UPGRADING.md) for the steps each major version requires.
+To upgrade to a new major version, follow the steps in
+[docs/UPGRADING.md](docs/UPGRADING.md).
