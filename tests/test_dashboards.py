@@ -9,6 +9,7 @@ import json
 import pathlib
 import re
 
+import pytest
 from sqlalchemy import text
 
 DASHBOARD = (pathlib.Path(__file__).resolve().parents[1]
@@ -65,14 +66,14 @@ YEAR_OVER_YEAR = (pathlib.Path(__file__).resolve().parents[1]
                   / 'year-over-year.json')
 
 
-def _variable_sql(name, **subs):
+def _variable_sql(name, dashboard=YEAR_OVER_YEAR, **subs):
     """The rawSql of a named template variable, with Grafana's macros filled in.
 
     subs maps a variable name to the literal SQL text that Grafana's
     ${name:sqlstring} interpolation would produce -- quotes included, since
     that is what sqlstring supplies.
     """
-    for var in json.loads(YEAR_OVER_YEAR.read_text())['templating']['list']:
+    for var in json.loads(dashboard.read_text())['templating']['list']:
         if var['name'] == name:
             sql = var['query']['rawSql']
             for token, value in subs.items():
@@ -104,6 +105,48 @@ def test_the_event_picker_sorts_the_all_sentinel_first(db):
     # 'AAA Event' sorts before 'All events' alphabetically, so a plain
     # ORDER BY __text would bury the sentinel.
     assert rows == [('all', 'All events'), ('aaa', 'AAA Event')]
+
+
+RACE_CONTROL = DASHBOARD.with_name('race-control.json')
+
+
+# A Postgres variable query that returns zero rows comes back from Grafana's
+# backend as a frame with no fields at all, and Grafana's variable code throws
+# "Couldn't find any field of type string in the results." on it -- the picker
+# shows an error instead of an empty list. So each picker must always return
+# at least one row: a ('', 'None') placeholder when there is nothing to pick.
+@pytest.mark.parametrize('dashboard', [DASHBOARD, RACE_CONTROL], ids=lambda p: p.stem)
+def test_the_race_picker_returns_a_placeholder_when_there_are_no_races(db, dashboard):
+    with db.begin() as conn:
+        rows = conn.execute(text(_variable_sql('raceid', dashboard))).fetchall()
+    assert rows == [('', 'None')]
+
+
+@pytest.mark.parametrize('dashboard', [DASHBOARD, RACE_CONTROL], ids=lambda p: p.stem)
+def test_the_race_picker_lists_races_newest_first_without_a_placeholder(db, dashboard):
+    with db.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO races (race_id, name, race_time) VALUES "
+            "('1', 'Old', '2025-05-03T14:00:00Z'), ('2', 'New', '2026-05-03T14:00:00Z')"))
+        rows = conn.execute(text(_variable_sql('raceid', dashboard))).fetchall()
+    assert rows == [('2', 'New (05/03/26)'), ('1', 'Old (05/03/25)')]
+
+
+def test_the_session_picker_returns_a_placeholder_when_the_race_has_no_sessions(db):
+    with db.begin() as conn:
+        rows = conn.execute(text(_variable_sql('session', DASHBOARD, raceid="''"))).fetchall()
+    assert rows == [('', 'None')]
+
+
+def test_the_session_picker_lists_sessions_without_a_placeholder(db):
+    with db.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO races (race_id, race_time) VALUES ('42', now())"))
+        conn.execute(text(
+            "INSERT INTO sessions (session_id, race_id, name, start_time) VALUES "
+            "(8, '42', '', NULL), (7, '42', 'Race Session', '2026-05-03T14:00:00Z')"))
+        rows = conn.execute(text(_variable_sql('session', DASHBOARD, raceid="'42'"))).fetchall()
+    assert rows == [('7', 'Race Session'), ('8', 'session 8')]
 
 
 def _venue_with_two_races(conn):

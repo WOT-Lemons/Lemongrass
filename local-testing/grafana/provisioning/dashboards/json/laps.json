@@ -1089,10 +1089,10 @@
           "type": "grafana-postgresql-datasource",
           "uid": "wotl-postgres"
         },
-        "definition": "SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\" FROM races ORDER BY race_time DESC",
+        "definition": "SELECT \"__value\", \"__text\" FROM (SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\", race_time FROM races UNION ALL SELECT '', 'None', NULL WHERE NOT EXISTS (SELECT 1 FROM races)) AS opts ORDER BY race_time DESC",
         "query": {
           "format": "table",
-          "rawSql": "SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\" FROM races ORDER BY race_time DESC"
+          "rawSql": "SELECT \"__value\", \"__text\" FROM (SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\", race_time FROM races UNION ALL SELECT '', 'None', NULL WHERE NOT EXISTS (SELECT 1 FROM races)) AS opts ORDER BY race_time DESC"
         },
         "refresh": 2,
         "sort": 0,
@@ -1162,7 +1162,7 @@
           "type": "grafana-postgresql-datasource",
           "uid": "wotl-postgres"
         },
-        "definition": "SELECT session_id::text AS \"__value\", coalesce(nullif(name, ''), 'session ' || session_id) AS \"__text\" FROM sessions WHERE race_id = ${raceid:sqlstring} ORDER BY start_time NULLS LAST, session_id",
+        "definition": "WITH s AS (SELECT session_id::text AS \"__value\", coalesce(nullif(name, ''), 'session ' || session_id) AS \"__text\", start_time, session_id FROM sessions WHERE race_id = ${raceid:sqlstring}) SELECT \"__value\", \"__text\" FROM (SELECT * FROM s UNION ALL SELECT '', 'None', NULL, NULL WHERE NOT EXISTS (SELECT 1 FROM s)) AS opts ORDER BY start_time NULLS LAST, session_id",
         "allValue": ".*",
         "includeAll": true,
         "label": "Session",
@@ -1171,7 +1171,7 @@
         "options": [],
         "query": {
           "format": "table",
-          "rawSql": "SELECT session_id::text AS \"__value\", coalesce(nullif(name, ''), 'session ' || session_id) AS \"__text\" FROM sessions WHERE race_id = ${raceid:sqlstring} ORDER BY start_time NULLS LAST, session_id"
+          "rawSql": "WITH s AS (SELECT session_id::text AS \"__value\", coalesce(nullif(name, ''), 'session ' || session_id) AS \"__text\", start_time, session_id FROM sessions WHERE race_id = ${raceid:sqlstring}) SELECT \"__value\", \"__text\" FROM (SELECT * FROM s UNION ALL SELECT '', 'None', NULL, NULL WHERE NOT EXISTS (SELECT 1 FROM s)) AS opts ORDER BY start_time NULLS LAST, session_id"
         },
         "refresh": 2,
         "sort": 0,
