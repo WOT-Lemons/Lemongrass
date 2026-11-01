@@ -6,9 +6,9 @@ they stay in InfluxDB. Run once, per environment, when deploying the build that 
 the `lemongrass db import-legacy` / `export-legacy` commands.
 
 > **Note:** the `local-testing/` Grafana dashboards resolve races and sessions from
-> Postgres via the `wotl-postgres` datasource, so they need that datasource provisioned
-> (`docker compose up` does it) and the schema applied before their race pickers
-> populate. The legacy Influx datasources stay provisioned for the pre-cutover buckets.
+> Postgres via the `wotl-postgres` datasource. `docker compose up` provisions that
+> datasource and applies the schema (the one-shot `db-schema` service runs
+> `lemongrass db upgrade` before Grafana starts). The legacy Influx datasources stay provisioned for the pre-cutover buckets.
 > Production dashboards are managed elsewhere and are a separate sub-project's
 > responsibility.
 

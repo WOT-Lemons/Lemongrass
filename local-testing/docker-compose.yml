@@ -27,8 +27,8 @@ services:
   postgres:
     image: postgres:18@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
     # Published so the CLI can run on the host against the local stack, the same
-    # reason influxdb publishes 8086. Without this, `lemongrass db upgrade`
-    # cannot reach the database.
+    # reason influxdb publishes 8086. Without this, the host CLI (e.g.
+    # `lemongrass db import-legacy`) cannot reach the database.
     ports:
       - "127.0.0.1:5432:5432"
     environment:
@@ -40,10 +40,45 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "lemongrass"]
+      # Check over TCP: on a fresh volume the entrypoint's temporary init server
+      # listens only on the Unix socket, so a socket check can pass before the
+      # real server is reachable at postgres:5432.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "lemongrass"]
       interval: 5s
       timeout: 3s
       retries: 12
+
+  # Postgres only creates an empty database. This one-shot container applies the
+  # schema (every migration, plus the curated tracks data) so a fresh volume comes
+  # up with all tables, and an existing one picks up any newer migrations.
+  # pull_policy: build rebuilds the image on every `up` (cached, so cheap) so it
+  # always carries this checkout's migrations. If it fails with "Can't locate
+  # revision", the database is ahead of this checkout (migrated from a newer
+  # branch or worktree): run the stack from that checkout instead, or wipe all
+  # local data with `docker compose down -v`.
+  db-schema:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    pull_policy: build
+    command:
+      - /bin/sh
+      - -c
+      - |
+        cat > /tmp/lemongrass.toml <<'TOML'
+        [postgres]
+        host = "postgres"
+        port = 5432
+        database = "lemongrass"
+        user = "lemongrass"
+        TOML
+        exec lemongrass db upgrade
+    environment:
+      LEMONGRASS_CONFIG: /tmp/lemongrass.toml
+      LEMONGRASS_DB_PASSWORD: local-dev-password
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   grafana:
     image: grafana/grafana:13.3@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
@@ -52,8 +87,8 @@ services:
     depends_on:
       influxdb:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-schema:
+        condition: service_completed_successfully
     environment:
       GF_SECURITY_ADMIN_PASSWORD: local-dev-password
     volumes:
