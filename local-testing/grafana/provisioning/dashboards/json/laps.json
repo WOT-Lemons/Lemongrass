@@ -1107,10 +1107,10 @@
           "type": "grafana-postgresql-datasource",
           "uid": "wotl-postgres"
         },
-        "definition": "SELECT (extract(epoch from race_time) * 1000)::bigint::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
+        "definition": "SELECT coalesce(max((extract(epoch from race_time) * 1000)::bigint), 0)::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
         "query": {
           "format": "table",
-          "rawSql": "SELECT (extract(epoch from race_time) * 1000)::bigint::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
+          "rawSql": "SELECT coalesce(max((extract(epoch from race_time) * 1000)::bigint), 0)::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
         },
         "refresh": 2,
         "sort": 0,
@@ -1125,10 +1125,10 @@
           "type": "grafana-postgresql-datasource",
           "uid": "wotl-postgres"
         },
-        "definition": "SELECT coalesce((extract(epoch from end_time) * 1000 + 3600000)::bigint::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
+        "definition": "SELECT coalesce(max((extract(epoch from end_time) * 1000 + 3600000)::bigint)::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
         "query": {
           "format": "table",
-          "rawSql": "SELECT coalesce((extract(epoch from end_time) * 1000 + 3600000)::bigint::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
+          "rawSql": "SELECT coalesce(max((extract(epoch from end_time) * 1000 + 3600000)::bigint)::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
         },
         "refresh": 2,
         "sort": 0,
