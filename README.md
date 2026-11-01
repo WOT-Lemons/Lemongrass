@@ -350,9 +350,58 @@ races.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, tests, and the local
 stack.
 
-## Upgrading from v1.x
+## Upgrading
 
-In v2.0.0, the separate commands were replaced by one `lemongrass` command. Add the
+Each major version requires the steps below. If you upgrade across several major
+versions, do the steps for each one, oldest first. Run
+`lemongrass races backfill --upgrade-stored` only once, after all other steps.
+
+### To 7.0.0
+
+Race and session metadata moved from InfluxDB to PostgreSQL. Before you deploy:
+
+1. Set up PostgreSQL 14 or later.
+2. Add `[postgres]` to the config file and set `LEMONGRASS_DB_PASSWORD`.
+3. Follow the runbook in
+   [local-testing/migrations/README.md](local-testing/migrations/README.md).
+
+If you skip the import, stored races are not visible, and backfill imports them
+again.
+
+### To 6.0.0
+
+`SCHEMA_VERSION` changed from 4 to 5, and session IDs changed. Reprocess stored
+races:
+
+```shell
+lemongrass races backfill --upgrade-stored
+```
+
+Saved `$session` selections in Grafana are reset.
+
+### To 5.0.0
+
+Non-secret settings moved from environment variables to a TOML file. See
+[Migrating from environment variables](docs/CONFIGURATION.md#migrating-from-environment-variables).
+
+### To 4.0.0
+
+Python 3.11 or later is required. The Docker image is not affected.
+
+### To 3.0.0
+
+`competitor_name` and `car_info` changed from tags to fields on the `lap` and
+`standings` measurements. Reprocess stored races:
+
+```shell
+lemongrass races backfill --upgrade-stored
+```
+
+Update Grafana queries that group or pivot on these tags.
+
+### To 2.0.0
+
+The separate commands were replaced by one `lemongrass` command. Add the
 `lemongrass` prefix:
 
 | Before | After |
