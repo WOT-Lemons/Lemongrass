@@ -352,9 +352,12 @@ stack.
 
 ## Upgrading
 
-Each major version requires the steps below. If you upgrade across several major
-versions, do the steps for each one, oldest first. Run
-`lemongrass races backfill --upgrade-stored` only once, after all other steps.
+These major versions require action when you upgrade. For all breaking changes, see
+[CHANGELOG.md](CHANGELOG.md).
+
+If you upgrade across several major versions, do the steps for each one, oldest
+first. Run `lemongrass races backfill --upgrade-stored` only once, after all other
+steps.
 
 ### To 7.x
 
@@ -365,28 +368,18 @@ Race and session metadata moved from InfluxDB to PostgreSQL. Before you deploy:
 3. Follow the runbook in
    [local-testing/migrations/README.md](local-testing/migrations/README.md).
 
-If you skip the import, stored races are not visible, and backfill imports them
-again.
-
 ### To 6.x
 
-`SCHEMA_VERSION` changed from 4 to 5, and session IDs changed. Reprocess stored
-races:
+The lap schema changed. Reprocess stored races:
 
 ```shell
 lemongrass races backfill --upgrade-stored
 ```
 
-Saved `$session` selections in Grafana are reset.
-
 ### To 5.x
 
 Non-secret settings moved from environment variables to a TOML file. See
 [Migrating from environment variables](docs/CONFIGURATION.md#migrating-from-environment-variables).
-
-### To 4.x
-
-Python 3.11 or later is required. The Docker image is not affected.
 
 ### To 3.x
 
