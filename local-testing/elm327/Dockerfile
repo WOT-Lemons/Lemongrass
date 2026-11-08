@@ -1,7 +1,7 @@
 # Virtual ELM327 OBD-II adapter for the local test stack. Reuses the repo's
 # pinned uv base image. Two sequential installs guarantee setuptools<81 (which
 # still ships pkg_resources) is present before the sdist builds.
-FROM ghcr.io/astral-sh/uv:0.13.6-python3.15-trixie@sha256:f68dfb3eaf23a53afb5f74833bdacc0ce586d69f8063c48f9f3ebbe42e048e4a
+FROM ghcr.io/astral-sh/uv:0.13.7-python3.15-trixie@sha256:e251a906500a155fbd0940b1a01192f9ef941e6c493108a69fcc11bcafdf208d
 RUN uv pip install --system 'setuptools<81'
 RUN uv pip install --system --no-build-isolation 'ELM327-emulator==3.0.5'
 # Log to stdout (visible via `docker logs`) instead of the stock rotating
