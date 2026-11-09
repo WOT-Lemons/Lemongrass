@@ -897,12 +897,16 @@
             "mode": "absolute",
             "steps": [
               {
+                "color": "red",
+                "value": null
+              },
+              {
                 "color": "green",
-                "value": 0
+                "value": 12
               },
               {
                 "color": "red",
-                "value": 122
+                "value": 15
               }
             ]
           },
@@ -990,6 +994,129 @@
       "type": "stat",
       "timeFrom": "1m",
       "hideTimeOverride": true
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-telem-ql"
+      },
+      "description": "Vehicle electrical voltage seen by the OBD-II adapter over the selected time range. ~12.4-12.7 V engine off, ~13.5-14.5 V while the alternator is charging. Dashed lines mark 12 V (low) and 15 V (overcharge).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": 30000,
+            "axisPlacement": "auto",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 12
+              },
+              {
+                "color": "red",
+                "value": 15
+              }
+            ]
+          },
+          "unit": "volt",
+          "displayName": "Voltage"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "id": 57,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-telem-ql"
+          },
+          "groupBy": [
+            {
+              "params": [
+                "$__interval"
+              ],
+              "type": "time"
+            },
+            {
+              "params": [
+                "null"
+              ],
+              "type": "fill"
+            }
+          ],
+          "measurement": "-Voltage-detected-by-OBD-II-adapter",
+          "orderByTime": "ASC",
+          "policy": "default",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "select": [
+            [
+              {
+                "params": [
+                  "value"
+                ],
+                "type": "field"
+              },
+              {
+                "params": [],
+                "type": "mean"
+              }
+            ]
+          ],
+          "tags": [
+            {
+              "key": "vin",
+              "operator": "=~",
+              "value": "/^$vin$/"
+            }
+          ]
+        }
+      ],
+      "title": "OBD-II Voltage History",
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -3324,10 +3451,10 @@
           "type": "grafana-postgresql-datasource",
           "uid": "wotl-postgres"
         },
-        "definition": "SELECT coalesce(max((extract(epoch from end_time) * 1000 + 3600000)::bigint)::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
+        "definition": "SELECT coalesce((SELECT CASE WHEN end_time IS NULL OR end_time + interval '1 hour' > now() THEN 'now' ELSE (extract(epoch from end_time) * 1000 + 3600000)::bigint::text END FROM races WHERE race_id = ${raceid:sqlstring}), 'now') AS \"__value\"",
         "query": {
           "format": "table",
-          "rawSql": "SELECT coalesce(max((extract(epoch from end_time) * 1000 + 3600000)::bigint)::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
+          "rawSql": "SELECT coalesce((SELECT CASE WHEN end_time IS NULL OR end_time + interval '1 hour' > now() THEN 'now' ELSE (extract(epoch from end_time) * 1000 + 3600000)::bigint::text END FROM races WHERE race_id = ${raceid:sqlstring}), 'now') AS \"__value\""
         },
         "refresh": 2,
         "sort": 0,
@@ -3344,7 +3471,7 @@
           "type": "influxdb",
           "uid": "wotl-laps-flux"
         },
-        "definition": "from(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and (r._field == \"lap_no\" or r._field == \"competitor_name\")) |> pivot(rowKey: [\"_time\", \"car_number\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> group(columns: [\"car_number\"]) |> last(column: \"lap_no\") |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])",
+        "definition": "import \"strings\"\nfrom(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and (r._field == \"lap_no\" or r._field == \"competitor_name\")) |> pivot(rowKey: [\"_time\", \"car_number\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> group(columns: [\"car_number\"]) |> last(column: \"lap_no\") |> map(fn: (r) => ({r with car_number: strings.trimSpace(v: r.car_number)})) |> filter(fn: (r) => r.car_number =~ /^-?[0-9]+$/) |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])",
         "label": "Competitor",
         "name": "carno",
         "options": [
@@ -3355,7 +3482,7 @@
           }
         ],
         "query": {
-          "query": "from(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and (r._field == \"lap_no\" or r._field == \"competitor_name\")) |> pivot(rowKey: [\"_time\", \"car_number\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> group(columns: [\"car_number\"]) |> last(column: \"lap_no\") |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])"
+          "query": "import \"strings\"\nfrom(bucket: \"laps\") |> range(start: 0) |> filter(fn: (r) => r._measurement == \"lap\" and r.race_id == \"${raceid}\" and (r._field == \"lap_no\" or r._field == \"competitor_name\")) |> pivot(rowKey: [\"_time\", \"car_number\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> group(columns: [\"car_number\"]) |> last(column: \"lap_no\") |> map(fn: (r) => ({r with car_number: strings.trimSpace(v: r.car_number)})) |> filter(fn: (r) => r.car_number =~ /^-?[0-9]+$/) |> map(fn: (r) => ({_carnum: int(v: r.car_number), _value: r.car_number + \" - \" + r.competitor_name + \";\" + r.car_number})) |> group() |> sort(columns: [\"_carnum\"]) |> keep(columns: [\"_value\"])"
         },
         "regex": "/(?<text>.+);(?<value>.+)/",
         "refresh": 2,

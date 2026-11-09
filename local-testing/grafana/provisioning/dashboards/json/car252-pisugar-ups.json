@@ -18,7 +18,20 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "links": [],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "bolt",
+      "includeVars": true,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Set time to race",
+      "tooltip": "Set the time range to the selected race",
+      "type": "link",
+      "url": "/d/aek7ov53gt62od/car252-pisugar-ups?from=${race_from}&to=${race_to}"
+    }
+  ],
   "panels": [
     {
       "collapsed": true,
@@ -195,6 +208,717 @@
         "uid": "aek81rxxuthj4f"
       },
       "title": "PiSugar Battery Level"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-pisugar-ql"
+      },
+      "description": "Estimated time until the battery is empty (discharging) or full (charging), from the average rate of change of battery level over the last 30 minutes. '—' means the battery is not moving in that direction. Shows Offline if there has been no reading in the last minute.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "decimals": 1,
+          "unit": "h",
+          "noValue": "Offline",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "—",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": null,
+                "to": 0,
+                "result": {
+                  "text": "—",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 72,
+                "to": null,
+                "result": {
+                  "text": "> 3 days",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "EMPTY"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Time to empty"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "FULL"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Time to full"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "RATE"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Charge rate"
+              },
+              {
+                "id": "unit",
+                "value": "suffix:%/h"
+              },
+              {
+                "id": "mappings",
+                "value": []
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "id": 30,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-pisugar-ql"
+          },
+          "refId": "SLOPE",
+          "hide": true,
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "query": "SELECT derivative(mean(\"value\"), 1h) FROM \"pisugar-battery-level\" WHERE (\"host\" =~ /^$host$/) AND $timeFilter GROUP BY time(5m) fill(none)"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-pisugar-ql"
+          },
+          "refId": "LEVEL",
+          "hide": true,
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "query": "SELECT last(\"value\") FROM \"pisugar-battery-level\" WHERE (\"host\" =~ /^$host$/) AND time > now() - 1m"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "AVG",
+          "type": "reduce",
+          "expression": "SLOPE",
+          "reducer": "mean",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "NOW",
+          "type": "reduce",
+          "expression": "LEVEL",
+          "reducer": "last",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "hide": true
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "RATE",
+          "type": "math",
+          "expression": "$AVG + 0 * $NOW"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "EMPTY",
+          "type": "math",
+          "expression": "$NOW / -$RATE"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "refId": "FULL",
+          "type": "math",
+          "expression": "(100 - $NOW) / $RATE"
+        }
+      ],
+      "timeFrom": "30m",
+      "hideTimeOverride": true,
+      "title": "Battery ETA",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 32,
+      "panels": [],
+      "title": "History",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-pisugar-ql"
+      },
+      "description": "Whether the PiSugar was on external power (charging) or running on battery.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 0
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "true": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "Power Connected"
+                },
+                "false": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "On Battery"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "displayName": "Power"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "id": 31,
+      "options": {
+        "alignValue": "center",
+        "mergeValues": true,
+        "rowHeight": 0.9,
+        "showValue": "auto",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-pisugar-ql"
+          },
+          "refId": "A",
+          "measurement": "pisugar-battery-power-plugged",
+          "groupBy": [
+            {
+              "params": [
+                "$__interval"
+              ],
+              "type": "time"
+            },
+            {
+              "params": [
+                "null"
+              ],
+              "type": "fill"
+            }
+          ],
+          "orderByTime": "ASC",
+          "policy": "default",
+          "resultFormat": "time_series",
+          "select": [
+            [
+              {
+                "params": [
+                  "value"
+                ],
+                "type": "field"
+              },
+              {
+                "params": [],
+                "type": "last"
+              }
+            ]
+          ],
+          "tags": [
+            {
+              "key": "host",
+              "operator": "=~",
+              "value": "/^$host$/"
+            }
+          ]
+        }
+      ],
+      "title": "Power Source History",
+      "type": "state-timeline"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-pisugar-ql"
+      },
+      "description": "PiSugar battery level over the selected time range. Gaps mean the Pi was offline.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "green",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "percent",
+          "displayName": "Battery Level",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 33,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-pisugar-ql"
+          },
+          "refId": "A",
+          "measurement": "pisugar-battery-level",
+          "groupBy": [
+            {
+              "params": [
+                "$__interval"
+              ],
+              "type": "time"
+            },
+            {
+              "params": [
+                "null"
+              ],
+              "type": "fill"
+            }
+          ],
+          "orderByTime": "ASC",
+          "policy": "default",
+          "resultFormat": "time_series",
+          "select": [
+            [
+              {
+                "params": [
+                  "value"
+                ],
+                "type": "field"
+              },
+              {
+                "params": [],
+                "type": "mean"
+              }
+            ]
+          ],
+          "tags": [
+            {
+              "key": "host",
+              "operator": "=~",
+              "value": "/^$host$/"
+            }
+          ]
+        }
+      ],
+      "title": "Battery Level History",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-pisugar-ql"
+      },
+      "description": "PiSugar battery voltage over the selected time range. Gaps mean the Pi was offline.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "volt",
+          "displayName": "Battery Voltage",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "id": 34,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-pisugar-ql"
+          },
+          "refId": "A",
+          "measurement": "pisugar-battery-voltage",
+          "groupBy": [
+            {
+              "params": [
+                "$__interval"
+              ],
+              "type": "time"
+            },
+            {
+              "params": [
+                "null"
+              ],
+              "type": "fill"
+            }
+          ],
+          "orderByTime": "ASC",
+          "policy": "default",
+          "resultFormat": "time_series",
+          "select": [
+            [
+              {
+                "params": [
+                  "value"
+                ],
+                "type": "field"
+              },
+              {
+                "params": [],
+                "type": "mean"
+              }
+            ]
+          ],
+          "tags": [
+            {
+              "key": "host",
+              "operator": "=~",
+              "value": "/^$host$/"
+            }
+          ]
+        }
+      ],
+      "title": "Battery Voltage History",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "wotl-pisugar-ql"
+      },
+      "description": "PiSugar temperature over the selected time range. Gaps mean the Pi was offline.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "celsius",
+          "displayName": "Temperature"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "id": 35,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "wotl-pisugar-ql"
+          },
+          "refId": "A",
+          "measurement": "pisugar-temperature",
+          "groupBy": [
+            {
+              "params": [
+                "$__interval"
+              ],
+              "type": "time"
+            },
+            {
+              "params": [
+                "null"
+              ],
+              "type": "fill"
+            }
+          ],
+          "orderByTime": "ASC",
+          "policy": "default",
+          "resultFormat": "time_series",
+          "select": [
+            [
+              {
+                "params": [
+                  "value"
+                ],
+                "type": "field"
+              },
+              {
+                "params": [],
+                "type": "mean"
+              }
+            ]
+          ],
+          "tags": [
+            {
+              "key": "host",
+              "operator": "=~",
+              "value": "/^$host$/"
+            }
+          ]
+        }
+      ],
+      "title": "Temperature History",
+      "type": "timeseries"
     }
   ],
   "preload": false,
@@ -215,11 +939,65 @@
         "refresh": 1,
         "includeAll": false,
         "multi": false
+      },
+      {
+        "name": "raceid",
+        "label": "Race",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
+        },
+        "definition": "SELECT \"__value\", \"__text\" FROM (SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\", race_time FROM races UNION ALL SELECT '', 'None', NULL WHERE NOT EXISTS (SELECT 1 FROM races)) AS opts ORDER BY race_time DESC",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT \"__value\", \"__text\" FROM (SELECT race_id AS \"__value\", name || ' (' || to_char(race_time, 'MM/DD/YY') || ')' AS \"__text\", race_time FROM races UNION ALL SELECT '', 'None', NULL WHERE NOT EXISTS (SELECT 1 FROM races)) AS opts ORDER BY race_time DESC"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "race_from",
+        "type": "query",
+        "hide": 2,
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
+        },
+        "definition": "SELECT coalesce(max((extract(epoch from race_time) * 1000)::bigint), 0)::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT coalesce(max((extract(epoch from race_time) * 1000)::bigint), 0)::text AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "race_to",
+        "type": "query",
+        "hide": 2,
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "wotl-postgres"
+        },
+        "definition": "SELECT coalesce((SELECT CASE WHEN end_time IS NULL OR end_time + interval '1 hour' > now() THEN 'now' ELSE (extract(epoch from end_time) * 1000 + 3600000)::bigint::text END FROM races WHERE race_id = ${raceid:sqlstring}), 'now') AS \"__value\"",
+        "query": {
+          "format": "table",
+          "rawSql": "SELECT coalesce((SELECT CASE WHEN end_time IS NULL OR end_time + interval '1 hour' > now() THEN 'now' ELSE (extract(epoch from end_time) * 1000 + 3600000)::bigint::text END FROM races WHERE race_id = ${raceid:sqlstring}), 'now') AS \"__value\""
+        },
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": []
       }
     ]
   },
   "time": {
-    "from": "now-15m",
+    "from": "now-6h",
     "to": "now"
   },
   "timepicker": {},

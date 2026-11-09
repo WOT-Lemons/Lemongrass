@@ -314,10 +314,10 @@
           "type": "grafana-postgresql-datasource",
           "uid": "wotl-postgres"
         },
-        "definition": "SELECT coalesce(max((extract(epoch from end_time) * 1000 + 3600000)::bigint)::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}",
+        "definition": "SELECT coalesce((SELECT CASE WHEN end_time IS NULL OR end_time + interval '1 hour' > now() THEN 'now' ELSE (extract(epoch from end_time) * 1000 + 3600000)::bigint::text END FROM races WHERE race_id = ${raceid:sqlstring}), 'now') AS \"__value\"",
         "query": {
           "format": "table",
-          "rawSql": "SELECT coalesce(max((extract(epoch from end_time) * 1000 + 3600000)::bigint)::text, 'now') AS \"__value\" FROM races WHERE race_id = ${raceid:sqlstring}"
+          "rawSql": "SELECT coalesce((SELECT CASE WHEN end_time IS NULL OR end_time + interval '1 hour' > now() THEN 'now' ELSE (extract(epoch from end_time) * 1000 + 3600000)::bigint::text END FROM races WHERE race_id = ${raceid:sqlstring}), 'now') AS \"__value\""
         },
         "refresh": 2,
         "sort": 0,
