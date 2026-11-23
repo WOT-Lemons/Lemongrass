@@ -45,6 +45,9 @@ build-backend = "uv_build"
 [project.scripts]
 lemongrass = "lemongrass.cli:main"
 
+[tool.uv]
+exclude-newer = "7 days"
+
 [tool.ruff]
 line-length = 100
 exclude = [".git", "__pycache__", "build", "dist", ".venv"]
