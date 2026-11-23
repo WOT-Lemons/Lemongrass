@@ -7,7 +7,7 @@
   ],
   "semanticCommitType": "chore",
   "semanticCommitScope": null,
-  "minimumReleaseAge": "7 days",
+  "minimumReleaseAge": "3 days",
   "packageRules": [
     {
       "description": "Runtime dependencies ship in the published wheel, so their bumps should cut a release. Everything else Renovate touches (dev groups, GitHub Actions, the uv build stage) defaults to a non-releasable 'chore'.",
@@ -22,13 +22,13 @@
       "semanticCommitType": "deps"
     },
     {
-      "description": "ghcr.io exposes no release timestamps to Renovate, so under the default 'timestamp-required' behaviour this image's updates are held forever and the 7-day gate can never pass. Let this one digest-pinned, first-party image through without a timestamp (the 7-day age still applies whenever a timestamp is available); every other dependency still requires one.",
+      "description": "ghcr.io exposes no release timestamps to Renovate, and under the default 'timestamp-required' behaviour a timestamp-less update is held forever, so this image's updates could never pass the release-age gate. Exempt this one image: with 'timestamp-optional' it gets NO release-age soak at all (ghcr never supplies a timestamp). Accepted because it is digest-pinned, first-party (Astral), and build-only: it runs 'uv sync --frozen' against a hash-pinned uv.lock, so it cannot change which package versions ship. Every other dependency still requires a timestamp.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/astral-sh/uv"],
       "minimumReleaseAgeBehaviour": "timestamp-optional"
     },
     {
-      "description": "One uv release fans out into three updates (the builder image tag, the 'astral-sh/uv' version pinned in workflows, and the setup-uv action). Ship them as one PR.",
+      "description": "One uv release fans out into three updates (the builder image tag, the 'astral-sh/uv' version pinned in workflows, and the setup-uv action); group them on one branch. They mature at different times: the ghcr image has no release-age soak (see the rule above) and lands on day 0, while the two GitHub-sourced updates join the same PR once they pass the release-age gate. Merging before then means the workflow bumps follow in a second PR.",
       "matchPackageNames": ["ghcr.io/astral-sh/uv", "astral-sh/uv", "astral-sh/setup-uv"],
       "groupName": "uv"
     }
@@ -37,7 +37,7 @@
     "enabled": true
   },
   "lockFileMaintenance": {
-    "description": "Renovate's pep621 manager only re-locks when a pyproject.toml constraint changes, so versions that already satisfy our ranges (transitive deps especially) freeze in uv.lock between constraint bumps. Lock file maintenance runs a periodic full re-resolve (the automated equivalent of 'uv lock --upgrade') and opens a PR, gated by the existing 'uv lock --check' + pytest matrix. The runtime image is built with 'uv sync --frozen', so uv.lock is exactly what ships in the published container — like a base-image bump, a lock refresh must cut a release to reach it, so these updates are a releasable 'deps'. Renovate has no release timestamp for a full re-lock, so its minimumReleaseAge gate could never pass here; the age is instead enforced by uv itself via [tool.uv] exclude-newer in pyproject.toml, which applies to every transitive package in the re-resolve (and to sync-lock and local 'uv lock' runs too).",
+    "description": "Renovate's pep621 manager only re-locks when a pyproject.toml constraint changes, so versions that already satisfy our ranges (transitive deps especially) freeze in uv.lock between constraint bumps. Lock file maintenance runs a periodic full re-resolve (the automated equivalent of 'uv lock --upgrade') and opens a PR, gated by the existing 'uv lock --check' + pytest matrix. The runtime image is built with 'uv sync --frozen', so uv.lock is exactly what ships in the published container — like a base-image bump, a lock refresh must cut a release to reach it, so these updates are a releasable 'deps'. Renovate has no release timestamp for a full re-lock, so its minimumReleaseAge gate could never pass here; the age is instead enforced by uv itself via [tool.uv] exclude-newer in pyproject.toml (keep it equal to minimumReleaseAge above), which applies to every transitive package in the re-resolve (and to sync-lock and local 'uv lock' runs too).",
     "enabled": true,
     "semanticCommitType": "deps",
     "schedule": ["before 5am on monday"],
