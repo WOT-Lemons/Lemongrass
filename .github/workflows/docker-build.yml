@@ -1,19 +1,8 @@
 name: Build and Push Image
 
+# Temporary: rebuild the v5.0.0 image. It pushes only the tags of that release.
 on:
-  push:
-    tags:
-      - 'v*'  # every release tag produces a new image; no paths filter is intentional
-  pull_request:
-    branches:
-      - main
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - pyproject.toml
-      - uv.lock
-      - src/lemongrass/**
-      - .github/workflows/docker-build.yml
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,25 +10,21 @@ concurrency:
 
 jobs:
   build:
-    uses: docker/github-builder/.github/workflows/build.yml@5f637c833aa76bc99372a1dc9a6f8bcd8056fb85 # v1.12.0
+    uses: docker/github-builder/.github/workflows/build.yml@a31d2311da4d55e21b978c1c52bab82ba97d51ee # v1.19.0
     permissions:
       contents: read
       packages: write
       id-token: write
     with:
       output: image
-      push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      push: true
       platforms: linux/amd64,linux/arm64
       cache: true
       cache-mode: max
       sbom: true
       meta-images: ghcr.io/wot-lemons/lemongrass
       meta-tags: |
-        type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
-        type=semver,pattern={{version}}
-        type=semver,pattern={{major}}.{{minor}}
-        type=semver,pattern={{major}}
-        type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+        type=raw,value=5.0.0
     secrets:
       registry-auths: |
         - registry: ghcr.io
