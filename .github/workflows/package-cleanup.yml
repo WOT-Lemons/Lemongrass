@@ -182,6 +182,23 @@ jobs:
               stack.push(...(children.get(digest) ?? []), ...(attestationsBySubject.get(digest) ?? []));
             }
 
+            // Warn about a kept image that references a manifest that does not
+            // exist. If the missing manifest is a platform manifest, a pull of
+            // that platform fails. The prune does not repair these images.
+            const listed = new Set(live.map((v) => v.name));
+            for (const v of live.filter((v) => keep.has(v.name))) {
+              for (const child of children.get(v.name) ?? []) {
+                if (listed.has(child)) continue;
+                const res = await fetch(`https://ghcr.io/v2/${org}/${pkg}/manifests/${child}`, {
+                  method: 'HEAD',
+                  headers: { Authorization: `Bearer ${token}`, Accept: accept },
+                });
+                if (res.status !== 404) continue;
+                const label = tagsOf(v).join(',') || '<untagged>';
+                core.warning(`${pkg} ${label} (${v.name}) references missing manifest ${child}`);
+              }
+            }
+
             let deleted = 0;
             for (const v of live.filter((v) => !keep.has(v.name))) {
               const label = tagsOf(v).join(',') || '<untagged>';
@@ -194,4 +211,4 @@ jobs:
                 core.info(`Already gone: ${pkg} version ${v.id} (${v.name})`);
               }
             }
-            core.info(`Kept ${keep.size} version(s), deleted ${deleted}`);
+            core.info(`Kept ${live.filter((v) => keep.has(v.name)).length} version(s), deleted ${deleted}`);
