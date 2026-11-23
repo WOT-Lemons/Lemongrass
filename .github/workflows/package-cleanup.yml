@@ -77,16 +77,24 @@ jobs:
             // Mark and sweep on one snapshot of the package versions.
             // Keep these versions:
             //   - each version that has a real tag (a tag that is not sha256-<hex>)
+            //   - each version that is less than 1 hour old
             //   - each manifest that a kept version references
             //   - each sha256-<digest> attestation index whose subject the script keeps
             // Delete all other versions. One run removes a full orphan chain:
             // untagged index -> its attestation -> the SBOM blobs of that attestation.
-            // The script reads each tagged manifest one time only.
+            // The script reads each tagged or recent manifest one time only.
+            //
+            // The 1-hour rule protects an image build that is in progress. The
+            // build pushes each platform manifest without a tag. A later job
+            // pushes the tagged index. Between these jobs, the platform
+            // manifests are untagged, but they are not orphans.
             const org = 'wot-lemons';
             const pkg = process.env.PKG;
             const ref = { package_type: 'container', org, package_name: pkg };
             const isAttestationTag = (t) => /^sha256-[0-9a-f]{64}$/.test(t);
             const tagsOf = (v) => v.metadata.container.tags;
+            const recentCutoff = Date.now() - 60 * 60 * 1000;
+            const isRecent = (v) => Date.parse(v.created_at) > recentCutoff;
 
             const versions = await github.paginate(
               github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg,
@@ -146,12 +154,12 @@ jobs:
               return out;
             };
 
-            const tagged = versions.filter((v) => tagsOf(v).length > 0);
+            const toRead = versions.filter((v) => tagsOf(v).length > 0 || isRecent(v));
             const children = new Map();
             const gone = new Set();
-            (await mapLimit(tagged, 8, childrenOf)).forEach((kids, i) => {
-              if (kids === null) gone.add(tagged[i].name);
-              else children.set(tagged[i].name, kids);
+            (await mapLimit(toRead, 8, childrenOf)).forEach((kids, i) => {
+              if (kids === null) gone.add(toRead[i].name);
+              else children.set(toRead[i].name, kids);
             });
             const live = versions.filter((v) => !gone.has(v.name));
 
@@ -164,7 +172,9 @@ jobs:
             }
 
             const keep = new Set();
-            const stack = live.filter((v) => tagsOf(v).some((t) => !isAttestationTag(t))).map((v) => v.name);
+            const stack = live
+              .filter((v) => tagsOf(v).some((t) => !isAttestationTag(t)) || isRecent(v))
+              .map((v) => v.name);
             while (stack.length > 0) {
               const digest = stack.pop();
               if (keep.has(digest)) continue;
