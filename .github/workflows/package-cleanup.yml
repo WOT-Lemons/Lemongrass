@@ -74,14 +74,14 @@ jobs:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           script: |
-            // Mark-and-sweep over a single snapshot of the package's versions.
-            // Keep:
-            //   - every version with a real (non sha256-<hex>) tag,
-            //   - the manifests any kept version references,
-            //   - sha256-<digest> attestation indexes whose subject is kept,
-            // and delete everything else. This removes a whole orphan chain
-            // (untagged index -> its attestation -> the SBOM blobs that
-            // attestation wrapped) in one run, reading each tagged manifest once.
+            // Mark and sweep on one snapshot of the package versions.
+            // Keep these versions:
+            //   - each version that has a real tag (a tag that is not sha256-<hex>)
+            //   - each manifest that a kept version references
+            //   - each sha256-<digest> attestation index whose subject the script keeps
+            // Delete all other versions. One run removes a full orphan chain:
+            // untagged index -> its attestation -> the SBOM blobs of that attestation.
+            // The script reads each tagged manifest one time only.
             const org = 'wot-lemons';
             const pkg = process.env.PKG;
             const ref = { package_type: 'container', org, package_name: pkg };
@@ -119,10 +119,11 @@ jobs:
               }
             };
 
-            // Child digests of a version's manifest, or null when the version
-            // is already gone (the listing can briefly lag deletions). Any other
-            // failure aborts the run: treating a live image's children as
-            // unreferenced would delete them.
+            // Return the child digests of the version manifest.
+            // Return null if the version is already deleted. The version list
+            // can show a deleted version for a short time.
+            // Other failures stop the run. If the script treats the children of
+            // a live image as unreferenced, it deletes them.
             const childrenOf = async (v) => {
               const res = await fetch(`https://ghcr.io/v2/${org}/${pkg}/manifests/${v.name}`, {
                 headers: { Authorization: `Bearer ${token}`, Accept: accept },
