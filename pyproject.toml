@@ -45,6 +45,16 @@ build-backend = "uv_build"
 [project.scripts]
 lemongrass = "lemongrass.cli:main"
 
+[tool.uv]
+# Durations in exclude-newer need a modern uv; fail clearly on an older one.
+required-version = ">=0.13"
+# Supply-chain soak: never resolve a distribution uploaded in the last 3 days.
+# Keep equal to minimumReleaseAge in renovate.json, or Renovate can bump to a
+# version uv still excludes. To land an urgent security fix that is newer than
+# this, temporarily exempt just that package and remove it once it ages out:
+#   exclude-newer-package = { <package> = false }
+exclude-newer = "3 days"
+
 [tool.ruff]
 line-length = 100
 exclude = [".git", "__pycache__", "build", "dist", ".venv"]
