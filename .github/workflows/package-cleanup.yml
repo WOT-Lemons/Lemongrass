@@ -23,11 +23,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          version_id=$(gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions \
+          # --paginate: each image build adds ~9 versions, so a PR image can
+          # fall off the first page (30) before the PR closes.
+          version_id=$(gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
             --jq '.[] | select(any(.metadata.container.tags[]; . == "pr-${{ github.event.pull_request.number }}")) | .id' \
             2>/dev/null)
           if [ -n "$version_id" ]; then
-            gh api --method DELETE /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions/$version_id
+            gh api --method DELETE /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions/"$version_id"
             echo "Deleted ${{ matrix.package }} pr-${{ github.event.pull_request.number }}"
           else
             echo "No image found for ${{ matrix.package }} pr-${{ github.event.pull_request.number }}, skipping"
@@ -42,74 +44,8 @@ jobs:
       matrix:
         package: [lemongrass]
     steps:
-      - name: Prune orphaned attestations and untagged ${{ matrix.package }} versions
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          pkg='${{ matrix.package }}'
-          api="/orgs/wot-lemons/packages/container/$pkg/versions"
-
-          # Login so buildx imagetools can inspect multi-arch manifests
-          echo "$GH_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-
-          # Deletions cascade one level per pass: removing an untagged image
-          # index orphans its sha256-<digest> attestation, and removing that
-          # attestation orphans the SBOM blob it wrapped. Each pass only sees the
-          # state it snapshotted at its start, so a single sweep peels off just
-          # one layer -- which is why this used to need several manual re-runs.
-          # Loop the whole sweep, re-snapshotting each pass, until a full pass
-          # deletes nothing. seq is a safety cap; the tree is only ~3 deep.
-          for pass in $(seq 1 10); do
-            deleted=0
-
-            # (A) Delete sha256-<hex> attestation indexes whose subject is gone.
-            versions=$(gh api "$api" --paginate)
-            all_digests=$(echo "$versions" | jq -r '.[].name')
-            while read -r version_id tag; do
-              [ -z "$version_id" ] && continue
-              subject="sha256:${tag#sha256-}"
-              if echo "$all_digests" | grep -qF "$subject"; then
-                echo "Keeping $pkg attestation $tag (subject exists)"
-              else
-                gh api --method DELETE "$api/$version_id"
-                echo "Deleted orphaned $pkg attestation $tag (subject $subject gone)"
-                deleted=$((deleted + 1))
-              fi
-            done < <(echo "$versions" | jq -r '.[] | select(any(.metadata.container.tags[]?; test("^sha256-[0-9a-f]{64}$"))) | "\(.id) \(first(.metadata.container.tags[] | select(test("^sha256-[0-9a-f]{64}$"))))"')
-
-            # Re-snapshot so blobs freed by (A) are visible to (B) this same pass.
-            versions=$(gh api "$api" --paginate)
-
-            # Collect all digests referenced by tagged manifest lists (platform
-            # images, attestations). sort -u dedupes aliases (1.0.0, 1.0, 1,
-            # latest) so they don't trigger redundant imagetools calls.
-            referenced_digests=""
-            while IFS= read -r tag; do
-              [ -z "$tag" ] && continue
-              digests=$(docker buildx imagetools inspect \
-                "ghcr.io/wot-lemons/$pkg:$tag" \
-                --raw | jq -r '.manifests[]?.digest // empty')
-              referenced_digests="$referenced_digests"$'\n'"$digests"
-            done < <(echo "$versions" | jq -r '[.[] | .metadata.container.tags[]] | .[]' | sort -u)
-
-            # (B) Delete untagged versions not referenced by any tagged manifest.
-            while read -r version_id digest; do
-              [ -z "$version_id" ] && continue
-              if echo "$referenced_digests" | grep -qF "$digest"; then
-                echo "Skipping $pkg $digest (referenced by a tagged manifest)"
-              else
-                gh api --method DELETE "$api/$version_id"
-                echo "Deleted untagged $pkg version $version_id ($digest)"
-                deleted=$((deleted + 1))
-              fi
-            done < <(echo "$versions" | jq -r '.[] | select(.metadata.container.tags | length == 0) | "\(.id) \(.name)"')
-
-            echo "Pass $pass: deleted $deleted version(s)"
-            [ "$deleted" -eq 0 ] && break
-          done
-
+      # Runs before the prune so the deleted image's platform manifests and
+      # attestations are swept in the same run rather than the next night.
       - name: Delete ${{ matrix.package }} PR images for closed PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -120,7 +56,7 @@ jobs:
           # them here on the scheduled run.
           gh api /orgs/wot-lemons/packages/container/${{ matrix.package }}/versions --paginate \
             --jq '.[] | select(.metadata.container.tags[]? | startswith("pr-")) | "\(.id) \(.metadata.container.tags[] | select(startswith("pr-")))"' | \
-          while read version_id tag; do
+          while read -r version_id tag; do
             pr_number="${tag#pr-}"
             state=$(gh api /repos/${{ github.repository }}/pulls/"$pr_number" --jq '.state' 2>/dev/null || echo "")
             if [ "$state" = "closed" ]; then
@@ -130,3 +66,132 @@ jobs:
               echo "Keeping ${{ matrix.package }} $tag (PR #$pr_number state=${state:-unknown})"
             fi
           done
+
+      - name: Prune unreferenced ${{ matrix.package }} versions
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PKG: ${{ matrix.package }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          script: |
+            // Mark and sweep on one snapshot of the package versions.
+            // Keep these versions:
+            //   - each version that has a real tag (a tag that is not sha256-<hex>)
+            //   - each version that is less than 1 hour old
+            //   - each manifest that a kept version references
+            //   - each sha256-<digest> attestation index whose subject the script keeps
+            // Delete all other versions. One run removes a full orphan chain:
+            // untagged index -> its attestation -> the SBOM blobs of that attestation.
+            // The script reads each tagged or recent manifest one time only.
+            //
+            // The 1-hour rule protects an image build that is in progress. The
+            // build pushes each platform manifest without a tag. A later job
+            // pushes the tagged index. Between these jobs, the platform
+            // manifests are untagged, but they are not orphans.
+            const org = 'wot-lemons';
+            const pkg = process.env.PKG;
+            const ref = { package_type: 'container', org, package_name: pkg };
+            const isAttestationTag = (t) => /^sha256-[0-9a-f]{64}$/.test(t);
+            const tagsOf = (v) => v.metadata.container.tags;
+            const recentCutoff = Date.now() - 60 * 60 * 1000;
+            const isRecent = (v) => Date.parse(v.created_at) > recentCutoff;
+
+            const versions = await github.paginate(
+              github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg,
+              { ...ref, per_page: 100 },
+            );
+
+            // Manifests live in the registry, not the REST API: exchange the
+            // workflow token for a ghcr.io pull token.
+            const basic = Buffer.from(`${context.actor}:${process.env.REGISTRY_TOKEN}`).toString('base64');
+            const tokenRes = await fetch(
+              `https://ghcr.io/token?service=ghcr.io&scope=repository:${org}/${pkg}:pull`,
+              { headers: { Authorization: `Basic ${basic}` } },
+            );
+            if (!tokenRes.ok) throw new Error(`ghcr.io token exchange failed: HTTP ${tokenRes.status}`);
+            const { token } = await tokenRes.json();
+            const accept = [
+              'application/vnd.oci.image.index.v1+json',
+              'application/vnd.docker.distribution.manifest.list.v2+json',
+              'application/vnd.oci.image.manifest.v1+json',
+              'application/vnd.docker.distribution.manifest.v2+json',
+            ].join(', ');
+
+            const versionGone = async (id) => {
+              try {
+                await github.rest.packages.getPackageVersionForOrganization({ ...ref, package_version_id: id });
+                return false;
+              } catch (err) {
+                if (err.status === 404) return true;
+                throw err;
+              }
+            };
+
+            // Return the child digests of the version manifest.
+            // Return null if the version is already deleted. The version list
+            // can show a deleted version for a short time.
+            // Other failures stop the run. If the script treats the children of
+            // a live image as unreferenced, it deletes them.
+            const childrenOf = async (v) => {
+              const res = await fetch(`https://ghcr.io/v2/${org}/${pkg}/manifests/${v.name}`, {
+                headers: { Authorization: `Bearer ${token}`, Accept: accept },
+              });
+              if (res.ok) return ((await res.json()).manifests ?? []).map((m) => m.digest);
+              if (res.status === 404 && (await versionGone(v.id))) return null;
+              throw new Error(`Failed to read ${pkg}@${v.name} (version ${v.id}): HTTP ${res.status}`);
+            };
+
+            const mapLimit = async (items, limit, fn) => {
+              const out = new Array(items.length);
+              let next = 0;
+              const worker = async () => {
+                while (next < items.length) {
+                  const i = next++;
+                  out[i] = await fn(items[i]);
+                }
+              };
+              await Promise.all(Array.from({ length: limit }, worker));
+              return out;
+            };
+
+            const toRead = versions.filter((v) => tagsOf(v).length > 0 || isRecent(v));
+            const children = new Map();
+            const gone = new Set();
+            (await mapLimit(toRead, 8, childrenOf)).forEach((kids, i) => {
+              if (kids === null) gone.add(toRead[i].name);
+              else children.set(toRead[i].name, kids);
+            });
+            const live = versions.filter((v) => !gone.has(v.name));
+
+            const attestationsBySubject = new Map();
+            for (const v of live) {
+              const tag = tagsOf(v).find(isAttestationTag);
+              if (!tag) continue;
+              const subject = `sha256:${tag.slice('sha256-'.length)}`;
+              attestationsBySubject.set(subject, [...(attestationsBySubject.get(subject) ?? []), v.name]);
+            }
+
+            const keep = new Set();
+            const stack = live
+              .filter((v) => tagsOf(v).some((t) => !isAttestationTag(t)) || isRecent(v))
+              .map((v) => v.name);
+            while (stack.length > 0) {
+              const digest = stack.pop();
+              if (keep.has(digest)) continue;
+              keep.add(digest);
+              stack.push(...(children.get(digest) ?? []), ...(attestationsBySubject.get(digest) ?? []));
+            }
+
+            let deleted = 0;
+            for (const v of live.filter((v) => !keep.has(v.name))) {
+              const label = tagsOf(v).join(',') || '<untagged>';
+              try {
+                await github.rest.packages.deletePackageVersionForOrg({ ...ref, package_version_id: v.id });
+                core.info(`Deleted ${pkg} version ${v.id} ${label} (${v.name})`);
+                deleted++;
+              } catch (err) {
+                if (err.status !== 404) throw err;
+                core.info(`Already gone: ${pkg} version ${v.id} (${v.name})`);
+              }
+            }
+            core.info(`Kept ${keep.size} version(s), deleted ${deleted}`);
